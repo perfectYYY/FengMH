@@ -40,3 +40,5 @@ Makefile
 
 # macOS
 .DS_Store
+# host-pc unit test build dir
+build_host/
