@@ -28,7 +28,7 @@ static const motor_cfg_t s_cfg[MOTOR_ID_MAX] = {
     { MOTOR_ID_RL_WHEEL, MOTOR_M3508, 2, 0x203,+1, 0,  0.0f,   0.0f, "RL_WHEEL" },
     /* RR */
     { MOTOR_ID_RR_HIP,   MOTOR_GO,    2, 0x00, -1, 0, -3.14f, +3.14f, "RR_HIP" },
-    { MOTOR_ID_RR_KNEE,  MOTOR_GO,    2, 0x00, -1, 0, -3.14f, +3.14f, "RR_KNEE" },
+    { MOTOR_ID_RR_KNEE,  MOTOR_GO,    2, 0x00, -1,  0, -3.14f, +3.14f, "RR_KNEE" },
     { MOTOR_ID_RR_WHEEL, MOTOR_M3508, 2, 0x204,-1, 0,  0.0f,   0.0f, "RR_WHEEL" },
     /* ARM */
     { MOTOR_ID_ARM_J1,   MOTOR_DAMIAO, 3, 0x00, +1, 0, -3.14f, +3.14f, "ARM_J1" },

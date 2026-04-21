@@ -18,6 +18,9 @@ app_err_t bsp_usb_cdc_init(void);
 app_err_t bsp_usb_cdc_attach_rx(bsp_usb_rx_cb_t cb, void* user);
 app_err_t bsp_usb_cdc_send(const uint8_t* data, uint32_t len);
 
+/* 板上 usbd_cdc_if.c 在收到字节时调用此 hook（host 也可调用以模拟） */
+void      bsp_usb_cdc_on_rx(const uint8_t* data, uint32_t len);
+
 /* host 测试辅助 */
 void      bsp_usb_cdc_test_inject_rx(const uint8_t* data, uint32_t len);
 uint32_t  bsp_usb_cdc_test_tx_size(void);

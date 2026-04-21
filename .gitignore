@@ -42,3 +42,4 @@ Makefile
 .DS_Store
 # host-pc unit test build dir
 build_host/
+build_arm/ git add -A

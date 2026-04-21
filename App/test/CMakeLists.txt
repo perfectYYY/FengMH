@@ -28,6 +28,8 @@ include_directories(
     ${APP_ROOT}/device
     ${APP_ROOT}/service/pid
     ${APP_ROOT}/service/protocol
+    ${APP_ROOT}/service/gait
+    ${APP_ROOT}/service/leg
     ${APP_ROOT}/app
     ${APP_ROOT}/test/unity
 )
@@ -42,6 +44,13 @@ set(APP_SRCS
     ${APP_ROOT}/service/pid/pid.c
     ${APP_ROOT}/service/protocol/proto_frame.c
     ${APP_ROOT}/service/protocol/proto_dispatch.c
+    ${APP_ROOT}/service/gait/gait_if.c
+    ${APP_ROOT}/service/gait/gait_params.c
+    ${APP_ROOT}/service/gait/gait_stand.c
+    ${APP_ROOT}/service/gait/gait_trot.c
+    ${APP_ROOT}/service/gait/gait_machine.c
+    ${APP_ROOT}/service/leg/leg_controller.c
+    ${APP_ROOT}/app/task_comm.c
     ${APP_ROOT}/test/unity/test_util.c
 )
 
@@ -58,3 +67,6 @@ add_app_test(test_proto_frame     ${APP_ROOT}/test/test_proto_frame.c)
 add_app_test(test_motor_registry  ${APP_ROOT}/test/test_motor_registry.c)
 add_app_test(test_log             ${APP_ROOT}/test/test_log.c)
 add_app_test(test_bsp_fdcan       ${APP_ROOT}/test/test_bsp_fdcan.c)
+add_app_test(test_gait            ${APP_ROOT}/test/test_gait.c)
+add_app_test(test_task_comm       ${APP_ROOT}/test/test_task_comm.c)
+add_app_test(test_leg_controller  ${APP_ROOT}/test/test_leg_controller.c)

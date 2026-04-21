@@ -1,5 +1,5 @@
 /*
- * bsp_usb_cdc.c — 板上接 USB Device CDC（M2 接入），M1 仅提供接口 + host mock
+ * bsp_usb_cdc.c — host mock；板上桥接到 USBD_CDC_HS（由 usbd_cdc_if.c 调用 hook）
  */
 #include "bsp_usb_cdc.h"
 #include "config.h"
@@ -13,6 +13,11 @@ static const char* TAG = "USBCDC";
 
 static bsp_usb_rx_cb_t s_rx_cb;
 static void*           s_rx_user;
+
+#if APP_TARGET_MCU
+/* 由 usbd_cdc_if.c 提供，避免本 BSP 反向依赖 USB 中间层头文件 */
+extern uint8_t CDC_Transmit_HS(uint8_t* buf, uint16_t len);
+#endif
 
 #if APP_TARGET_HOST
 static uint8_t  s_tx_buf[BSP_USB_TX_MAX];
@@ -42,13 +47,20 @@ app_err_t bsp_usb_cdc_send(const uint8_t* data, uint32_t len) {
     s_tx_len += len;
     return APP_OK;
 #else
-    return APP_ERR_UNSUPPORTED;  /* M2 起接 USBD_CDC */
+    /* CDC_Transmit_HS 在 USB 未连接或忙时会返回 USBD_BUSY；这里直接透传 */
+    if (CDC_Transmit_HS((uint8_t*)data, (uint16_t)len) != 0) return APP_ERR_BUSY;
+    return APP_OK;
 #endif
+}
+
+/* usbd_cdc_if.c 在 CDC_Receive_HS 里调本函数，把字节灌进解析器 */
+void bsp_usb_cdc_on_rx(const uint8_t* data, uint32_t len) {
+    if (s_rx_cb && data && len) s_rx_cb(data, len, s_rx_user);
 }
 
 #if APP_TARGET_HOST
 void bsp_usb_cdc_test_inject_rx(const uint8_t* data, uint32_t len) {
-    if (s_rx_cb && data && len) s_rx_cb(data, len, s_rx_user);
+    bsp_usb_cdc_on_rx(data, len);
 }
 uint32_t bsp_usb_cdc_test_tx_size(void) { return s_tx_len; }
 uint32_t bsp_usb_cdc_test_read_tx(uint8_t* out, uint32_t max_len) {
