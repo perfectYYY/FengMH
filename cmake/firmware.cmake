@@ -68,6 +68,7 @@ set(APP_DIRS
         service/gait
         service/leg
         service/kinematics
+        service/script
         app
 )
 

@@ -30,6 +30,7 @@ include_directories(
     ${APP_ROOT}/service/protocol
     ${APP_ROOT}/service/gait
     ${APP_ROOT}/service/leg
+    ${APP_ROOT}/service/script
     ${APP_ROOT}/app
     ${APP_ROOT}/test/unity
 )
@@ -49,8 +50,13 @@ set(APP_SRCS
     ${APP_ROOT}/service/gait/gait_stand.c
     ${APP_ROOT}/service/gait/gait_trot.c
     ${APP_ROOT}/service/gait/gait_machine.c
+    ${APP_ROOT}/service/script/script_player.c
+    ${APP_ROOT}/service/script/script_builtin.c
+    ${APP_ROOT}/service/script/gait_script.c
     ${APP_ROOT}/service/leg/leg_controller.c
     ${APP_ROOT}/app/task_comm.c
+    ${APP_ROOT}/app/task_safety.c
+    ${APP_ROOT}/app/task_chassis.c
     ${APP_ROOT}/test/unity/test_util.c
 )
 
@@ -70,3 +76,5 @@ add_app_test(test_bsp_fdcan       ${APP_ROOT}/test/test_bsp_fdcan.c)
 add_app_test(test_gait            ${APP_ROOT}/test/test_gait.c)
 add_app_test(test_task_comm       ${APP_ROOT}/test/test_task_comm.c)
 add_app_test(test_leg_controller  ${APP_ROOT}/test/test_leg_controller.c)
+add_app_test(test_script          ${APP_ROOT}/test/test_script.c)
+add_app_test(test_task_chassis    ${APP_ROOT}/test/test_task_chassis.c)

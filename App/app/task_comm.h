@@ -27,6 +27,9 @@ typedef struct {
 
 void task_comm_get_chassis(task_comm_chassis_cmd_t* out);
 
+/* 最近一次"任何有效帧"的 ms 时戳；用于心跳超时判定 */
+uint32_t task_comm_last_rx_ms(void);
+
 #ifdef __cplusplus
 }
 #endif

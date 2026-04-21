@@ -27,14 +27,30 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
+/*
+ * M3 重构说明：旧 main.c 的"业务初始化 + while(1) 死程序步态"已迁移到 App/。
+ *   - 想完全恢复旧行为：编译时定义 USE_LEGACY_MAIN=1
+ *   - 默认 USE_LEGACY_MAIN=0：旧 PID/GO/M3508 代码不参与启动，避免与
+ *     App 层 RTOS 任务竞写电机；启动后由 freertos.c 调用 app_init() + app_tasks_create()，
+ *     脱机时跑 SCRIPT_BUILTIN_STAND_HOLD（详见 App/app/task_chassis.c）。
+ *   - 想跑旧"抬腿循环"等死程序步态：用 task_chassis_play_script(&SCRIPT_BUILTIN_WAVE_UP_DOWN, 0.3f)，
+ *     不要再回头改 main.c。
+ */
+#ifndef USE_LEGACY_MAIN
+#define USE_LEGACY_MAIN 0
+#endif
+
+#if USE_LEGACY_MAIN
 #include "GO-motor.h"
 #include "gait_plan.h"
 #include <string.h>
 #include "M3508.h"
+#endif
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
+#if USE_LEGACY_MAIN
 //8010电池所需结构体
 static MotorBack Motor_r;
 static MotorInstance motor_instance[MOTOR_NUM];//4路485线，我就记作每组3个电机，从&huart1到&huart4电机依次从【0】到【11】，id与huart的对应办法是（id+3）/3就行
@@ -52,6 +68,7 @@ vector up_down[9];
 
 //电机上电时角度
 float GO_begin[12];
+#endif
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
@@ -80,6 +97,7 @@ void MX_FREERTOS_Init(void);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+#if USE_LEGACY_MAIN
 //发送完毕的回调函数
 void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart){
 	// 启动DMA接收
@@ -125,6 +143,7 @@ void Init_up_down(vector *so){
 	so[8].data[0] = 0;
 	so[8].data[2] = 0;
 }
+#endif /* USE_LEGACY_MAIN */
 /* USER CODE END 0 */
 
 /**
@@ -166,6 +185,7 @@ int main(void)
   MX_FDCAN1_Init();
   MX_FDCAN2_Init();
   /* USER CODE BEGIN 2 */
+#if USE_LEGACY_MAIN
   PID_M3508_CAN_Init();
   //初始化宇树电机的回传数据，现在是只开了usart2，自己用的时候要用其他串口记得自己进函数里开；
   for(int i = 0; i < 12; i ++){
@@ -251,6 +271,7 @@ int main(void)
   MotorController_SendCommand(&huart2, &GO1);
 
   HAL_Delay(2000);
+#endif /* USE_LEGACY_MAIN */
   /* USER CODE END 2 */
 
   /* Init scheduler */
@@ -266,6 +287,7 @@ int main(void)
   /* USER CODE BEGIN WHILE */
   while (1)
   {
+#if USE_LEGACY_MAIN
 	  if(t <= 27){
 
 		  MotorController_SetCommand(&GO1, 0, 1, 0, 0, GO_begin[0] + (ang_mir[t % 7].data[1] * 6.33), 1.5, 0.12);
@@ -318,6 +340,7 @@ int main(void)
 		  HAL_Delay(1);
 	  }
 	  t += 1;//简易定时器
+#endif /* USE_LEGACY_MAIN */
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
