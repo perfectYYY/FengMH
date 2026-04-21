@@ -1,4 +1,4 @@
-
+#此文件从模板自动生成! 请勿更改!
 set(CMAKE_SYSTEM_NAME Generic)
 set(CMAKE_SYSTEM_VERSION 1)
 cmake_minimum_required(VERSION 3.31)
@@ -27,7 +27,6 @@ set(CMAKE_C_STANDARD 11)
 #add_compile_options(-mfloat-abi=soft)
 
 add_compile_options(-mcpu=cortex-m7 -mthumb -mthumb-interwork)
-add_compile_options(-mfloat-abi=hard -mfpu=fpv5-d16)
 add_compile_options(-ffunction-sections -fdata-sections -fno-common -fmessage-length=0)
 
 # uncomment to mitigate c++17 absolute addresses warnings
@@ -50,18 +49,16 @@ else ()
     add_compile_options(-Og -g)
 endif ()
 
-include_directories(Core/Inc Drivers/STM32H7xx_HAL_Driver/Inc Drivers/STM32H7xx_HAL_Driver/Inc/Legacy Drivers/CMSIS/Device/ST/STM32H7xx/Include Drivers/CMSIS/Include Middlewares/ST/ARM/DSP/Inc Core/Inc USB_DEVICE/App USB_DEVICE/Target Drivers/STM32H7xx_HAL_Driver/Inc Drivers/STM32H7xx_HAL_Driver/Inc/Legacy Middlewares/Third_Party/FreeRTOS/Source/include Middlewares/Third_Party/FreeRTOS/Source/CMSIS_RTOS_V2 Middlewares/Third_Party/FreeRTOS/Source/portable/GCC/ARM_CM4F Middlewares/ST/STM32_USB_Device_Library/Core/Inc Middlewares/ST/STM32_USB_Device_Library/Class/CDC/Inc Drivers/CMSIS/Device/ST/STM32H7xx/Include Drivers/CMSIS/Include Middlewares/ST/ARM/DSP/Inc)
+include_directories(Core/Inc USB_DEVICE/App USB_DEVICE/Target Drivers/STM32H7xx_HAL_Driver/Inc Drivers/STM32H7xx_HAL_Driver/Inc/Legacy Middlewares/Third_Party/FreeRTOS/Source/include Middlewares/Third_Party/FreeRTOS/Source/CMSIS_RTOS_V2 Middlewares/Third_Party/FreeRTOS/Source/portable/GCC/ARM_CM4F Middlewares/ST/STM32_USB_Device_Library/Core/Inc Middlewares/ST/STM32_USB_Device_Library/Class/CDC/Inc Drivers/CMSIS/Device/ST/STM32H7xx/Include Drivers/CMSIS/Include Middlewares/ST/ARM/DSP/Inc App/common App/bsp App/device App/service/pid App/service/protocol App/service/gait App/service/leg App/service/kinematics App/app)
 
-add_definitions(-DDEBUG -DUSE_PWR_LDO_SUPPLY -DUSE_HAL_DRIVER -DSTM32H723xx -DDEBUG -DUSE_PWR_LDO_SUPPLY -DUSE_HAL_DRIVER -DSTM32H723xx)
+add_definitions(-DDEBUG -DUSE_PWR_LDO_SUPPLY -DUSE_HAL_DRIVER -DSTM32H723xx -DAPP_TARGET_HOST=0)
 
-file(GLOB_RECURSE SOURCES "Core/*.*" "Middlewares/*.*" "Drivers/*.*" "Core/*.*" "Middlewares/*.*" "USB_DEVICE/*.*" "Drivers/*.*")
+file(GLOB_RECURSE SOURCES "Core/*.*" "Middlewares/*.*" "USB_DEVICE/*.*" "Drivers/*.*" "App/*.*")
 
 set(LINKER_SCRIPT ${CMAKE_SOURCE_DIR}/STM32H723VGTX_FLASH.ld)
 
 add_link_options(-Wl,-gc-sections,--print-memory-usage,-Map=${PROJECT_BINARY_DIR}/${PROJECT_NAME}.map)
 add_link_options(-mcpu=cortex-m7 -mthumb -mthumb-interwork)
-add_link_options(-mfloat-abi=hard -mfpu=fpv5-d16)
-add_link_options(-specs=nano.specs -specs=nosys.specs)
 add_link_options(-T ${LINKER_SCRIPT})
 
 add_executable(${PROJECT_NAME}.elf ${SOURCES} ${LINKER_SCRIPT})
@@ -75,29 +72,5 @@ add_custom_command(TARGET ${PROJECT_NAME}.elf POST_BUILD
         COMMENT "Building ${HEX_FILE}
 Building ${BIN_FILE}")
 
-# === App/ 分层（M1/M2 落地的下位机业务代码）—— 与 CubeMX 模板隔离 ===
-# 注意：本节由人工维护；CubeMX 重新生成 CMakeLists.txt 时会被覆盖，
-# 届时把这一节再原样追加回来即可。
-target_include_directories(${PROJECT_NAME}.elf PRIVATE
-        ${CMAKE_SOURCE_DIR}/App/common
-        ${CMAKE_SOURCE_DIR}/App/bsp
-        ${CMAKE_SOURCE_DIR}/App/device
-        ${CMAKE_SOURCE_DIR}/App/service/pid
-        ${CMAKE_SOURCE_DIR}/App/service/protocol
-        ${CMAKE_SOURCE_DIR}/App/service/gait
-        ${CMAKE_SOURCE_DIR}/App/service/leg
-        ${CMAKE_SOURCE_DIR}/App/app
-)
-
-file(GLOB APP_SOURCES
-        ${CMAKE_SOURCE_DIR}/App/common/*.c
-        ${CMAKE_SOURCE_DIR}/App/bsp/*.c
-        ${CMAKE_SOURCE_DIR}/App/device/*.c
-        ${CMAKE_SOURCE_DIR}/App/service/pid/*.c
-        ${CMAKE_SOURCE_DIR}/App/service/protocol/*.c
-        ${CMAKE_SOURCE_DIR}/App/service/gait/*.c
-        ${CMAKE_SOURCE_DIR}/App/service/leg/*.c
-        ${CMAKE_SOURCE_DIR}/App/app/*.c
-)
-target_sources(${PROJECT_NAME}.elf PRIVATE ${APP_SOURCES})
-target_compile_definitions(${PROJECT_NAME}.elf PRIVATE APP_TARGET_HOST=0)
+# === 工程定制: 必须保留以下一行 (CubeMX 覆写后请用 patch_cmakelists.py 恢复) ===
+include(${CMAKE_SOURCE_DIR}/cmake/firmware.cmake)

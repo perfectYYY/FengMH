@@ -1,8 +1,5 @@
 /*
  * app_init.c — 汇总式初始化
- *
- * 不依赖 CubeMX 生成的外设句柄；只调用 bsp_* 与 service_* 初始化。
- * 板上下游的 HAL_Init / SystemClock_Config / MX_*_Init 仍由 main.c 负责。
  */
 #include "app_init.h"
 #include "log.h"

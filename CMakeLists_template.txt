@@ -70,3 +70,6 @@ add_custom_command(TARGET $${PROJECT_NAME}.elf POST_BUILD
         COMMAND $${CMAKE_OBJCOPY} -Obinary $<TARGET_FILE:$${PROJECT_NAME}.elf> $${BIN_FILE}
         COMMENT "Building $${HEX_FILE}
 Building $${BIN_FILE}")
+
+# === 工程定制: 必须保留以下一行 (CubeMX 覆写后请用 patch_cmakelists.py 恢复) ===
+include($${CMAKE_SOURCE_DIR}/cmake/firmware.cmake)
