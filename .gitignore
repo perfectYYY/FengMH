@@ -7,24 +7,18 @@ cmake-build-*/
 # IDE and editor files
 .idea/
 .vscode/
-*.launch
-*.cfg
 
 # STM32CubeIDE / Eclipse project files
-.cproject
-.project
 .settings/
 .metadata/
 
 # STM32CubeMX files
-*.ioc
-.mxproject
+
 
 # CMake generated
 CMakeFiles/
 CMakeCache.txt
 cmake_install.cmake
-Makefile
 *.make
 *.marks
 
