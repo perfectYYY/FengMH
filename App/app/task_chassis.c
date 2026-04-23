@@ -29,8 +29,8 @@
 #include "gait_trot.h"
 #include "gait_machine.h"
 #include "gait_params.h"
-#include "gait_script.h"
-#include "script_builtin.h"
+#include "../script/gait_script.h"
+#include "../script/script_builtin.h"
 #include "leg_controller.h"
 
 #if APP_TARGET_MCU

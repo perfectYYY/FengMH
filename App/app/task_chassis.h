@@ -18,7 +18,7 @@
 #define APP_TASK_CHASSIS_H_
 
 #include <stdint.h>
-#include "script_if.h"
+#include "../script/script_if.h"
 
 #ifdef __cplusplus
 extern "C" {
