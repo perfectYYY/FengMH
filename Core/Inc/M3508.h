@@ -12,8 +12,6 @@
 #include "stm32h7xx_hal.h"
 
 #define MOTOR_3508_number 4                               // 当前工程内实际接入并管理的 3508 电机总数
-#define M3508_CAN1_MOTOR_COUNT 2                         // CAN1 上实际使用的 3508 电机数量
-#define M3508_CAN2_MOTOR_COUNT 2                         // CAN2 上实际使用的 3508 电机数量
 #define MOTOR_HISTORY 20                                 // 每个电机保留的历史数据长度
 #define M3508_ENCODER_COUNTS_PER_REV 8192.0f             // 转子侧单圈编码器计数
 #define M3508_CURRENT_COMMAND_RAW_LIMIT 16384.0f         // C620 电流指令 raw 的绝对值上限

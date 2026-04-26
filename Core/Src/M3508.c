@@ -165,7 +165,11 @@ void my_can_filter_init_recv_all(void)
         Error_Handler();
     }
 }
-
+/*
+ * Legacy FDCAN RX callback path is disabled while 3508_motor.c owns the
+ * global HAL_FDCAN_RxFifo0Callback() implementation.
+ */
+#if 0
 void M3508_Legacy_RxFifo0Callback(FDCAN_HandleTypeDef *hfdcan, uint32_t RxFifo0ITs)
 {
     FDCAN_RxHeaderTypeDef rx_header;
@@ -210,6 +214,7 @@ void HAL_FDCAN_RxFifo0Callback(FDCAN_HandleTypeDef *hfdcan, uint32_t RxFifo0ITs)
 {
     M3508_Legacy_RxFifo0Callback(hfdcan, RxFifo0ITs);
 }
+#endif
 
 void get_motor_measure(motor_measure_t *ptr, uint8_t *data)
 {
