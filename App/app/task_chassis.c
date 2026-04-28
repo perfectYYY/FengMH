@@ -1,5 +1,5 @@
 /*
- * task_chassis.c — M3 重写
+ * task_chassis.c
  *
  * 状态机（task 内）：
  *   ACT_STAND  默认空闲（gait_stand）
@@ -13,10 +13,6 @@
  *
  * 心跳超时 = now_ms - task_comm_last_rx_ms() > online_timeout_ms (默认 500)
  *
- * 与 main.c 旧死程序的关系：
- *   旧 main.c 在内核启动前的"原地站立 + while(1) 抬腿"逻辑已不再执行
- *   （由 cmake 宏 USE_LEGACY_MAIN 控制；M3 默认 0）。等价的"抬腿循环"
- *   现在是 SCRIPT_BUILTIN_WAVE_UP_DOWN，可通过 task_chassis_play_script() 触发。
  */
 #include "task_chassis.h"
 #include "log.h"
@@ -32,6 +28,8 @@
 #include "../script/gait_script.h"
 #include "../script/script_builtin.h"
 #include "leg_controller.h"
+#include "motor_go.h"
+#include "motor_m3508.h"
 
 #if APP_TARGET_MCU
 #include "cmsis_os.h"
@@ -157,6 +155,12 @@ void task_chassis_step_for_test(float dt_s, uint32_t now_ms) {
     gait_output_t out;
     gait_machine_update(&s_gm, dt_s, &out);
     leg_controller_apply(&s_lc, &out);
+
+#if !APP_TARGET_HOST
+    /* MCU 端：将电机指令推送到物理总线 */
+    motor_go_send_all();
+    motor_m3508_send_all();
+#endif
 }
 
 void task_chassis_entry(void* arg) {

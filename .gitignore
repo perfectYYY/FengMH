@@ -34,6 +34,11 @@ cmake_install.cmake
 
 # macOS
 .DS_Store
+
+# Python caches
+__pycache__/
+*.pyc
+
 # host-pc unit test build dir
 build_host/
-build_arm/ git add -A
+build_arm/

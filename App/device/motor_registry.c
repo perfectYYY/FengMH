@@ -1,9 +1,7 @@
 /*
- * motor_registry.c — 骨架实现：空映射表
+ * motor_registry.c
  *
- * 说明：当前 PI 值/CAN ID 都是占位，不代表最终硬件拓扑。
- * 实际的"哪条腿哪个电机 → 哪个 bus/ID"要在 M2 联调前由用户填。
- * 改动硬件映射只需改本文件，不需要动算法。
+ * 改动硬件映射只需改本文件，不需要动算法
  */
 #include "motor_registry.h"
 #include "log.h"
@@ -12,7 +10,6 @@
 
 static const char* TAG = "REG";
 
-/* 占位的空表：所有逻辑名都存在配置项，但暂不挂 motor_dev_t* */
 static const motor_cfg_t s_cfg[MOTOR_ID_MAX] = {
     /* FL */
     { MOTOR_ID_FL_HIP,   MOTOR_GO,    1, 0x00, +1, 0, -3.14f, +3.14f, "FL_HIP" },

@@ -13,7 +13,6 @@
 extern "C" {
 #endif
 
-/* 逻辑名：约定命名，未真正启用的保留；实际上线前按实测硬件顺序对齐 */
 typedef enum {
     /* 四足：左前 FL / 右前 FR / 左后 RL / 右后 RR，每腿髋/膝/轮 */
     MOTOR_ID_FL_HIP = 0,

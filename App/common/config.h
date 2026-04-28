@@ -1,8 +1,6 @@
 /*
- * config.h — M1 阶段编译期总开关
  *
- * 规则：任何需要"旧/新"并行切换、或可在 PC/板上区分的代码，
- *       只允许读取本文件的宏，不允许散落 #ifdef。
+
  */
 #ifndef APP_COMMON_CONFIG_H_
 #define APP_COMMON_CONFIG_H_
