@@ -9,19 +9,204 @@
  *   - z: 竖直方向，向下为正
  *   - 原点在髋关节
  *
- * 腿型映射 (与 motor_registry 的 dir 字段对齐)：
- *   FL (dir=-1) → MIRROR
- *   FR (dir=-1) → MIRROR
- *   RL (dir=+1) → ORIGINAL
- *   RR (dir=+1) → ORIGINAL
- *
- * 注意：实际映射需根据机械装配确认，这里暂按 dir 判断。
+ * 腿型映射沿用老工程：
+ *   LF/FL、RR 为镜像腿，LR/RL、RF/FR 为原型腿。
  */
 #include "leg_ik.h"
-#include "motor_registry.h"
 
 #include <math.h>
 #include <string.h>
+
+static float leg_ik_clampf(float value, float min_value, float max_value) {
+    if (value < min_value) return min_value;
+    if (value > max_value) return max_value;
+    return value;
+}
+
+static void leg_ik_get_joint_limit(leg_type_t leg_type,
+                                    leg_angle_range_t* thigh_range,
+                                    leg_angle_range_t* shin_range) {
+    const float pi = 3.14159265f;
+
+    if (!thigh_range || !shin_range) return;
+
+    if (leg_type == LEG_TYPE_MIRROR) {
+        thigh_range->min = -2.0f;
+        thigh_range->max = 0.0f;
+        shin_range->min = -pi;
+        shin_range->max = -0.5f * pi;
+    } else {
+        thigh_range->min = -pi;
+        thigh_range->max = 2.0f - pi;
+        shin_range->min = -0.5f * pi;
+        shin_range->max = 0.0f;
+    }
+}
+
+static void leg_ik_update_best(float target_thigh,
+                                float target_shin,
+                                float candidate_thigh,
+                                float candidate_shin,
+                                float* best_cost,
+                                float* best_thigh,
+                                float* best_shin) {
+    float cost = fabsf(candidate_thigh - target_thigh) +
+                 fabsf(candidate_shin - target_shin);
+
+    if (cost < *best_cost) {
+        *best_cost = cost;
+        *best_thigh = candidate_thigh;
+        *best_shin = candidate_shin;
+    }
+}
+
+static void leg_ik_constrain_joint_target(leg_ik_result_t* result,
+                                           leg_type_t leg_type) {
+    const float pi = 3.14159265f;
+    const float d_min = 0.25f * pi;
+    const float d_max = 0.87f * pi;
+    leg_angle_range_t thigh_range;
+    leg_angle_range_t shin_range;
+    float thigh;
+    float shin;
+    float best_cost = INFINITY;
+    float best_thigh = 0.0f;
+    float best_shin = 0.0f;
+
+    if (!result) return;
+
+    thigh = result->theta1;
+    shin = result->theta2;
+    if (!isfinite(thigh) || !isfinite(shin)) return;
+
+    leg_ik_get_joint_limit(leg_type, &thigh_range, &shin_range);
+    thigh = leg_ik_clampf(thigh, thigh_range.min, thigh_range.max);
+    shin = leg_ik_clampf(shin, shin_range.min, shin_range.max);
+
+    if (leg_type == LEG_TYPE_MIRROR) {
+        float candidate_low;
+        float candidate_high;
+        float candidate_shin;
+        float candidate_thigh;
+
+        candidate_low = fmaxf(shin_range.min, thigh - d_max);
+        candidate_high = fminf(shin_range.max, thigh - d_min);
+        if (candidate_low <= candidate_high) {
+            candidate_shin = leg_ik_clampf(shin, candidate_low, candidate_high);
+            leg_ik_update_best(thigh, shin, thigh, candidate_shin,
+                               &best_cost, &best_thigh, &best_shin);
+        }
+
+        candidate_low = fmaxf(thigh_range.min, shin + d_min);
+        candidate_high = fminf(thigh_range.max, shin + d_max);
+        if (candidate_low <= candidate_high) {
+            candidate_thigh = leg_ik_clampf(thigh, candidate_low, candidate_high);
+            leg_ik_update_best(thigh, shin, candidate_thigh, shin,
+                               &best_cost, &best_thigh, &best_shin);
+        }
+
+        candidate_thigh = thigh_range.min;
+        candidate_low = fmaxf(shin_range.min, candidate_thigh - d_max);
+        candidate_high = fminf(shin_range.max, candidate_thigh - d_min);
+        if (candidate_low <= candidate_high) {
+            candidate_shin = leg_ik_clampf(shin, candidate_low, candidate_high);
+            leg_ik_update_best(thigh, shin, candidate_thigh, candidate_shin,
+                               &best_cost, &best_thigh, &best_shin);
+        }
+
+        candidate_thigh = thigh_range.max;
+        candidate_low = fmaxf(shin_range.min, candidate_thigh - d_max);
+        candidate_high = fminf(shin_range.max, candidate_thigh - d_min);
+        if (candidate_low <= candidate_high) {
+            candidate_shin = leg_ik_clampf(shin, candidate_low, candidate_high);
+            leg_ik_update_best(thigh, shin, candidate_thigh, candidate_shin,
+                               &best_cost, &best_thigh, &best_shin);
+        }
+
+        candidate_shin = shin_range.min;
+        candidate_low = fmaxf(thigh_range.min, candidate_shin + d_min);
+        candidate_high = fminf(thigh_range.max, candidate_shin + d_max);
+        if (candidate_low <= candidate_high) {
+            candidate_thigh = leg_ik_clampf(thigh, candidate_low, candidate_high);
+            leg_ik_update_best(thigh, shin, candidate_thigh, candidate_shin,
+                               &best_cost, &best_thigh, &best_shin);
+        }
+
+        candidate_shin = shin_range.max;
+        candidate_low = fmaxf(thigh_range.min, candidate_shin + d_min);
+        candidate_high = fminf(thigh_range.max, candidate_shin + d_max);
+        if (candidate_low <= candidate_high) {
+            candidate_thigh = leg_ik_clampf(thigh, candidate_low, candidate_high);
+            leg_ik_update_best(thigh, shin, candidate_thigh, candidate_shin,
+                               &best_cost, &best_thigh, &best_shin);
+        }
+    } else {
+        float candidate_low;
+        float candidate_high;
+        float candidate_shin;
+        float candidate_thigh;
+
+        candidate_low = fmaxf(shin_range.min, thigh + d_min);
+        candidate_high = fminf(shin_range.max, thigh + d_max);
+        if (candidate_low <= candidate_high) {
+            candidate_shin = leg_ik_clampf(shin, candidate_low, candidate_high);
+            leg_ik_update_best(thigh, shin, thigh, candidate_shin,
+                               &best_cost, &best_thigh, &best_shin);
+        }
+
+        candidate_low = fmaxf(thigh_range.min, shin - d_max);
+        candidate_high = fminf(thigh_range.max, shin - d_min);
+        if (candidate_low <= candidate_high) {
+            candidate_thigh = leg_ik_clampf(thigh, candidate_low, candidate_high);
+            leg_ik_update_best(thigh, shin, candidate_thigh, shin,
+                               &best_cost, &best_thigh, &best_shin);
+        }
+
+        candidate_thigh = thigh_range.min;
+        candidate_low = fmaxf(shin_range.min, candidate_thigh + d_min);
+        candidate_high = fminf(shin_range.max, candidate_thigh + d_max);
+        if (candidate_low <= candidate_high) {
+            candidate_shin = leg_ik_clampf(shin, candidate_low, candidate_high);
+            leg_ik_update_best(thigh, shin, candidate_thigh, candidate_shin,
+                               &best_cost, &best_thigh, &best_shin);
+        }
+
+        candidate_thigh = thigh_range.max;
+        candidate_low = fmaxf(shin_range.min, candidate_thigh + d_min);
+        candidate_high = fminf(shin_range.max, candidate_thigh + d_max);
+        if (candidate_low <= candidate_high) {
+            candidate_shin = leg_ik_clampf(shin, candidate_low, candidate_high);
+            leg_ik_update_best(thigh, shin, candidate_thigh, candidate_shin,
+                               &best_cost, &best_thigh, &best_shin);
+        }
+
+        candidate_shin = shin_range.min;
+        candidate_low = fmaxf(thigh_range.min, candidate_shin - d_max);
+        candidate_high = fminf(thigh_range.max, candidate_shin - d_min);
+        if (candidate_low <= candidate_high) {
+            candidate_thigh = leg_ik_clampf(thigh, candidate_low, candidate_high);
+            leg_ik_update_best(thigh, shin, candidate_thigh, candidate_shin,
+                               &best_cost, &best_thigh, &best_shin);
+        }
+
+        candidate_shin = shin_range.max;
+        candidate_low = fmaxf(thigh_range.min, candidate_shin - d_max);
+        candidate_high = fminf(thigh_range.max, candidate_shin - d_min);
+        if (candidate_low <= candidate_high) {
+            candidate_thigh = leg_ik_clampf(thigh, candidate_low, candidate_high);
+            leg_ik_update_best(thigh, shin, candidate_thigh, candidate_shin,
+                               &best_cost, &best_thigh, &best_shin);
+        }
+    }
+
+    if (best_cost != INFINITY) {
+        result->theta1 = best_thigh;
+        result->theta2 = best_shin;
+    } else {
+        result->theta1 = thigh;
+        result->theta2 = shin;
+    }
+}
 
 /* ─── 单腿 IK ─── */
 
@@ -59,6 +244,7 @@ int leg_ik_solve(float x, float z, const leg_dim_t* dim,
     result->theta1 = a;
     result->theta2 = atan2f((z_total - L1 * sinf(a)), (x - L1 * cosf(a)));
 
+    leg_ik_constrain_joint_target(result, leg_type);
     return 0;
 }
 
@@ -79,22 +265,14 @@ void leg_fk_solve(float theta1, float theta2,
 /* ─── 批量 IK ─── */
 
 /*
- * 腿型映射表 (与 motor_registry 中的 dir 对应)：
- *   FL (index 0): dir=-1 → MIRROR
- *   FR (index 1): dir=-1 → MIRROR
- *   RL (index 2): dir=+1 → ORIGINAL
- *   RR (index 3): dir=+1 → ORIGINAL
+ * 腿型映射表：
+ *   FL/LF: MIRROR, FR/RF: ORIGINAL, RL/LR: ORIGINAL, RR: MIRROR
  */
 static const leg_type_t s_leg_type[GAIT_LEG_NUM] = {
     LEG_TYPE_MIRROR,    /* FL */
-    LEG_TYPE_MIRROR,    /* FR */
+    LEG_TYPE_ORIGINAL,  /* FR */
     LEG_TYPE_ORIGINAL,  /* RL */
-    LEG_TYPE_ORIGINAL,  /* RR */
-};
-
-/* 对应的 motor_logical_id */
-static const motor_logical_id_t HIP_ID[GAIT_LEG_NUM] = {
-    MOTOR_ID_FL_HIP, MOTOR_ID_FR_HIP, MOTOR_ID_RL_HIP, MOTOR_ID_RR_HIP
+    LEG_TYPE_MIRROR,    /* RR */
 };
 
 void leg_ik_solve_all(const gait_output_t* foot_disp,
@@ -122,11 +300,8 @@ void leg_ik_solve_all(const gait_output_t* foot_disp,
             ot->hip_rad  = 0.0f;
             ot->knee_rad = 0.0f;
         } else {
-            /* 应用 motor_registry 中的方向系数 */
-            const motor_cfg_t* hip_cfg = motor_get_cfg(HIP_ID[i]);
-            float dir = hip_cfg ? (float)hip_cfg->dir : 1.0f;
-            ot->hip_rad  = ik.theta1 * dir;
-            ot->knee_rad = ik.theta2 * dir;
+            ot->hip_rad  = ik.theta1;
+            ot->knee_rad = ik.theta2;
         }
     }
 }

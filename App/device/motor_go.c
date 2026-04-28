@@ -64,6 +64,48 @@ static uint16_t go_crc16(uint16_t crc, const uint8_t* buf, size_t len) {
     return crc;
 }
 
+static const motor_cfg_t* go_cfg(const motor_dev_t* dev) {
+    if (!dev) return NULL;
+    return motor_get_cfg((motor_logical_id_t)dev->state.id);
+}
+
+static float go_cfg_sign(const motor_cfg_t* cfg) {
+    return cfg ? (float)cfg->dir : 1.0f;
+}
+
+static float go_cfg_gear(const motor_cfg_t* cfg) {
+    if (!cfg || cfg->gear_ratio <= 0.0f) return 1.0f;
+    return cfg->gear_ratio;
+}
+
+static float go_motor_pos_to_joint(const motor_cfg_t* cfg,
+                                    float zero_offset,
+                                    float motor_pos) {
+    return go_cfg_sign(cfg) * ((motor_pos - zero_offset) / go_cfg_gear(cfg));
+}
+
+static float go_joint_pos_to_motor(const motor_cfg_t* cfg,
+                                    float zero_offset,
+                                    float joint_pos) {
+    return (go_cfg_sign(cfg) * joint_pos * go_cfg_gear(cfg)) + zero_offset;
+}
+
+static float go_motor_vel_to_joint(const motor_cfg_t* cfg, float motor_vel) {
+    return go_cfg_sign(cfg) * (motor_vel / go_cfg_gear(cfg));
+}
+
+static float go_joint_vel_to_motor(const motor_cfg_t* cfg, float joint_vel) {
+    return go_cfg_sign(cfg) * joint_vel * go_cfg_gear(cfg);
+}
+
+static float go_motor_tau_to_joint(const motor_cfg_t* cfg, float motor_tau) {
+    return go_cfg_sign(cfg) * motor_tau * go_cfg_gear(cfg);
+}
+
+static float go_joint_tau_to_motor(const motor_cfg_t* cfg, float joint_tau) {
+    return go_cfg_sign(cfg) * (joint_tau / go_cfg_gear(cfg));
+}
+
 /* ─── RIS 协议帧结构  ─── */
 #pragma pack(push, 1)
 
@@ -160,9 +202,11 @@ static int go_decode_fbk(const uint8_t* raw, uint16_t len,
     float vel_rads = ((float)fbk.fbk.speed / 256.0f) * 6.28318f;
     float tau_nm   = (float)fbk.fbk.torque / 256.0f;
 
-    state->angle_rad    = pos_rad - ctx->zero_offset;
-    state->velocity_rads = vel_rads;
-    state->torque_nm    = tau_nm;
+    const motor_cfg_t* cfg = motor_get_cfg((motor_logical_id_t)state->id);
+
+    state->angle_rad     = go_motor_pos_to_joint(cfg, ctx->zero_offset, pos_rad);
+    state->velocity_rads = go_motor_vel_to_joint(cfg, vel_rads);
+    state->torque_nm     = go_motor_tau_to_joint(cfg, tau_nm);
     state->temperature_c = (float)fbk.fbk.temp;
     state->online       = 1;
     state->last_rx_tick = bsp_time_now_ms();
@@ -181,7 +225,7 @@ static int go_set_current(motor_dev_t* dev, float iq_a) {
     /* GO-8010 不支持直接电流控制，通过力矩模式间接实现 */
     if (!dev || !dev->drv_ctx) return APP_ERR_INVALID_ARG;
     go_drv_ctx_t* ctx = (go_drv_ctx_t*)dev->drv_ctx;
-    ctx->cmd_tau = iq_a;  /* 简化映射，实际需要转换 */
+    ctx->cmd_tau = go_joint_tau_to_motor(go_cfg(dev), iq_a);
     ctx->cmd_kp  = 0.0f;
     ctx->cmd_kd  = 0.0f;
     return APP_OK;
@@ -190,7 +234,7 @@ static int go_set_current(motor_dev_t* dev, float iq_a) {
 static int go_set_torque(motor_dev_t* dev, float tau_nm) {
     if (!dev || !dev->drv_ctx) return APP_ERR_INVALID_ARG;
     go_drv_ctx_t* ctx = (go_drv_ctx_t*)dev->drv_ctx;
-    ctx->cmd_tau = tau_nm;
+    ctx->cmd_tau = go_joint_tau_to_motor(go_cfg(dev), tau_nm);
     ctx->cmd_kp  = 0.0f;
     ctx->cmd_kd  = 0.0f;
     return APP_OK;
@@ -200,11 +244,12 @@ static int go_set_position(motor_dev_t* dev, float pos, float vel,
                             float kp, float kd, float tau_ff) {
     if (!dev || !dev->drv_ctx) return APP_ERR_INVALID_ARG;
     go_drv_ctx_t* ctx = (go_drv_ctx_t*)dev->drv_ctx;
-    ctx->cmd_pos = pos + ctx->zero_offset;
-    ctx->cmd_vel = vel;
+    const motor_cfg_t* cfg = go_cfg(dev);
+    ctx->cmd_pos = go_joint_pos_to_motor(cfg, ctx->zero_offset, pos);
+    ctx->cmd_vel = go_joint_vel_to_motor(cfg, vel);
     ctx->cmd_kp  = kp;
     ctx->cmd_kd  = kd;
-    ctx->cmd_tau = tau_ff;
+    ctx->cmd_tau = go_joint_tau_to_motor(cfg, tau_ff);
     ctx->mode    = 1;  /* FOC 闭环 */
     return APP_OK;
 }
@@ -212,23 +257,28 @@ static int go_set_position(motor_dev_t* dev, float pos, float vel,
 static int go_set_velocity(motor_dev_t* dev, float vel_rads) {
     if (!dev || !dev->drv_ctx) return APP_ERR_INVALID_ARG;
     go_drv_ctx_t* ctx = (go_drv_ctx_t*)dev->drv_ctx;
-    ctx->cmd_vel = vel_rads;
+    const motor_cfg_t* cfg = go_cfg(dev);
+    ctx->cmd_vel = go_joint_vel_to_motor(cfg, vel_rads);
     ctx->cmd_kp  = 0.0f;
     ctx->cmd_kd  = 0.5f;  /* 纯速度阻尼控制 */
-    ctx->cmd_pos = dev->state.angle_rad + ctx->zero_offset;  /* 保持当前位置 */
+    ctx->cmd_pos = go_joint_pos_to_motor(cfg, ctx->zero_offset, dev->state.angle_rad);
     return APP_OK;
 }
 
 static int go_enable(motor_dev_t* dev) {
     if (!dev || !dev->drv_ctx) return APP_ERR_INVALID_ARG;
     go_drv_ctx_t* ctx = (go_drv_ctx_t*)dev->drv_ctx;
+    const motor_cfg_t* cfg = go_cfg(dev);
     ctx->mode = 1;  /* FOC 闭环 */
-    /* 零位标定：记录当前位置为零位 */
-    if (!ctx->calibrated) {
-        ctx->zero_offset = dev->state.angle_rad + ctx->zero_offset;
+    if (!ctx->calibrated && dev->state.rx_cnt > 0U) {
+        float boot_angle = cfg ? cfg->boot_angle : 0.0f;
+        float raw_pos = go_joint_pos_to_motor(cfg, ctx->zero_offset, dev->state.angle_rad);
+        ctx->zero_offset = raw_pos - (go_cfg_sign(cfg) * boot_angle * go_cfg_gear(cfg));
+        dev->state.angle_rad = boot_angle;
         ctx->calibrated  = 1;
-        LOGI("GO motor %u on bus%u calibrated, zero=%.3f rad",
-             (unsigned)ctx->motor_id, (unsigned)ctx->bus_id, ctx->zero_offset);
+        LOGI("GO motor %u on bus%u calibrated, zero=%.3f rad boot=%.3f",
+             (unsigned)ctx->motor_id, (unsigned)ctx->bus_id,
+             (double)ctx->zero_offset, (double)boot_angle);
     }
     return APP_OK;
 }
@@ -277,16 +327,9 @@ static motor_dev_t   s_go_devs[GO_MOTOR_COUNT];
 static go_drv_ctx_t s_go_ctxs[GO_MOTOR_COUNT];
 
 /*
- * 总线映射：
- * 旧代码中 motor_id 0~2 → USART3, 3~5 → USART2, 6~8 → USART3, 9~11 → USART2
- * 新架构按 motor_registry 的逻辑 ID 重映射：
- *
- *   FL_HIP(0), FL_KNEE(1)  → UART3 (bus_id=2)
- *   FR_HIP(3), FR_KNEE(4)  → UART2 (bus_id=1)
- *   RL_HIP(6), RL_KNEE(7)  → UART3 (bus_id=2)
- *   RR_HIP(9), RR_KNEE(10) → UART2 (bus_id=1)
- *
- * 每条总线上的电机 ID 0~3 按顺序分配。
+ * 总线映射沿用老工程 MotorInstance_Init():
+ *   0/1 -> USART3, 3/4 -> USART2, 6/7 -> USART3, 9/10 -> USART2。
+ * RIS 协议 ID 也沿用这些全局物理槽位。
  */
 typedef struct {
     motor_logical_id_t logical_id;
@@ -295,16 +338,14 @@ typedef struct {
 } go_bus_map_t;
 
 static const go_bus_map_t s_go_map[GO_MOTOR_COUNT] = {
-    /* UART3 (BSP_UART_3) 上的 4 个电机 */
     { MOTOR_ID_FL_HIP,  BSP_UART_3, 0 },
     { MOTOR_ID_FL_KNEE, BSP_UART_3, 1 },
-    { MOTOR_ID_RL_HIP,  BSP_UART_3, 2 },
-    { MOTOR_ID_RL_KNEE, BSP_UART_3, 3 },
-    /* UART2 (BSP_UART_2) 上的 4 个电机 */
-    { MOTOR_ID_FR_HIP,  BSP_UART_2, 0 },
-    { MOTOR_ID_FR_KNEE, BSP_UART_2, 1 },
-    { MOTOR_ID_RR_HIP,  BSP_UART_2, 2 },
-    { MOTOR_ID_RR_KNEE, BSP_UART_2, 3 },
+    { MOTOR_ID_RL_HIP,  BSP_UART_2, 3 },
+    { MOTOR_ID_RL_KNEE, BSP_UART_2, 4 },
+    { MOTOR_ID_RR_HIP,  BSP_UART_3, 6 },
+    { MOTOR_ID_RR_KNEE, BSP_UART_3, 7 },
+    { MOTOR_ID_FR_HIP,  BSP_UART_2, 9 },
+    { MOTOR_ID_FR_KNEE, BSP_UART_2, 10 },
 };
 
 app_err_t motor_go_init_all(void) {
@@ -320,6 +361,10 @@ app_err_t motor_go_init_all(void) {
         s_go_ctxs[i].mode        = 0;  /* 锁定态 */
         s_go_ctxs[i].cmd_kp      = 0.0f;
         s_go_ctxs[i].cmd_kd      = 0.0f;
+        {
+            const motor_cfg_t* cfg = motor_get_cfg(m->logical_id);
+            s_go_ctxs[i].zero_offset = cfg ? cfg->zero_offset : 0.0f;
+        }
 
         /* 初始化 motor_dev_t */
         s_go_devs[i].ops     = &s_go_ops;
