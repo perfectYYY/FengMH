@@ -19,17 +19,13 @@ from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from tools.leg_viz.sim_bridge import (  # noqa: E402
     GAIT_LEG_NUM,
+    HostSystemSim,
     LEG_ACT_HIP,
     LEG_ACT_KNEE,
     LEG_ACT_WHEEL,
     LEG_DIM_DEFAULT,
     list_builtin_scripts,
     list_leg_configs,
-    make_dim,
-    sample_script,
-    script_duration,
-    solve_fk,
-    solve_leg_ik,
 )
 
 
@@ -42,6 +38,7 @@ class LegVizApp:
         self.legs = list_leg_configs()
         if len(self.legs) != GAIT_LEG_NUM:
             raise RuntimeError(f"expected {GAIT_LEG_NUM} legs, got {len(self.legs)}")
+        self.host = HostSystemSim()
 
         self.thigh = LEG_DIM_DEFAULT.thigh_length
         self.shin = LEG_DIM_DEFAULT.shin_length
@@ -67,6 +64,9 @@ class LegVizApp:
         self._view_index = 0
         self._last_step = time.monotonic()
         self._timer = None
+        self._script_loaded = None
+
+        self._apply_manual_targets()
 
         self._build_figure()
         self._draw_all()
@@ -135,9 +135,6 @@ class LegVizApp:
 
     # --------------------------------------------------------------- math
 
-    def _current_dim(self):
-        return make_dim(thigh=self.thigh, shin=self.shin)
-
     def _selected_leg_indices(self):
         if self.active_selection == ACTIVE_ALL:
             return range(len(self.legs))
@@ -158,27 +155,17 @@ class LegVizApp:
     def _hip_world(self, leg):
         return self._world_from_body([leg.body_x_m, leg.body_y_m, 0.0])
 
-    def _solve_leg(self, i):
-        return solve_leg_ik(
-            self.legs[i], self.foot_x[i], self.foot_z[i],
-            dim=self._current_dim(), height=self.height,
-        )
-
     def _leg_points_world(self, i):
         leg = self.legs[i]
-        solved = self._solve_leg(i)
-        if solved is None:
-            self.ik_ok[i] = False
-            hip_raw, knee_raw = self.last_raw[i]
-            hip_cmd, knee_cmd = self.last_cmd[i]
-        else:
-            self.ik_ok[i] = True
-            hip_raw, knee_raw, hip_cmd, knee_cmd = solved
-            self.last_raw[i] = (hip_raw, knee_raw)
-            self.last_cmd[i] = (hip_cmd, knee_cmd)
+        pose = self.host.leg_pose(i)
+        self.ik_ok[i] = bool(pose.ik_ok)
+        hip_raw = float(pose.hip_raw_rad)
+        knee_raw = float(pose.knee_raw_rad)
+        hip_cmd = float(pose.hip_cmd_rad)
+        knee_cmd = float(pose.knee_cmd_rad)
+        self.last_raw[i] = (hip_raw, knee_raw)
+        self.last_cmd[i] = (hip_cmd, knee_cmd)
 
-        fk_x, fk_z = solve_fk(hip_raw, knee_raw, dim=self._current_dim())
-        world_fk_x = leg.foot_x_dir * fk_x
         world_knee_x = leg.foot_x_dir * self.thigh * np.cos(hip_raw)
         knee_body = np.array([
             leg.body_x_m + world_knee_x,
@@ -186,9 +173,9 @@ class LegVizApp:
             -self.thigh * np.sin(hip_raw),
         ])
         foot_body = np.array([
-            leg.body_x_m + world_fk_x,
-            leg.body_y_m,
-            -fk_z,
+            pose.foot_body_x_m,
+            pose.foot_body_y_m,
+            -pose.foot_down_z_m,
         ])
         hip = self._hip_world(leg)
         knee = self._world_from_body(knee_body)
@@ -271,6 +258,7 @@ class LegVizApp:
             f"mode     = {self.active_label}",
             f"playing  = {self.playing}",
             f"script   = {self.active_script or '(none)'}",
+            f"host     = {self.host.active_gait_name()} / real leg_controller",
             f"body z   = {self.body_z:.3f} m",
             f"height   = {self.height:.3f} m",
             f"pitch    = {self.body_pitch_deg:+.1f} deg",
@@ -299,12 +287,19 @@ class LegVizApp:
     def _on_key(self, ev):
         key = ev.key or ""
         if key in (" ", "space"):
-            self.playing = not self.playing
+            if self.playing:
+                self.playing = False
+            elif self.active_script is not None:
+                self._load_script()
+                self.playing = True
         elif key == "n":
             if self.scripts:
                 self.active_script_index = (self.active_script_index + 1) % len(self.scripts)
                 self.t_play = 0.0
+                self._script_loaded = None
                 self._clear_trails()
+                if self.playing:
+                    self._load_script()
         elif key in ("0", "1", "2", "3", "4"):
             idx = int(key)
             self.active_selection = ACTIVE_ALL if idx == 0 else ACTIVE_FIRST_LEG + idx - 1
@@ -319,9 +314,11 @@ class LegVizApp:
         elif key == "w":
             self.height = min(0.38, self.height + 0.01)
             self.body_z = self.height
+            self.host.set_stand_height(self.height)
         elif key == "s":
             self.height = max(0.08, self.height - 0.01)
             self.body_z = self.height
+            self.host.set_stand_height(self.height)
         elif key == "q":
             self.body_pitch_deg = max(-15.0, self.body_pitch_deg - 1.0)
         elif key == "e":
@@ -337,12 +334,28 @@ class LegVizApp:
             self._reset()
         else:
             return
+        if key in ("left", "right", "up", "down") or (key in ("w", "s") and not self.playing):
+            self._apply_manual_targets()
         self._dirty = True
 
     def _adjust_foot(self, dx=0.0, dz=0.0):
+        self.playing = False
         for i in self._selected_leg_indices():
             self.foot_x[i] = float(np.clip(self.foot_x[i] + dx, -0.20, 0.20))
             self.foot_z[i] = float(np.clip(self.foot_z[i] + dz, -0.08, 0.10))
+
+    def _apply_manual_targets(self):
+        self.host.set_stand_height(self.height)
+        self.host.apply_foot_targets(self.foot_x, self.foot_z)
+
+    def _load_script(self):
+        if self.active_script is None:
+            return
+        if self._script_loaded == self.active_script:
+            return
+        self.host.set_stand_height(self.height)
+        self.host.play_script(self.active_script)
+        self._script_loaded = self.active_script
 
     def _clear_trails(self):
         for trail in self.trails:
@@ -355,10 +368,13 @@ class LegVizApp:
         self._clear_trails()
         self.t_play = 0.0
         self.playing = False
+        self._script_loaded = None
         self.height = 0.25
         self.body_z = self.height
         self.body_pitch_deg = 0.0
         self.body_roll_deg = 0.0
+        self.host = HostSystemSim()
+        self._apply_manual_targets()
 
     def _apply_view(self):
         views = [(22, -54), (16, -90), (55, -45), (0, -90)]
@@ -375,15 +391,9 @@ class LegVizApp:
         self._last_step = now
 
         if self.playing and self.active_script is not None:
-            out = sample_script(self.active_script, self.t_play)
-            if out is not None:
-                for i in range(GAIT_LEG_NUM):
-                    self.foot_x[i] = out.leg[i].hip_rad
-                    self.foot_z[i] = out.leg[i].knee_rad
+            self._load_script()
+            self.host.step(elapsed)
             self.t_play += elapsed
-            dur = script_duration(self.active_script)
-            if dur > 0 and self.t_play > dur:
-                self.t_play = 0.0
             self._dirty = True
 
         if self._dirty:

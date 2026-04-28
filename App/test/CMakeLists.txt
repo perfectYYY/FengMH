@@ -35,10 +35,12 @@ include_directories(
     ${APP_ROOT}/service/script
     ${APP_ROOT}/app
     ${APP_ROOT}/test/unity
+    ${APP_ROOT}/../tools/leg_viz
 )
 
 # 共享的 App 源（host 侧能编译的部分）
 set(APP_SRCS
+    ${APP_ROOT}/../tools/leg_viz/host_sim.c
     ${APP_ROOT}/common/log.c
     ${APP_ROOT}/bsp/bsp_time.c
     ${APP_ROOT}/bsp/bsp_fdcan.c
@@ -86,17 +88,38 @@ add_app_test(test_task_comm       ${APP_ROOT}/test/test_task_comm.c)
 add_app_test(test_leg_controller  ${APP_ROOT}/test/test_leg_controller.c)
 add_app_test(test_script          ${APP_ROOT}/test/test_script.c)
 add_app_test(test_task_chassis    ${APP_ROOT}/test/test_task_chassis.c)
+add_app_test(test_host_sim        ${APP_ROOT}/test/test_host_sim.c)
 
 # === Python GUI sim 共享库 ===
 # tools/leg_viz/ 下的 Python GUI 通过 ctypes 直接调用本库中的 IK/FK/script 函数
 add_library(fengmh_sim SHARED
+    ${APP_ROOT}/../tools/leg_viz/host_sim.c
+    ${APP_ROOT}/common/log.c
+    ${APP_ROOT}/bsp/bsp_time.c
+    ${APP_ROOT}/bsp/bsp_fdcan.c
+    ${APP_ROOT}/bsp/bsp_uart.c
+    ${APP_ROOT}/bsp/bsp_usb_cdc.c
+    ${APP_ROOT}/device/motor_registry.c
+    ${APP_ROOT}/device/motor_go.c
+    ${APP_ROOT}/device/motor_m3508.c
+    ${APP_ROOT}/service/pid/pid.c
+    ${APP_ROOT}/service/protocol/proto_frame.c
+    ${APP_ROOT}/service/protocol/proto_dispatch.c
+    ${APP_ROOT}/service/gait/gait_if.c
+    ${APP_ROOT}/service/gait/gait_params.c
+    ${APP_ROOT}/service/gait/gait_stand.c
+    ${APP_ROOT}/service/gait/gait_trot.c
+    ${APP_ROOT}/service/gait/gait_machine.c
+    ${APP_ROOT}/service/script/script_player.c
+    ${APP_ROOT}/service/script/gait_script.c
     ${APP_ROOT}/service/kinematics/leg_ik.c
     ${APP_ROOT}/service/kinematics/leg_params.c
-    ${APP_ROOT}/service/script/script_player.c
     ${APP_ROOT}/service/script/script_builtin.c
     ${APP_ROOT}/service/leg/leg_config.c
-    ${APP_ROOT}/device/motor_registry.c
-    ${APP_ROOT}/common/log.c
+    ${APP_ROOT}/service/leg/leg_controller.c
+    ${APP_ROOT}/app/task_comm.c
+    ${APP_ROOT}/app/task_safety.c
+    ${APP_ROOT}/app/task_chassis.c
 )
 target_link_libraries(fengmh_sim m)
 target_compile_definitions(fengmh_sim PRIVATE APP_TARGET_HOST=1)

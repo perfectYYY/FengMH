@@ -1,9 +1,12 @@
 # leg_viz — 3D 整车腿部调试 GUI
 
 Mac 上的纯 PC 调试工具。主视图是一个 3D 底盘：机体、四个髋关节、四条腿、
-足端世界坐标和足端轨迹都画在同一坐标系里。IK、腿型、电机对应、方向、
-CAN bus/id 都通过 ctypes 从 `libfengmh_sim.dylib` 读取同一份 C 代码和
-`leg_config.c` 配置表，所以这里看到的就是固件实际使用的配置。
+足端世界坐标和足端轨迹都画在同一坐标系里。
+
+GUI 不再自己计算脚本/IK。它通过 ctypes 启动 `host_sim`：在电脑上绑定 12 个
+虚拟电机，然后运行真实的 `task_chassis -> gait/script -> leg_controller ->
+motor_registry` 控制链。3D 视图只读取虚拟电机最终收到的命令和足端姿态。
+这让 PC 端尽量接近“烧录到板子上的行为”。
 
 ## 安装与构建
 
@@ -35,11 +38,24 @@ python tools/leg_viz/leg_viz.py
 - **底盘调节**：`w/s` 调站立高度，`q/e` 调 pitch，`a/d` 调 roll。
 - **视角/复位**：`v` 切换常用 3D 观察角，`r` 复位。
 - **右侧面板**：显示每条腿的世界足端坐标、hip/knee 电机命令角、`xdir`、真实腿型和电机映射。
+- **host 执行器**：右侧 `host` 行显示当前实际 C 侧步态；手动足端目标和脚本播放都会经过真实 `leg_controller` 后再显示。
+
+## 机械模型说明
+
+当前 host 执行器已经复用真实控制链和真实电机映射，但足端几何仍使用
+`leg_ik.c` 里的 2 连杆近似模型。若要还原“两电机驱动两根杆，通过连杆机构形成腿姿态”的真实机械，需要把实际机构参数补进 C 侧机械模型：
+
+- 两个电机轴在单腿坐标系里的位置
+- 每根主动杆、从动杆、连杆的长度
+- 左右/前后镜像关系和零位姿态
+- 机械限位、编码器零位、方向
+- 足端/轮轴相对于末端连杆的安装点
 
 ## 文件结构
 
-- `sim_bridge.py` — ctypes 加载层，定义结构体和函数原型，暴露 `solve_ik / solve_fk / sample_script / list_leg_configs`
-- `leg_viz.py` — matplotlib GUI 主程序
+- `sim_bridge.py` — ctypes 加载层，定义结构体和函数原型，暴露 host 执行器、配置表和诊断函数
+- `host_sim.c/.h` — PC 端虚拟电机和真实控制链执行器
+- `leg_viz.py` — matplotlib GUI 主程序，只显示 host 执行器状态
 
 ## 故障排查
 

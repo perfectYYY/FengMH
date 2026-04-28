@@ -121,6 +121,35 @@ class MotorCfg(C.Structure):
     ]
 
 
+class HostMotorSnapshot(C.Structure):
+    _fields_ = [
+        ("online", C.c_uint8),
+        ("angle_rad", C.c_float),
+        ("velocity_rads", C.c_float),
+        ("torque_nm", C.c_float),
+        ("pos_target_rad", C.c_float),
+        ("vel_target_rads", C.c_float),
+        ("kp", C.c_float),
+        ("kd", C.c_float),
+        ("tau_ff", C.c_float),
+        ("pos_calls", C.c_uint32),
+        ("vel_calls", C.c_uint32),
+    ]
+
+
+class HostLegPose(C.Structure):
+    _fields_ = [
+        ("hip_cmd_rad", C.c_float),
+        ("knee_cmd_rad", C.c_float),
+        ("hip_raw_rad", C.c_float),
+        ("knee_raw_rad", C.c_float),
+        ("foot_body_x_m", C.c_float),
+        ("foot_body_y_m", C.c_float),
+        ("foot_down_z_m", C.c_float),
+        ("ik_ok", C.c_uint8),
+    ]
+
+
 @dataclass(frozen=True)
 class MotorInfo:
     logical: int
@@ -183,6 +212,35 @@ _lib.leg_config_motor_role_name.restype = C.c_char_p
 
 _lib.motor_get_cfg.argtypes = [C.c_int]
 _lib.motor_get_cfg.restype = C.POINTER(MotorCfg)
+
+_lib.host_sim_init.argtypes = []
+_lib.host_sim_init.restype = C.c_int
+
+_lib.host_sim_set_stand_height.argtypes = [C.c_float]
+_lib.host_sim_set_stand_height.restype = C.c_int
+
+_lib.host_sim_apply_foot_targets.argtypes = [
+    C.POINTER(C.c_float), C.POINTER(C.c_float), C.POINTER(C.c_float)
+]
+_lib.host_sim_apply_foot_targets.restype = C.c_int
+
+_lib.host_sim_play_script.argtypes = [C.c_char_p]
+_lib.host_sim_play_script.restype = C.c_int
+
+_lib.host_sim_stop_script.argtypes = []
+_lib.host_sim_stop_script.restype = C.c_int
+
+_lib.host_sim_step.argtypes = [C.c_float]
+_lib.host_sim_step.restype = C.c_int
+
+_lib.host_sim_active_gait_name.argtypes = []
+_lib.host_sim_active_gait_name.restype = C.c_char_p
+
+_lib.host_sim_get_motor_snapshot.argtypes = [C.c_int, C.POINTER(HostMotorSnapshot)]
+_lib.host_sim_get_motor_snapshot.restype = C.c_int
+
+_lib.host_sim_get_leg_pose.argtypes = [C.c_int, C.POINTER(HostLegPose)]
+_lib.host_sim_get_leg_pose.restype = C.c_int
 
 LEG_DIM_DEFAULT = LegDim.in_dll(_lib, "LEG_DIM_DEFAULT")
 
@@ -341,3 +399,57 @@ def script_duration(name: str) -> float:
     arr_t = _Kf * s.n_frames
     arr = arr_t.from_address(s.frames)
     return float(arr[s.n_frames - 1].t_s)
+
+
+class HostSystemSim:
+    """Terminal executor backed by the real C chassis/leg/motor stack."""
+
+    def __init__(self):
+        rc = _lib.host_sim_init()
+        if rc != 0:
+            raise RuntimeError(f"host_sim_init failed: {rc}")
+
+    def set_stand_height(self, height_m: float):
+        rc = _lib.host_sim_set_stand_height(C.c_float(height_m))
+        if rc != 0:
+            raise RuntimeError(f"host_sim_set_stand_height failed: {rc}")
+
+    def apply_foot_targets(self, dx_m, dz_m, wheel_rads=None):
+        if wheel_rads is None:
+            wheel_rads = [0.0 for _ in range(GAIT_LEG_NUM)]
+        dx_arr = (C.c_float * GAIT_LEG_NUM)(*[float(v) for v in dx_m])
+        dz_arr = (C.c_float * GAIT_LEG_NUM)(*[float(v) for v in dz_m])
+        wh_arr = (C.c_float * GAIT_LEG_NUM)(*[float(v) for v in wheel_rads])
+        rc = _lib.host_sim_apply_foot_targets(dx_arr, dz_arr, wh_arr)
+        if rc != 0:
+            raise RuntimeError(f"host_sim_apply_foot_targets failed: {rc}")
+
+    def play_script(self, name: str):
+        rc = _lib.host_sim_play_script(name.encode("utf-8"))
+        if rc != 0:
+            raise RuntimeError(f"host_sim_play_script({name!r}) failed: {rc}")
+
+    def stop_script(self):
+        _lib.host_sim_stop_script()
+
+    def step(self, dt_s: float):
+        rc = _lib.host_sim_step(C.c_float(dt_s))
+        if rc != 0:
+            raise RuntimeError(f"host_sim_step failed: {rc}")
+
+    def active_gait_name(self) -> str:
+        return _cstr(_lib.host_sim_active_gait_name())
+
+    def motor_snapshot(self, logical_id: int) -> HostMotorSnapshot:
+        out = HostMotorSnapshot()
+        rc = _lib.host_sim_get_motor_snapshot(C.c_int(logical_id), C.byref(out))
+        if rc != 0:
+            raise RuntimeError(f"host_sim_get_motor_snapshot({logical_id}) failed: {rc}")
+        return out
+
+    def leg_pose(self, leg_id: int) -> HostLegPose:
+        out = HostLegPose()
+        rc = _lib.host_sim_get_leg_pose(C.c_int(leg_id), C.byref(out))
+        if rc != 0:
+            raise RuntimeError(f"host_sim_get_leg_pose({leg_id}) failed: {rc}")
+        return out
