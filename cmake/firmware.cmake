@@ -77,6 +77,10 @@ foreach(_d IN LISTS APP_DIRS)
             ${CMAKE_SOURCE_DIR}/App/${_d})
 endforeach()
 
+# App/ 根目录 (支持 #include "service/pid/pid.h" 带路径引用)
+target_include_directories(${PROJECT_NAME}.elf PRIVATE
+        ${CMAKE_SOURCE_DIR}/App)
+
 set(_app_globs "")
 foreach(_d IN LISTS APP_DIRS)
     list(APPEND _app_globs ${CMAKE_SOURCE_DIR}/App/${_d}/*.c)

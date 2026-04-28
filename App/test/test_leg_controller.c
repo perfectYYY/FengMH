@@ -1,13 +1,20 @@
 /*
  * test_leg_controller.c — registry→leg 绑定 + stub vtable 下发验证
+ *
+ * 注意: leg_controller_apply 现在内部调用 leg_ik_solve_all，
+ *       gait_output_t 中的 hip_rad/knee_rad 被解释为足端位移 (dx, dz)，
+ *       IK 解算后替换为关节角度 (theta1, theta2)。
  */
 #include "test_util.h"
 #include "leg_controller.h"
+#include "leg_ik.h"
+#include "leg_params.h"
 #include "motor_registry.h"
 #include "gait_if.h"
 #include "log.h"
 
 #include <string.h>
+#include <math.h>
 
 /* 用 stub 驱动把 set_position / set_velocity 记账 */
 typedef struct {
@@ -70,21 +77,91 @@ static void t_apply_dispatches(void) {
     leg_controller_init(&lc);
     leg_controller_bind_from_registry(&lc);
 
+    /* 零位移 = 站立位置，IK 应解算出关节角度 */
     gait_output_t o;
     memset(&o, 0, sizeof(o));
+    /* 设置轮速以验证直通 */
     for (int i = 0; i < GAIT_LEG_NUM; i++) {
-        o.leg[i].hip_rad = 0.1f * (i+1);
-        o.leg[i].knee_rad = 0.2f * (i+1);
-        o.leg[i].wheel_rads = 0.3f * (i+1);
+        o.leg[i].wheel_rads = 1.0f * (i + 1);
     }
+
     leg_controller_apply(&lc, &o);
+
+    /* 所有 4 条腿都应成功下发 */
     TEST_ASSERT_EQUAL_UINT(GAIT_LEG_NUM, lc.send_cnt);
-    for (int i = 0; i < GAIT_LEG_NUM; i++) {
-        TEST_ASSERT_EQUAL_INT(1, s_ctx[MOTOR_ID_FL_HIP   + i * 3 - MOTOR_ID_FL_HIP].pos_calls >= 0); /* sanity */
+
+    /* wheel_rads 直通，不走 IK */
+    TEST_ASSERT_FLOAT_WITHIN(1e-6f, 1.0f, s_ctx[MOTOR_ID_FL_WHEEL].last_vel);
+
+    /* 髋/膝关节角度应为有限值 (IK 解算结果) */
+    TEST_ASSERT_TRUE(isfinite(s_ctx[MOTOR_ID_FL_HIP].last_pos));
+    TEST_ASSERT_TRUE(isfinite(s_ctx[MOTOR_ID_FL_KNEE].last_pos));
+}
+
+static void t_ik_roundtrip(void) {
+    /* IK → FK 一致性验证：给定足端位置，IK 解算后 FK 回到原位 */
+    const leg_dim_t* dim = &LEG_DIM_DEFAULT;
+    float hight = 0.25f;
+    /* L1+L2=0.42, hight=0.25 → 站立时 D=hight=0.25, 在工作空间内 */
+
+    /* 零位移 = 站立状态应可解 */
+    {
+        leg_ik_result_t ik;
+        int ret = leg_ik_solve(0.0f, 0.0f, dim, hight,
+                               LEG_TYPE_ORIGINAL, &ik);
+        TEST_ASSERT_EQUAL_INT(0, ret);
+
+        /* FK 验证 */
+        leg_fk_result_t fk;
+        leg_fk_solve(ik.theta1, ik.theta2, dim, &fk);
+        /* 站立时 z_total = hight, x ≈ 0 */
+        TEST_ASSERT_FLOAT_WITHIN(0.01f, 0.0f, fk.x);
+        TEST_ASSERT_FLOAT_WITHIN(0.01f, hight, fk.z);
     }
-    /* FL 髋关节应收到 0.1 rad */
-    TEST_ASSERT_FLOAT_WITHIN(1e-6f, 0.1f, s_ctx[MOTOR_ID_FL_HIP].last_pos);
-    TEST_ASSERT_FLOAT_WITHIN(1e-6f, 0.3f, s_ctx[MOTOR_ID_FL_WHEEL].last_vel);
+
+    /* 测试 ORIGINAL 腿型：微小偏移 (不触发角度限幅) */
+    {
+        float target_x = 0.02f;
+        float target_z = -0.02f;
+
+        leg_ik_result_t ik;
+        int ret = leg_ik_solve(target_x, target_z, dim, hight,
+                               LEG_TYPE_ORIGINAL, &ik);
+        TEST_ASSERT_EQUAL_INT(0, ret);
+
+        /* FK 验证 */
+        leg_fk_result_t fk;
+        leg_fk_solve(ik.theta1, ik.theta2, dim, &fk);
+        float z_total = target_z + hight;
+        TEST_ASSERT_FLOAT_WITHIN(0.005f, target_x, fk.x);
+        TEST_ASSERT_FLOAT_WITHIN(0.005f, z_total, fk.z);
+    }
+
+    /* 测试 MIRROR 腿型：微小偏移 */
+    {
+        float target_x = 0.02f;
+        float target_z = -0.02f;
+
+        leg_ik_result_t ik;
+        int ret = leg_ik_solve(target_x, target_z, dim, hight,
+                               LEG_TYPE_MIRROR, &ik);
+        TEST_ASSERT_EQUAL_INT(0, ret);
+
+        /* FK 验证 */
+        leg_fk_result_t fk;
+        leg_fk_solve(ik.theta1, ik.theta2, dim, &fk);
+        float z_total = target_z + hight;
+        TEST_ASSERT_FLOAT_WITHIN(0.005f, target_x, fk.x);
+        TEST_ASSERT_FLOAT_WITHIN(0.005f, z_total, fk.z);
+    }
+
+    /* 超出工作空间应返回 -1 */
+    {
+        leg_ik_result_t ik;
+        int ret = leg_ik_solve(0.0f, 0.5f, dim, hight,
+                               LEG_TYPE_ORIGINAL, &ik);
+        TEST_ASSERT_EQUAL_INT(-1, ret);
+    }
 }
 
 static void t_missing_increments_miss(void) {
@@ -105,6 +182,7 @@ int main(void) {
     log_set_global_level(LOG_LVL_ERR);
     TU_RUN(t_bind_all_present);
     TU_RUN(t_apply_dispatches);
+    TU_RUN(t_ik_roundtrip);
     TU_RUN(t_missing_increments_miss);
     TU_MAIN_EPILOGUE();
 }

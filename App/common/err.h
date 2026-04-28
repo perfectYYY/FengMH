@@ -18,7 +18,8 @@ typedef enum {
     APP_ERR_OFFLINE     = -10,
     APP_ERR_OVERFLOW    = -11,
     APP_ERR_UNSUPPORTED = -12,
-    APP_ERR_UNINIT      = -13
+    APP_ERR_UNINIT      = -13,
+    APP_ERR_IO          = -14      /* I/O 错误 (HAL 发送/接收失败) */
 } app_err_t;
 
 #endif /* APP_COMMON_ERR_H_ */

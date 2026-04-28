@@ -32,6 +32,9 @@ typedef struct {
 void      leg_controller_init(leg_controller_t* lc);
 /* 从 motor_registry 中按约定 logical id 装配 */
 app_err_t leg_controller_bind_from_registry(leg_controller_t* lc);
+/* 设置站立高度 (IK 解算参数) */
+void      leg_controller_set_stand_height(float h);
+/* 应用步态输出：先做 IK 解算，再推送给电机 */
 app_err_t leg_controller_apply(leg_controller_t* lc, const gait_output_t* o);
 
 #ifdef __cplusplus

@@ -32,6 +32,7 @@ typedef struct {
     float    velocity_rads;
     float    torque_nm;
     float    temperature_c;
+    float    foot_force_n;     /* GO 电机足底力传感器 (N) */
 
     app_tick_t last_rx_tick;
     uint32_t   rx_cnt;
@@ -60,6 +61,12 @@ struct motor_dev_s {
 
 /* 提供给 vtable 未实现项的默认"不支持"实现（避免 NULL 解引用） */
 int motor_op_unsupported(motor_dev_t* dev, ...);
+
+/* 默认实现：返回 APP_ERR_UNSUPPORTED */
+static inline int motor_op_default_unsupported(motor_dev_t* dev) {
+    (void)dev;
+    return APP_ERR_UNSUPPORTED;
+}
 
 #ifdef __cplusplus
 }

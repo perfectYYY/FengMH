@@ -409,6 +409,30 @@ void SystemClock_Config(void)
 
 /* USER CODE BEGIN 4 */
 
+/*
+ * HAL 回调桥接：将 FDCAN / UART 中步回调转发给 App 层 BSP。
+ * 当 USE_LEGACY_MAIN=0 时，旧代码的回调不再注册，
+ * 新架构通过 bsp_fdcan / bsp_uart 接收数据。
+ */
+
+/* FDCAN RX 回调 → bsp_fdcan */
+extern void bsp_fdcan_hal_rxfifo0_cb(FDCAN_HandleTypeDef *hfdcan, uint32_t RxFifo0ITs);
+void HAL_FDCAN_RxFifo0Callback(FDCAN_HandleTypeDef *hfdcan, uint32_t RxFifo0ITs) {
+    bsp_fdcan_hal_rxfifo0_cb(hfdcan, RxFifo0ITs);
+}
+
+/* UART RX 事件回调 → bsp_uart */
+extern void bsp_uart_hal_rx_event(UART_HandleTypeDef *huart, uint16_t size);
+void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t size) {
+    bsp_uart_hal_rx_event(huart, size);
+}
+
+/* UART TX 完成回调 → bsp_uart */
+extern void bsp_uart_hal_tx_done(UART_HandleTypeDef *huart);
+void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart) {
+    bsp_uart_hal_tx_done(huart);
+}
+
 /* USER CODE END 4 */
 
  /* MPU Configuration */

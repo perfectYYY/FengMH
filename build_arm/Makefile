@@ -329,6 +329,30 @@ App/bsp/bsp_time.c.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/FengMH.elf.dir/build.make CMakeFiles/FengMH.elf.dir/App/bsp/bsp_time.c.s
 .PHONY : App/bsp/bsp_time.c.s
 
+App/bsp/bsp_uart.obj: App/bsp/bsp_uart.c.obj
+.PHONY : App/bsp/bsp_uart.obj
+
+# target to build an object file
+App/bsp/bsp_uart.c.obj:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/FengMH.elf.dir/build.make CMakeFiles/FengMH.elf.dir/App/bsp/bsp_uart.c.obj
+.PHONY : App/bsp/bsp_uart.c.obj
+
+App/bsp/bsp_uart.i: App/bsp/bsp_uart.c.i
+.PHONY : App/bsp/bsp_uart.i
+
+# target to preprocess a source file
+App/bsp/bsp_uart.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/FengMH.elf.dir/build.make CMakeFiles/FengMH.elf.dir/App/bsp/bsp_uart.c.i
+.PHONY : App/bsp/bsp_uart.c.i
+
+App/bsp/bsp_uart.s: App/bsp/bsp_uart.c.s
+.PHONY : App/bsp/bsp_uart.s
+
+# target to generate assembly for a file
+App/bsp/bsp_uart.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/FengMH.elf.dir/build.make CMakeFiles/FengMH.elf.dir/App/bsp/bsp_uart.c.s
+.PHONY : App/bsp/bsp_uart.c.s
+
 App/bsp/bsp_usb_cdc.obj: App/bsp/bsp_usb_cdc.c.obj
 .PHONY : App/bsp/bsp_usb_cdc.obj
 
@@ -376,6 +400,54 @@ App/common/log.s: App/common/log.c.s
 App/common/log.c.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/FengMH.elf.dir/build.make CMakeFiles/FengMH.elf.dir/App/common/log.c.s
 .PHONY : App/common/log.c.s
+
+App/device/motor_go.obj: App/device/motor_go.c.obj
+.PHONY : App/device/motor_go.obj
+
+# target to build an object file
+App/device/motor_go.c.obj:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/FengMH.elf.dir/build.make CMakeFiles/FengMH.elf.dir/App/device/motor_go.c.obj
+.PHONY : App/device/motor_go.c.obj
+
+App/device/motor_go.i: App/device/motor_go.c.i
+.PHONY : App/device/motor_go.i
+
+# target to preprocess a source file
+App/device/motor_go.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/FengMH.elf.dir/build.make CMakeFiles/FengMH.elf.dir/App/device/motor_go.c.i
+.PHONY : App/device/motor_go.c.i
+
+App/device/motor_go.s: App/device/motor_go.c.s
+.PHONY : App/device/motor_go.s
+
+# target to generate assembly for a file
+App/device/motor_go.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/FengMH.elf.dir/build.make CMakeFiles/FengMH.elf.dir/App/device/motor_go.c.s
+.PHONY : App/device/motor_go.c.s
+
+App/device/motor_m3508.obj: App/device/motor_m3508.c.obj
+.PHONY : App/device/motor_m3508.obj
+
+# target to build an object file
+App/device/motor_m3508.c.obj:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/FengMH.elf.dir/build.make CMakeFiles/FengMH.elf.dir/App/device/motor_m3508.c.obj
+.PHONY : App/device/motor_m3508.c.obj
+
+App/device/motor_m3508.i: App/device/motor_m3508.c.i
+.PHONY : App/device/motor_m3508.i
+
+# target to preprocess a source file
+App/device/motor_m3508.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/FengMH.elf.dir/build.make CMakeFiles/FengMH.elf.dir/App/device/motor_m3508.c.i
+.PHONY : App/device/motor_m3508.c.i
+
+App/device/motor_m3508.s: App/device/motor_m3508.c.s
+.PHONY : App/device/motor_m3508.s
+
+# target to generate assembly for a file
+App/device/motor_m3508.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/FengMH.elf.dir/build.make CMakeFiles/FengMH.elf.dir/App/device/motor_m3508.c.s
+.PHONY : App/device/motor_m3508.c.s
 
 App/device/motor_registry.obj: App/device/motor_registry.c.obj
 .PHONY : App/device/motor_registry.obj
@@ -520,6 +592,54 @@ App/service/gait/gait_trot.s: App/service/gait/gait_trot.c.s
 App/service/gait/gait_trot.c.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/FengMH.elf.dir/build.make CMakeFiles/FengMH.elf.dir/App/service/gait/gait_trot.c.s
 .PHONY : App/service/gait/gait_trot.c.s
+
+App/service/kinematics/leg_ik.obj: App/service/kinematics/leg_ik.c.obj
+.PHONY : App/service/kinematics/leg_ik.obj
+
+# target to build an object file
+App/service/kinematics/leg_ik.c.obj:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/FengMH.elf.dir/build.make CMakeFiles/FengMH.elf.dir/App/service/kinematics/leg_ik.c.obj
+.PHONY : App/service/kinematics/leg_ik.c.obj
+
+App/service/kinematics/leg_ik.i: App/service/kinematics/leg_ik.c.i
+.PHONY : App/service/kinematics/leg_ik.i
+
+# target to preprocess a source file
+App/service/kinematics/leg_ik.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/FengMH.elf.dir/build.make CMakeFiles/FengMH.elf.dir/App/service/kinematics/leg_ik.c.i
+.PHONY : App/service/kinematics/leg_ik.c.i
+
+App/service/kinematics/leg_ik.s: App/service/kinematics/leg_ik.c.s
+.PHONY : App/service/kinematics/leg_ik.s
+
+# target to generate assembly for a file
+App/service/kinematics/leg_ik.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/FengMH.elf.dir/build.make CMakeFiles/FengMH.elf.dir/App/service/kinematics/leg_ik.c.s
+.PHONY : App/service/kinematics/leg_ik.c.s
+
+App/service/kinematics/leg_params.obj: App/service/kinematics/leg_params.c.obj
+.PHONY : App/service/kinematics/leg_params.obj
+
+# target to build an object file
+App/service/kinematics/leg_params.c.obj:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/FengMH.elf.dir/build.make CMakeFiles/FengMH.elf.dir/App/service/kinematics/leg_params.c.obj
+.PHONY : App/service/kinematics/leg_params.c.obj
+
+App/service/kinematics/leg_params.i: App/service/kinematics/leg_params.c.i
+.PHONY : App/service/kinematics/leg_params.i
+
+# target to preprocess a source file
+App/service/kinematics/leg_params.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/FengMH.elf.dir/build.make CMakeFiles/FengMH.elf.dir/App/service/kinematics/leg_params.c.i
+.PHONY : App/service/kinematics/leg_params.c.i
+
+App/service/kinematics/leg_params.s: App/service/kinematics/leg_params.c.s
+.PHONY : App/service/kinematics/leg_params.s
+
+# target to generate assembly for a file
+App/service/kinematics/leg_params.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/FengMH.elf.dir/build.make CMakeFiles/FengMH.elf.dir/App/service/kinematics/leg_params.c.s
+.PHONY : App/service/kinematics/leg_params.c.s
 
 App/service/leg/leg_controller.obj: App/service/leg/leg_controller.c.obj
 .PHONY : App/service/leg/leg_controller.obj
@@ -2123,12 +2243,21 @@ help:
 	@echo "... App/bsp/bsp_time.obj"
 	@echo "... App/bsp/bsp_time.i"
 	@echo "... App/bsp/bsp_time.s"
+	@echo "... App/bsp/bsp_uart.obj"
+	@echo "... App/bsp/bsp_uart.i"
+	@echo "... App/bsp/bsp_uart.s"
 	@echo "... App/bsp/bsp_usb_cdc.obj"
 	@echo "... App/bsp/bsp_usb_cdc.i"
 	@echo "... App/bsp/bsp_usb_cdc.s"
 	@echo "... App/common/log.obj"
 	@echo "... App/common/log.i"
 	@echo "... App/common/log.s"
+	@echo "... App/device/motor_go.obj"
+	@echo "... App/device/motor_go.i"
+	@echo "... App/device/motor_go.s"
+	@echo "... App/device/motor_m3508.obj"
+	@echo "... App/device/motor_m3508.i"
+	@echo "... App/device/motor_m3508.s"
 	@echo "... App/device/motor_registry.obj"
 	@echo "... App/device/motor_registry.i"
 	@echo "... App/device/motor_registry.s"
@@ -2147,6 +2276,12 @@ help:
 	@echo "... App/service/gait/gait_trot.obj"
 	@echo "... App/service/gait/gait_trot.i"
 	@echo "... App/service/gait/gait_trot.s"
+	@echo "... App/service/kinematics/leg_ik.obj"
+	@echo "... App/service/kinematics/leg_ik.i"
+	@echo "... App/service/kinematics/leg_ik.s"
+	@echo "... App/service/kinematics/leg_params.obj"
+	@echo "... App/service/kinematics/leg_params.i"
+	@echo "... App/service/kinematics/leg_params.s"
 	@echo "... App/service/leg/leg_controller.obj"
 	@echo "... App/service/leg/leg_controller.i"
 	@echo "... App/service/leg/leg_controller.s"
