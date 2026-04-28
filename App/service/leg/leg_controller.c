@@ -2,16 +2,13 @@
  * leg_controller.c
  */
 #include "leg_controller.h"
+#include "leg_config.h"
 #include "leg_ik.h"
 #include "leg_params.h"
 #include "log.h"
 #include <string.h>
 
 static const char* TAG = "LEG";
-
-static const motor_logical_id_t HIP[GAIT_LEG_NUM]   = { MOTOR_ID_FL_HIP, MOTOR_ID_FR_HIP, MOTOR_ID_RL_HIP, MOTOR_ID_RR_HIP };
-static const motor_logical_id_t KNEE[GAIT_LEG_NUM]  = { MOTOR_ID_FL_KNEE,MOTOR_ID_FR_KNEE,MOTOR_ID_RL_KNEE,MOTOR_ID_RR_KNEE };
-static const motor_logical_id_t WHEEL[GAIT_LEG_NUM] = { MOTOR_ID_FL_WHEEL,MOTOR_ID_FR_WHEEL,MOTOR_ID_RL_WHEEL,MOTOR_ID_RR_WHEEL };
 
 /* 站立高度 (m)，IK 解算时加在 z 上 */
 static float s_stand_height = 0.25f;
@@ -25,9 +22,11 @@ app_err_t leg_controller_bind_from_registry(leg_controller_t* lc) {
     if (!lc) return APP_ERR_INVALID_ARG;
     int bound = 0;
     for (int i = 0; i < GAIT_LEG_NUM; i++) {
-        lc->leg[i].hip   = motor_get(HIP[i]);
-        lc->leg[i].knee  = motor_get(KNEE[i]);
-        lc->leg[i].wheel = motor_get(WHEEL[i]);
+        const leg_config_t* cfg = leg_config_get((gait_leg_t)i);
+        if (!cfg) continue;
+        lc->leg[i].hip   = motor_get(cfg->motor[LEG_ACT_HIP]);
+        lc->leg[i].knee  = motor_get(cfg->motor[LEG_ACT_KNEE]);
+        lc->leg[i].wheel = motor_get(cfg->motor[LEG_ACT_WHEEL]);
         bound += (lc->leg[i].hip ? 1 : 0)
               +  (lc->leg[i].knee ? 1 : 0)
               +  (lc->leg[i].wheel ? 1 : 0);

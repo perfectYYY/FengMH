@@ -60,6 +60,7 @@ set(APP_SRCS
     ${APP_ROOT}/service/script/gait_script.c
     ${APP_ROOT}/service/kinematics/leg_ik.c
     ${APP_ROOT}/service/kinematics/leg_params.c
+    ${APP_ROOT}/service/leg/leg_config.c
     ${APP_ROOT}/service/leg/leg_controller.c
     ${APP_ROOT}/app/task_comm.c
     ${APP_ROOT}/app/task_safety.c
@@ -93,6 +94,7 @@ add_library(fengmh_sim SHARED
     ${APP_ROOT}/service/kinematics/leg_params.c
     ${APP_ROOT}/service/script/script_player.c
     ${APP_ROOT}/service/script/script_builtin.c
+    ${APP_ROOT}/service/leg/leg_config.c
     ${APP_ROOT}/device/motor_registry.c
     ${APP_ROOT}/common/log.c
 )

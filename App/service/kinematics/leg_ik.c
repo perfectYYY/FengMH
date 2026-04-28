@@ -9,16 +9,10 @@
  *   - z: 竖直方向，向下为正
  *   - 原点在髋关节
  *
- * 腿型映射 (与 motor_registry 的 dir 字段对齐)：
- *   FL (dir=-1) → MIRROR
- *   FR (dir=-1) → MIRROR
- *   RL (dir=+1) → ORIGINAL
- *   RR (dir=+1) → ORIGINAL
- *
- * 注意：实际映射需根据机械装配确认，这里暂按 dir 判断。
+ * 腿型/电机映射由 leg_config.c 统一维护，固件和 PC 调试工具共用。
  */
 #include "leg_ik.h"
-#include "motor_registry.h"
+#include "leg_config.h"
 
 #include <math.h>
 #include <string.h>
@@ -78,24 +72,10 @@ void leg_fk_solve(float theta1, float theta2,
 
 /* ─── 批量 IK ─── */
 
-/*
- * 腿型映射表 (与 motor_registry 中的 dir 对应)：
- *   FL (index 0): dir=-1 → MIRROR
- *   FR (index 1): dir=-1 → MIRROR
- *   RL (index 2): dir=+1 → ORIGINAL
- *   RR (index 3): dir=+1 → ORIGINAL
- */
-static const leg_type_t s_leg_type[GAIT_LEG_NUM] = {
-    LEG_TYPE_MIRROR,    /* FL */
-    LEG_TYPE_MIRROR,    /* FR */
-    LEG_TYPE_ORIGINAL,  /* RL */
-    LEG_TYPE_ORIGINAL,  /* RR */
-};
-
-/* 对应的 motor_logical_id */
-static const motor_logical_id_t HIP_ID[GAIT_LEG_NUM] = {
-    MOTOR_ID_FL_HIP, MOTOR_ID_FR_HIP, MOTOR_ID_RL_HIP, MOTOR_ID_RR_HIP
-};
+static float motor_mount_to_cmd(const motor_cfg_t* cfg, float rad) {
+    if (!cfg) return rad;
+    return rad * (float)cfg->dir + cfg->zero_offset;
+}
 
 void leg_ik_solve_all(const gait_output_t* foot_disp,
                        const leg_dim_t* dim,
@@ -107,26 +87,26 @@ void leg_ik_solve_all(const gait_output_t* foot_disp,
     memcpy(out, foot_disp, sizeof(*out));
 
     for (int i = 0; i < GAIT_LEG_NUM; i++) {
+        const leg_config_t* cfg = leg_config_get((gait_leg_t)i);
+        if (!cfg) continue;
+
         const gait_leg_target_t* ft = &foot_disp->leg[i];
         gait_leg_target_t* ot = &out->leg[i];
 
-        /* foot_disp 中 hip_rad 临时携带 dx, knee_rad 临时携带 dz */
-        float dx = ft->hip_rad;
+        /* foot_disp 中 hip_rad 临时携带 body-frame dx, knee_rad 临时携带 dz */
+        float dx = ft->hip_rad * cfg->foot_x_dir;
         float dz = ft->knee_rad;
 
         leg_ik_result_t ik;
-        int ret = leg_ik_solve(dx, dz, dim, hight, s_leg_type[i], &ik);
+        int ret = leg_ik_solve(dx, dz, dim, hight, cfg->leg_type, &ik);
 
         if (ret != 0) {
             /* IK 无解时保持上一帧角度或零位 (安全降级) */
             ot->hip_rad  = 0.0f;
             ot->knee_rad = 0.0f;
         } else {
-            /* 应用 motor_registry 中的方向系数 */
-            const motor_cfg_t* hip_cfg = motor_get_cfg(HIP_ID[i]);
-            float dir = hip_cfg ? (float)hip_cfg->dir : 1.0f;
-            ot->hip_rad  = ik.theta1 * dir;
-            ot->knee_rad = ik.theta2 * dir;
+            ot->hip_rad  = motor_mount_to_cmd(motor_get_cfg(cfg->motor[LEG_ACT_HIP]), ik.theta1);
+            ot->knee_rad = motor_mount_to_cmd(motor_get_cfg(cfg->motor[LEG_ACT_KNEE]), ik.theta2);
         }
     }
 }

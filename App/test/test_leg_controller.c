@@ -6,6 +6,7 @@
  *       IK 解算后替换为关节角度 (theta1, theta2)。
  */
 #include "test_util.h"
+#include "leg_config.h"
 #include "leg_controller.h"
 #include "leg_ik.h"
 #include "leg_params.h"
@@ -69,6 +70,35 @@ static void t_bind_all_present(void) {
         TEST_ASSERT_NOT_NULL(lc.leg[i].knee);
         TEST_ASSERT_NOT_NULL(lc.leg[i].wheel);
     }
+}
+
+static void t_real_leg_config_mapping(void) {
+    TEST_ASSERT_EQUAL_UINT(GAIT_LEG_NUM, leg_config_count());
+
+    const leg_config_t* fl = leg_config_get(GAIT_LEG_FL);
+    const leg_config_t* fr = leg_config_get(GAIT_LEG_FR);
+    const leg_config_t* rl = leg_config_get(GAIT_LEG_RL);
+    const leg_config_t* rr = leg_config_get(GAIT_LEG_RR);
+    TEST_ASSERT_NOT_NULL(fl);
+    TEST_ASSERT_NOT_NULL(fr);
+    TEST_ASSERT_NOT_NULL(rl);
+    TEST_ASSERT_NOT_NULL(rr);
+
+    TEST_ASSERT_EQUAL_INT(LEG_TYPE_MIRROR, fl->leg_type);
+    TEST_ASSERT_EQUAL_INT(LEG_TYPE_ORIGINAL, fr->leg_type);
+    TEST_ASSERT_EQUAL_INT(LEG_TYPE_ORIGINAL, rl->leg_type);
+    TEST_ASSERT_EQUAL_INT(LEG_TYPE_MIRROR, rr->leg_type);
+    TEST_ASSERT_FLOAT_WITHIN(1e-6f, +1.0f, fl->foot_x_dir);
+    TEST_ASSERT_FLOAT_WITHIN(1e-6f, -1.0f, fr->foot_x_dir);
+    TEST_ASSERT_FLOAT_WITHIN(1e-6f, +1.0f, rl->foot_x_dir);
+    TEST_ASSERT_FLOAT_WITHIN(1e-6f, -1.0f, rr->foot_x_dir);
+
+    TEST_ASSERT_EQUAL_INT(MOTOR_ID_FL_HIP, fl->motor[LEG_ACT_HIP]);
+    TEST_ASSERT_EQUAL_INT(MOTOR_ID_FL_KNEE, fl->motor[LEG_ACT_KNEE]);
+    TEST_ASSERT_EQUAL_INT(MOTOR_ID_FL_WHEEL, fl->motor[LEG_ACT_WHEEL]);
+    TEST_ASSERT_EQUAL_INT(MOTOR_ID_RR_HIP, rr->motor[LEG_ACT_HIP]);
+    TEST_ASSERT_EQUAL_INT(MOTOR_ID_RR_KNEE, rr->motor[LEG_ACT_KNEE]);
+    TEST_ASSERT_EQUAL_INT(MOTOR_ID_RR_WHEEL, rr->motor[LEG_ACT_WHEEL]);
 }
 
 static void t_apply_dispatches(void) {
@@ -180,6 +210,7 @@ static void t_missing_increments_miss(void) {
 int main(void) {
     log_init();
     log_set_global_level(LOG_LVL_ERR);
+    TU_RUN(t_real_leg_config_mapping);
     TU_RUN(t_bind_all_present);
     TU_RUN(t_apply_dispatches);
     TU_RUN(t_ik_roundtrip);

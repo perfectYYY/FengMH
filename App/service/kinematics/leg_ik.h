@@ -5,7 +5,7 @@
  * 去除 arm_math 依赖，使用纯 float 运算。
  *
  * 腿型说明：
- *   ORIGINAL: 原型腿 (左后 RL / 右前 FR)，atan2(z,x) - theta
+ *   ORIGINAL: 原型腿 (右前 FR / 左后 RL)，atan2(z,x) - theta
  *   MIRROR:   镜像腿 (左前 FL / 右后 RR)，atan2(z,x) + theta
  */
 #ifndef APP_SERVICE_KINEMATICS_LEG_IK_H_
@@ -20,7 +20,7 @@ extern "C" {
 
 /* 腿型 (与旧 gait_plan.h quadruped_leg_type 对齐) */
 typedef enum {
-    LEG_TYPE_ORIGINAL = 0,   /* 原型腿: RL, FR */
+    LEG_TYPE_ORIGINAL = 0,   /* 原型腿: FR, RL */
     LEG_TYPE_MIRROR   = 1,   /* 镜像腿: FL, RR */
 } leg_type_t;
 

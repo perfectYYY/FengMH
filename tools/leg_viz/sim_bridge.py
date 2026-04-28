@@ -7,7 +7,7 @@ tools/leg_viz/leg_viz.py can drive the same C code that runs on the MCU.
 from __future__ import annotations
 
 import ctypes as C
-import os
+from dataclasses import dataclass
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -88,6 +88,66 @@ class _ScriptT(C.Structure):
     ]
 
 
+LEG_ACT_NUM = 3
+LEG_ACT_HIP = 0
+LEG_ACT_KNEE = 1
+LEG_ACT_WHEEL = 2
+
+
+class LegConfig(C.Structure):
+    _fields_ = [
+        ("leg", C.c_int),
+        ("name", C.c_char_p),
+        ("label", C.c_char_p),
+        ("leg_type", C.c_int),
+        ("motor", C.c_int * LEG_ACT_NUM),
+        ("body_x_m", C.c_float),
+        ("body_y_m", C.c_float),
+        ("foot_x_dir", C.c_float),
+    ]
+
+
+class MotorCfg(C.Structure):
+    _fields_ = [
+        ("logical", C.c_int),
+        ("type", C.c_int),
+        ("can_bus", C.c_uint8),
+        ("can_id", C.c_uint32),
+        ("dir", C.c_int8),
+        ("zero_offset", C.c_float),
+        ("limit_min", C.c_float),
+        ("limit_max", C.c_float),
+        ("name", C.c_char_p),
+    ]
+
+
+@dataclass(frozen=True)
+class MotorInfo:
+    logical: int
+    name: str
+    role: str
+    type_name: str
+    can_bus: int
+    can_id: int
+    direction: int
+    zero_offset: float
+    limit_min: float
+    limit_max: float
+
+
+@dataclass(frozen=True)
+class LegInfo:
+    index: int
+    name: str
+    label: str
+    leg_type: int
+    leg_type_name: str
+    body_x_m: float
+    body_y_m: float
+    foot_x_dir: float
+    motors: tuple[MotorInfo, MotorInfo, MotorInfo]
+
+
 # --- prototypes ---
 
 LEG_TYPE_ORIGINAL = 0
@@ -109,7 +169,82 @@ _lib.script_builtin_find.restype = C.POINTER(_ScriptT)
 _lib.script_sample.argtypes = [C.POINTER(_ScriptT), C.c_float, C.POINTER(GaitOutput)]
 _lib.script_sample.restype = C.c_int
 
+_lib.leg_config_count.argtypes = []
+_lib.leg_config_count.restype = C.c_uint32
+
+_lib.leg_config_get.argtypes = [C.c_int]
+_lib.leg_config_get.restype = C.POINTER(LegConfig)
+
+_lib.leg_config_type_name.argtypes = [C.c_int]
+_lib.leg_config_type_name.restype = C.c_char_p
+
+_lib.leg_config_motor_role_name.argtypes = [C.c_int]
+_lib.leg_config_motor_role_name.restype = C.c_char_p
+
+_lib.motor_get_cfg.argtypes = [C.c_int]
+_lib.motor_get_cfg.restype = C.POINTER(MotorCfg)
+
 LEG_DIM_DEFAULT = LegDim.in_dll(_lib, "LEG_DIM_DEFAULT")
+
+
+MOTOR_TYPE_NAMES = {
+    0: "UNKNOWN",
+    1: "M3508",
+    2: "GO",
+    3: "DAMIAO",
+}
+
+
+def _cstr(p) -> str:
+    if not p:
+        return ""
+    return p.decode("utf-8")
+
+
+def motor_cfg(logical: int, role: int | None = None) -> MotorInfo:
+    p = _lib.motor_get_cfg(C.c_int(logical))
+    if not p:
+        raise ValueError(f"no motor cfg for logical id {logical}")
+    c = p.contents
+    role_name = _cstr(_lib.leg_config_motor_role_name(role)) if role is not None else ""
+    return MotorInfo(
+        logical=c.logical,
+        name=_cstr(c.name),
+        role=role_name,
+        type_name=MOTOR_TYPE_NAMES.get(c.type, f"type{c.type}"),
+        can_bus=int(c.can_bus),
+        can_id=int(c.can_id),
+        direction=int(c.dir),
+        zero_offset=float(c.zero_offset),
+        limit_min=float(c.limit_min),
+        limit_max=float(c.limit_max),
+    )
+
+
+def list_leg_configs() -> list[LegInfo]:
+    legs: list[LegInfo] = []
+    for i in range(int(_lib.leg_config_count())):
+        p = _lib.leg_config_get(C.c_int(i))
+        if not p:
+            continue
+        c = p.contents
+        motors = tuple(motor_cfg(int(c.motor[role]), role) for role in range(LEG_ACT_NUM))
+        legs.append(LegInfo(
+            index=int(c.leg),
+            name=_cstr(c.name),
+            label=_cstr(c.label),
+            leg_type=int(c.leg_type),
+            leg_type_name=_cstr(_lib.leg_config_type_name(c.leg_type)),
+            body_x_m=float(c.body_x_m),
+            body_y_m=float(c.body_y_m),
+            foot_x_dir=float(c.foot_x_dir),
+            motors=motors,  # type: ignore[arg-type]
+        ))
+    return legs
+
+
+def motor_command_angle(raw_rad: float, motor: MotorInfo) -> float:
+    return float(raw_rad) * float(motor.direction) + float(motor.zero_offset)
 
 
 # --- python-facing helpers ---
@@ -139,6 +274,18 @@ def solve_ik(x: float, z: float, dim: LegDim | None = None,
     if rc != 0:
         return None
     return out.theta1, out.theta2
+
+
+def solve_leg_ik(leg: LegInfo, x: float, z: float, dim: LegDim | None = None,
+                 height: float = 0.0):
+    local_x = float(x) * float(leg.foot_x_dir)
+    raw = solve_ik(local_x, z, dim=dim, height=height, leg_type=leg.leg_type)
+    if raw is None:
+        return None
+    hip_raw, knee_raw = raw
+    hip_cmd = motor_command_angle(hip_raw, leg.motors[LEG_ACT_HIP])
+    knee_cmd = motor_command_angle(knee_raw, leg.motors[LEG_ACT_KNEE])
+    return hip_raw, knee_raw, hip_cmd, knee_cmd
 
 
 def solve_fk(theta1: float, theta2: float, dim: LegDim | None = None):

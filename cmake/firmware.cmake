@@ -34,8 +34,6 @@ if(DEFINED SOURCES)
             list(APPEND _filtered "${_s}")
         endif()
     endforeach()
-    set(SOURCES "${_filtered}" PARENT_SCOPE)
-    # 本作用域里也更新一下, 让紧随其后的 add_executable 看到新列表
     set(SOURCES "${_filtered}")
 endif()
 
