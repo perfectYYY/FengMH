@@ -267,12 +267,22 @@ void leg_fk_solve(float theta1, float theta2,
 /*
  * 腿型映射表：
  *   FL/LF: MIRROR, FR/RF: ORIGINAL, RL/LR: ORIGINAL, RR: MIRROR
+ *
+ * x_dir 把步态层 body-frame dx 转成本腿局部 IK x，并在 PC FK/可视化
+ * 中反向使用。若这里错，真实步态左右/前后会反。
  */
 static const leg_type_t s_leg_type[GAIT_LEG_NUM] = {
     LEG_TYPE_MIRROR,    /* FL */
     LEG_TYPE_ORIGINAL,  /* FR */
     LEG_TYPE_ORIGINAL,  /* RL */
     LEG_TYPE_MIRROR,    /* RR */
+};
+
+static const float s_leg_x_dir[GAIT_LEG_NUM] = {
+    -1.0f,  /* FL */
+    +1.0f,  /* FR */
+    -1.0f,  /* RL */
+    +1.0f,  /* RR */
 };
 
 void leg_ik_solve_all(const gait_output_t* foot_disp,
@@ -288,8 +298,8 @@ void leg_ik_solve_all(const gait_output_t* foot_disp,
         const gait_leg_target_t* ft = &foot_disp->leg[i];
         gait_leg_target_t* ot = &out->leg[i];
 
-        /* foot_disp 中 hip_rad 临时携带 dx, knee_rad 临时携带 dz */
-        float dx = ft->hip_rad;
+        /* foot_disp 中 hip_rad 临时携带 body-frame dx，IK 先转成本腿局部 x。 */
+        float dx = ft->hip_rad * s_leg_x_dir[i];
         float dz = ft->knee_rad;
 
         leg_ik_result_t ik;
