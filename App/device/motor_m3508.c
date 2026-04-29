@@ -196,11 +196,9 @@ static motor_dev_t      s_m3508_devs[M3508_MOTOR_COUNT];
 static m3508_drv_ctx_t  s_m3508_ctxs[M3508_MOTOR_COUNT];
 
 /*
- * 总线映射 (与 motor_registry 对齐)：
- *   FL_WHEEL(MOTOR_ID_FL_WHEEL=2):  FDCAN1, DJI ID=1
- *   FR_WHEEL(MOTOR_ID_FR_WHEEL=5):  FDCAN1, DJI ID=2
- *   RL_WHEEL(MOTOR_ID_RL_WHEEL=8):  FDCAN2, DJI ID=3
- *   RR_WHEEL(MOTOR_ID_RR_WHEEL=11): FDCAN2, DJI ID=4
+ * 总线映射沿用老工程 M3508Task:
+ *   CAN1: FL_WHEEL 0x201, RL_WHEEL 0x202
+ *   CAN2: RR_WHEEL 0x201, FR_WHEEL 0x202
  */
 typedef struct {
     motor_logical_id_t logical_id;
@@ -210,9 +208,9 @@ typedef struct {
 
 static const m3508_bus_map_t s_m3508_map[M3508_MOTOR_COUNT] = {
     { MOTOR_ID_FL_WHEEL, BSP_FDCAN_1, 1 },
-    { MOTOR_ID_FR_WHEEL, BSP_FDCAN_1, 2 },
-    { MOTOR_ID_RL_WHEEL, BSP_FDCAN_2, 3 },
-    { MOTOR_ID_RR_WHEEL, BSP_FDCAN_2, 4 },
+    { MOTOR_ID_RL_WHEEL, BSP_FDCAN_1, 2 },
+    { MOTOR_ID_RR_WHEEL, BSP_FDCAN_2, 1 },
+    { MOTOR_ID_FR_WHEEL, BSP_FDCAN_2, 2 },
 };
 
 /* 速度 PID 默认参数 (转子侧) */

@@ -30,9 +30,10 @@ python tools/leg_viz/leg_viz.py
 
 ## 操作说明
 
-- **3D 视图**：X 向前、Y 向左、Z 向上；半透明矩形是底盘，四条彩色连杆是 FL / FR / RL / RR。
-- **腿方向**：`leg_config.c` 里的 `foot_x_dir` 把机体前向足端位移转换到单腿 IK 局部 x 轴；当前 FL/RL 为 `+1`，FR/RR 为 `-1`。
+- **3D 视图**：X 向前、Y 向左、Z 向上；半透明矩形是底盘，四条彩色腿按真实连杆画出 FL / FR / RL / RR。
+- **腿方向**：IK/电机命令已同步 `firmware-dev`，腿型、限幅、减速比、零位/启动姿态来自 C 侧配置；`leg_config.c` 里的 `xdir` 是真实装配的 x 镜像符号，IK 和 FK/可视化都会使用，当前 FL/RL 为 `-1`，FR/RR 为 `+1`。
 - **播放**：按空格开始/暂停；按 `n` 在 `stand_hold` / `wave_up_down` / `trot_step` 间切换。
+- **自定义小跑**：按 `g` 启停当前 GUI 参数下的 trot；`[`/`]` 调步长，`;`/`'` 调步高，`,`/`.` 调周期，`h`/`y` 调 duty。
 - **目标选择**：按 `0` 选择 ALL 整车一起调；按 `1/2/3/4` 分别选择 FL/FR/RL/RR。
 - **足端调节**：方向键左右调足端 x，方向键上下调抬腿 dz。
 - **底盘调节**：`w/s` 调站立高度，`q/e` 调 pitch，`a/d` 调 roll。
@@ -40,16 +41,37 @@ python tools/leg_viz/leg_viz.py
 - **右侧面板**：显示每条腿的世界足端坐标、hip/knee 电机命令角、`xdir`、真实腿型和电机映射。
 - **host 执行器**：右侧 `host` 行显示当前实际 C 侧步态；手动足端目标和脚本播放都会经过真实 `leg_controller` 后再显示。
 
+## 下发到板子
+
+`gait_client.py` 会按 `App/service/protocol/proto_defs.h` 里的 `PROTO_FUNC_GAIT_CMD`
+构帧，可直接通过 USB CDC 设置固件里的 trot 参数并启动/停止步态：
+
+```bash
+python tools/leg_viz/gait_client.py --port /dev/tty.usbmodemXXXX trot \
+  --height 0.18 --step-length 0.04 --step-height 0.02 --period 0.6 --duty 0.65
+
+python tools/leg_viz/gait_client.py --port /dev/tty.usbmodemXXXX set-trot \
+  --height 0.18 --step-length 0.03 --step-height 0.015 --period 0.8 --duty 0.7
+
+python tools/leg_viz/gait_client.py --port /dev/tty.usbmodemXXXX stand
+```
+
+不传 `--port` 或加 `--hex` 时只打印待发送帧，便于和串口助手或抓包结果对照。
+
 ## 机械模型说明
 
-当前 host 执行器已经复用真实控制链和真实电机映射，但足端几何仍使用
-`leg_ik.c` 里的 2 连杆近似模型。若要还原“两电机驱动两根杆，通过连杆机构形成腿姿态”的真实机械，需要把实际机构参数补进 C 侧机械模型：
+`leg_ik.c` 现在按真实平行连杆展开关键点：
 
-- 两个电机轴在单腿坐标系里的位置
-- 每根主动杆、从动杆、连杆的长度
-- 左右/前后镜像关系和零位姿态
-- 机械限位、编码器零位、方向
-- 足端/轮轴相对于末端连杆的安装点
+- 髋轴到上膝点：`thigh_length = 0.100 m`
+- 膝电机 40mm 摇臂：`link_length = 0.040 m`
+- 摇臂末端到小腿安装点的从动连杆：`thigh_length = 0.100 m`
+- 上膝点到小腿安装点：`link_length = 0.040 m`
+- 上膝点到轮轴/足端：`shin_length = 0.150 m`
+
+由于图纸里的 100/40/100/40 闭环是平行四边形，足端 IK 仍等效为
+100mm 上连杆 + 150mm 小腿输出杆的闭式解；GUI 读取 C 侧
+`leg_linkage_solve()` 的真实连杆点来显示 40mm 摇臂、100mm 从动杆和
+150mm 小腿，不再自己画简化二连杆。
 
 ## 文件结构
 

@@ -9,6 +9,7 @@
 #define TOOLS_LEG_VIZ_HOST_SIM_H_
 
 #include <stdint.h>
+#include "gait_if.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -36,12 +37,23 @@ typedef struct {
     float foot_body_x_m;
     float foot_body_y_m;
     float foot_down_z_m;
+    float knee_body_x_m;
+    float knee_body_y_m;
+    float knee_down_z_m;
+    float crank_body_x_m;
+    float crank_body_y_m;
+    float crank_down_z_m;
+    float lower_mount_body_x_m;
+    float lower_mount_body_y_m;
+    float lower_mount_down_z_m;
     uint8_t ik_ok;
 } host_leg_pose_t;
 
 int host_sim_init(void);
 int host_sim_set_stand_height(float height_m);
 int host_sim_apply_foot_targets(const float* dx_m, const float* dz_m, const float* wheel_rads);
+int host_sim_set_trot_params(const gait_params_t* params);
+int host_sim_play_trot(const gait_params_t* params, float blend_dur_s);
 int host_sim_play_script(const char* name);
 int host_sim_stop_script(void);
 int host_sim_step(float dt_s);

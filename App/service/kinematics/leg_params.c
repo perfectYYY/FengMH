@@ -6,21 +6,16 @@
  */
 #include "leg_params.h"
 
-/*
- * 默认参数来自老工程 Wheel-legged/Core/Src/main.c 中的
- * params_init(&leg_after, ...)，保持 PC host 仿真和板端 IK 使用同一套
- * 等效二连杆尺寸。
- */
 const leg_dim_t LEG_DIM_DEFAULT = {
-    /* 长度 (m) */
+    /* 真实连杆尺寸 (m): 图纸 100 / 40 / 150mm */
     .thigh_length   = 0.100f,
     .shin_length    = 0.150f,
     .link_length    = 0.040f,
     .wheel_diameter = 0.095f,
 
     /* 角度范围 (rad) */
-    .thigh_angle_range = { .min = -3.1415926f, .max = 0.0f },
-    .shin_angle_range  = { .min = -2.3561945f, .max = 0.0f },
+    .thigh_angle_range = { .min = -3.14159265f, .max = 0.0f },
+    .shin_angle_range  = { .min = -2.35619449f, .max = 0.0f },
 
     /* 质量 (kg) */
     .thigh_mass_1   = 0.042f,

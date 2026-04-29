@@ -14,21 +14,24 @@ extern "C" {
 #endif
 
 typedef enum {
-    /* 四足：左前 FL / 右前 FR / 左后 RL / 右后 RR，每腿髋/膝/轮 */
+    /*
+     * 四足逻辑名保持 FL/FR/RL/RR；枚举值保持老工程物理槽位：
+     * LF 0/1/2, LR 3/4/5, RR 6/7/8, RF 9/10/11。
+     */
     MOTOR_ID_FL_HIP = 0,
     MOTOR_ID_FL_KNEE,
     MOTOR_ID_FL_WHEEL,
-    MOTOR_ID_FR_HIP,
-    MOTOR_ID_FR_KNEE,
-    MOTOR_ID_FR_WHEEL,
-    MOTOR_ID_RL_HIP,
+    MOTOR_ID_RL_HIP = 3,
     MOTOR_ID_RL_KNEE,
     MOTOR_ID_RL_WHEEL,
-    MOTOR_ID_RR_HIP,
+    MOTOR_ID_RR_HIP = 6,
     MOTOR_ID_RR_KNEE,
     MOTOR_ID_RR_WHEEL,
+    MOTOR_ID_FR_HIP = 9,
+    MOTOR_ID_FR_KNEE,
+    MOTOR_ID_FR_WHEEL,
     /* 机械臂预留 */
-    MOTOR_ID_ARM_J1,
+    MOTOR_ID_ARM_J1 = 12,
     MOTOR_ID_ARM_J2,
     MOTOR_ID_ARM_J3,
     MOTOR_ID_ARM_J4,
@@ -42,8 +45,10 @@ typedef struct {
     motor_type_t       type;
     uint8_t            can_bus;
     uint32_t           can_id;
-    int8_t             dir;          /* +1 / -1 */
-    float              zero_offset;  /* rad */
+    int8_t             dir;          /* joint sign: raw motor -> joint */
+    float              zero_offset;  /* raw motor rad when joint angle is zero */
+    float              gear_ratio;   /* motor-side rad / joint-side rad */
+    float              boot_angle;   /* expected joint angle at boot calibration pose */
     float              limit_min;    /* rad */
     float              limit_max;    /* rad */
     const char*        name;

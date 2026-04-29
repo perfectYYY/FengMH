@@ -14,7 +14,7 @@
 extern "C" {
 #endif
 
-/* 四足顺序：FL/FR/RL/RR；与 motor_registry 中腿的顺序一致 */
+/* 四足步态顺序：FL/FR/RL/RR；motor_registry 枚举值可按物理槽位另行映射 */
 typedef enum {
     GAIT_LEG_FL = 0,
     GAIT_LEG_FR,

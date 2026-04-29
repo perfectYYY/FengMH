@@ -17,8 +17,9 @@ static void t_cfg_lookup(void) {
     const motor_cfg_t* c = motor_get_cfg(MOTOR_ID_FL_WHEEL);
     TEST_ASSERT_NOT_NULL(c);
     TEST_ASSERT_EQUAL_INT(MOTOR_M3508, c->type);
-    TEST_ASSERT_EQUAL_UINT(1, c->can_bus);
+    TEST_ASSERT_EQUAL_UINT(0, c->can_bus);
     TEST_ASSERT_EQUAL_UINT(0x201, c->can_id);
+    TEST_ASSERT_FLOAT_WITHIN(1e-6f, 1.0f, c->gear_ratio);
 
     const motor_cfg_t* arm = motor_get_cfg(MOTOR_ID_ARM_J1);
     TEST_ASSERT_EQUAL_INT(MOTOR_DAMIAO, arm->type);

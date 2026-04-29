@@ -1,5 +1,5 @@
 /*
- * leg_ik.c — 2 连杆逆运动学 / 正运动学
+ * leg_ik.c — 平行连杆腿逆运动学 / 正运动学
  *
  * 从 Core/Src/gait_plan.c → inverse_kinematics_position() / forward_kinematics_position() 迁移。
  * 去除 arm_math 依赖，使用纯 float 运算 (sqrtf, acosf, atan2f, sinf, cosf)。
@@ -9,13 +9,209 @@
  *   - z: 竖直方向，向下为正
  *   - 原点在髋关节
  *
- * 腿型/电机映射由 leg_config.c 统一维护，固件和 PC 调试工具共用。
+ * 图纸中的 100/40/100 平行四边形让膝电机 40mm 摇臂角度与
+ * 150mm 小腿输出角度相同，所以足端 IK 仍可按 100mm + 150mm
+ * 两向量闭式求解；真实连杆点由 leg_linkage_solve() 展开。
+ *
+ * 腿型映射沿用老工程：
+ *   LF/FL、RR 为镜像腿，LR/RL、RF/FR 为原型腿。
  */
 #include "leg_ik.h"
 #include "leg_config.h"
 
 #include <math.h>
 #include <string.h>
+
+static float leg_ik_clampf(float value, float min_value, float max_value) {
+    if (value < min_value) return min_value;
+    if (value > max_value) return max_value;
+    return value;
+}
+
+static void leg_ik_get_joint_limit(leg_type_t leg_type,
+                                    leg_angle_range_t* thigh_range,
+                                    leg_angle_range_t* shin_range) {
+    const float pi = 3.14159265f;
+
+    if (!thigh_range || !shin_range) return;
+
+    if (leg_type == LEG_TYPE_MIRROR) {
+        thigh_range->min = -2.0f;
+        thigh_range->max = 0.0f;
+        shin_range->min = -pi;
+        shin_range->max = -0.5f * pi;
+    } else {
+        thigh_range->min = -pi;
+        thigh_range->max = 2.0f - pi;
+        shin_range->min = -0.5f * pi;
+        shin_range->max = 0.0f;
+    }
+}
+
+static void leg_ik_update_best(float target_thigh,
+                                float target_shin,
+                                float candidate_thigh,
+                                float candidate_shin,
+                                float* best_cost,
+                                float* best_thigh,
+                                float* best_shin) {
+    float cost = fabsf(candidate_thigh - target_thigh) +
+                 fabsf(candidate_shin - target_shin);
+
+    if (cost < *best_cost) {
+        *best_cost = cost;
+        *best_thigh = candidate_thigh;
+        *best_shin = candidate_shin;
+    }
+}
+
+static void leg_ik_constrain_joint_target(leg_ik_result_t* result,
+                                           leg_type_t leg_type) {
+    const float pi = 3.14159265f;
+    const float d_min = 0.25f * pi;
+    const float d_max = 0.87f * pi;
+    leg_angle_range_t thigh_range;
+    leg_angle_range_t shin_range;
+    float thigh;
+    float shin;
+    float best_cost = INFINITY;
+    float best_thigh = 0.0f;
+    float best_shin = 0.0f;
+
+    if (!result) return;
+
+    thigh = result->theta1;
+    shin = result->theta2;
+    if (!isfinite(thigh) || !isfinite(shin)) return;
+
+    leg_ik_get_joint_limit(leg_type, &thigh_range, &shin_range);
+    thigh = leg_ik_clampf(thigh, thigh_range.min, thigh_range.max);
+    shin = leg_ik_clampf(shin, shin_range.min, shin_range.max);
+
+    if (leg_type == LEG_TYPE_MIRROR) {
+        float candidate_low;
+        float candidate_high;
+        float candidate_shin;
+        float candidate_thigh;
+
+        candidate_low = fmaxf(shin_range.min, thigh - d_max);
+        candidate_high = fminf(shin_range.max, thigh - d_min);
+        if (candidate_low <= candidate_high) {
+            candidate_shin = leg_ik_clampf(shin, candidate_low, candidate_high);
+            leg_ik_update_best(thigh, shin, thigh, candidate_shin,
+                               &best_cost, &best_thigh, &best_shin);
+        }
+
+        candidate_low = fmaxf(thigh_range.min, shin + d_min);
+        candidate_high = fminf(thigh_range.max, shin + d_max);
+        if (candidate_low <= candidate_high) {
+            candidate_thigh = leg_ik_clampf(thigh, candidate_low, candidate_high);
+            leg_ik_update_best(thigh, shin, candidate_thigh, shin,
+                               &best_cost, &best_thigh, &best_shin);
+        }
+
+        candidate_thigh = thigh_range.min;
+        candidate_low = fmaxf(shin_range.min, candidate_thigh - d_max);
+        candidate_high = fminf(shin_range.max, candidate_thigh - d_min);
+        if (candidate_low <= candidate_high) {
+            candidate_shin = leg_ik_clampf(shin, candidate_low, candidate_high);
+            leg_ik_update_best(thigh, shin, candidate_thigh, candidate_shin,
+                               &best_cost, &best_thigh, &best_shin);
+        }
+
+        candidate_thigh = thigh_range.max;
+        candidate_low = fmaxf(shin_range.min, candidate_thigh - d_max);
+        candidate_high = fminf(shin_range.max, candidate_thigh - d_min);
+        if (candidate_low <= candidate_high) {
+            candidate_shin = leg_ik_clampf(shin, candidate_low, candidate_high);
+            leg_ik_update_best(thigh, shin, candidate_thigh, candidate_shin,
+                               &best_cost, &best_thigh, &best_shin);
+        }
+
+        candidate_shin = shin_range.min;
+        candidate_low = fmaxf(thigh_range.min, candidate_shin + d_min);
+        candidate_high = fminf(thigh_range.max, candidate_shin + d_max);
+        if (candidate_low <= candidate_high) {
+            candidate_thigh = leg_ik_clampf(thigh, candidate_low, candidate_high);
+            leg_ik_update_best(thigh, shin, candidate_thigh, candidate_shin,
+                               &best_cost, &best_thigh, &best_shin);
+        }
+
+        candidate_shin = shin_range.max;
+        candidate_low = fmaxf(thigh_range.min, candidate_shin + d_min);
+        candidate_high = fminf(thigh_range.max, candidate_shin + d_max);
+        if (candidate_low <= candidate_high) {
+            candidate_thigh = leg_ik_clampf(thigh, candidate_low, candidate_high);
+            leg_ik_update_best(thigh, shin, candidate_thigh, candidate_shin,
+                               &best_cost, &best_thigh, &best_shin);
+        }
+    } else {
+        float candidate_low;
+        float candidate_high;
+        float candidate_shin;
+        float candidate_thigh;
+
+        candidate_low = fmaxf(shin_range.min, thigh + d_min);
+        candidate_high = fminf(shin_range.max, thigh + d_max);
+        if (candidate_low <= candidate_high) {
+            candidate_shin = leg_ik_clampf(shin, candidate_low, candidate_high);
+            leg_ik_update_best(thigh, shin, thigh, candidate_shin,
+                               &best_cost, &best_thigh, &best_shin);
+        }
+
+        candidate_low = fmaxf(thigh_range.min, shin - d_max);
+        candidate_high = fminf(thigh_range.max, shin - d_min);
+        if (candidate_low <= candidate_high) {
+            candidate_thigh = leg_ik_clampf(thigh, candidate_low, candidate_high);
+            leg_ik_update_best(thigh, shin, candidate_thigh, shin,
+                               &best_cost, &best_thigh, &best_shin);
+        }
+
+        candidate_thigh = thigh_range.min;
+        candidate_low = fmaxf(shin_range.min, candidate_thigh + d_min);
+        candidate_high = fminf(shin_range.max, candidate_thigh + d_max);
+        if (candidate_low <= candidate_high) {
+            candidate_shin = leg_ik_clampf(shin, candidate_low, candidate_high);
+            leg_ik_update_best(thigh, shin, candidate_thigh, candidate_shin,
+                               &best_cost, &best_thigh, &best_shin);
+        }
+
+        candidate_thigh = thigh_range.max;
+        candidate_low = fmaxf(shin_range.min, candidate_thigh + d_min);
+        candidate_high = fminf(shin_range.max, candidate_thigh + d_max);
+        if (candidate_low <= candidate_high) {
+            candidate_shin = leg_ik_clampf(shin, candidate_low, candidate_high);
+            leg_ik_update_best(thigh, shin, candidate_thigh, candidate_shin,
+                               &best_cost, &best_thigh, &best_shin);
+        }
+
+        candidate_shin = shin_range.min;
+        candidate_low = fmaxf(thigh_range.min, candidate_shin - d_max);
+        candidate_high = fminf(thigh_range.max, candidate_shin - d_min);
+        if (candidate_low <= candidate_high) {
+            candidate_thigh = leg_ik_clampf(thigh, candidate_low, candidate_high);
+            leg_ik_update_best(thigh, shin, candidate_thigh, candidate_shin,
+                               &best_cost, &best_thigh, &best_shin);
+        }
+
+        candidate_shin = shin_range.max;
+        candidate_low = fmaxf(thigh_range.min, candidate_shin - d_max);
+        candidate_high = fminf(thigh_range.max, candidate_shin - d_min);
+        if (candidate_low <= candidate_high) {
+            candidate_thigh = leg_ik_clampf(thigh, candidate_low, candidate_high);
+            leg_ik_update_best(thigh, shin, candidate_thigh, candidate_shin,
+                               &best_cost, &best_thigh, &best_shin);
+        }
+    }
+
+    if (best_cost != INFINITY) {
+        result->theta1 = best_thigh;
+        result->theta2 = best_shin;
+    } else {
+        result->theta1 = thigh;
+        result->theta2 = shin;
+    }
+}
 
 /* ─── 单腿 IK ─── */
 
@@ -53,29 +249,49 @@ int leg_ik_solve(float x, float z, const leg_dim_t* dim,
     result->theta1 = a;
     result->theta2 = atan2f((z_total - L1 * sinf(a)), (x - L1 * cosf(a)));
 
+    leg_ik_constrain_joint_target(result, leg_type);
     return 0;
 }
 
-/* ─── 正运动学 ─── */
+/* ─── 正运动学 / 连杆展开 ─── */
+
+void leg_linkage_solve(float theta1, float theta2,
+                       const leg_dim_t* dim,
+                       leg_linkage_pose_t* result) {
+    if (!dim || !result) return;
+
+    float thigh = dim->thigh_length;
+    float shin = dim->shin_length;
+    float crank = dim->link_length;
+    float hip_c = cosf(theta1);
+    float hip_s = sinf(theta1);
+    float knee_c = cosf(theta2);
+    float knee_s = sinf(theta2);
+
+    result->hip_x = 0.0f;
+    result->hip_z = 0.0f;
+    result->knee_x = thigh * hip_c;
+    result->knee_z = thigh * hip_s;
+    result->crank_x = crank * knee_c;
+    result->crank_z = crank * knee_s;
+    result->lower_mount_x = result->knee_x + crank * knee_c;
+    result->lower_mount_z = result->knee_z + crank * knee_s;
+    result->foot_x = result->knee_x + shin * knee_c;
+    result->foot_z = result->knee_z + shin * knee_s;
+}
 
 void leg_fk_solve(float theta1, float theta2,
                    const leg_dim_t* dim,
                    leg_fk_result_t* result) {
     if (!dim || !result) return;
 
-    float L1 = dim->thigh_length;
-    float L2 = dim->shin_length;
-
-    result->x = L1 * cosf(theta1) + L2 * cosf(theta2);
-    result->z = L1 * sinf(theta1) + L2 * sinf(theta2);
+    leg_linkage_pose_t linkage;
+    leg_linkage_solve(theta1, theta2, dim, &linkage);
+    result->x = linkage.foot_x;
+    result->z = linkage.foot_z;
 }
 
 /* ─── 批量 IK ─── */
-
-static float motor_mount_to_cmd(const motor_cfg_t* cfg, float rad) {
-    if (!cfg) return rad;
-    return rad * (float)cfg->dir + cfg->zero_offset;
-}
 
 void leg_ik_solve_all(const gait_output_t* foot_disp,
                        const leg_dim_t* dim,
@@ -93,7 +309,7 @@ void leg_ik_solve_all(const gait_output_t* foot_disp,
         const gait_leg_target_t* ft = &foot_disp->leg[i];
         gait_leg_target_t* ot = &out->leg[i];
 
-        /* foot_disp 中 hip_rad 临时携带 body-frame dx, knee_rad 临时携带 dz */
+        /* foot_disp 中 hip_rad 临时携带 body-frame dx，IK 先转成本腿局部 x。 */
         float dx = ft->hip_rad * cfg->foot_x_dir;
         float dz = ft->knee_rad;
 
@@ -105,8 +321,8 @@ void leg_ik_solve_all(const gait_output_t* foot_disp,
             ot->hip_rad  = 0.0f;
             ot->knee_rad = 0.0f;
         } else {
-            ot->hip_rad  = motor_mount_to_cmd(motor_get_cfg(cfg->motor[LEG_ACT_HIP]), ik.theta1);
-            ot->knee_rad = motor_mount_to_cmd(motor_get_cfg(cfg->motor[LEG_ACT_KNEE]), ik.theta2);
+            ot->hip_rad  = ik.theta1;
+            ot->knee_rad = ik.theta2;
         }
     }
 }

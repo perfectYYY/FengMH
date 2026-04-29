@@ -19,12 +19,12 @@ typedef struct {
     float max;
 } leg_angle_range_t;
 
-/* 腿尺寸参数 (与旧 gait_plan.h leg_size 对齐) */
+/* 腿尺寸参数 (与真实平行连杆结构对齐) */
 typedef struct {
     /* 长度 (m) */
-    float thigh_length;     /* 大腿全长 */
-    float shin_length;      /* 小腿全长 */
-    float link_length;      /* 小腿电机直连连杆长度 */
+    float thigh_length;     /* 髋轴到上膝点；同时也是 100mm 从动连杆 */
+    float shin_length;      /* 上膝点到轮轴/足端 */
+    float link_length;      /* 膝电机 40mm 摇臂；同时也是小腿安装点偏置 */
     float wheel_diameter;   /* 轮直径 */
 
     /* 角度范围 (rad) */

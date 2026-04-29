@@ -18,7 +18,8 @@
 #define APP_TASK_CHASSIS_H_
 
 #include <stdint.h>
-#include "script_if.h"
+#include "gait_if.h"
+#include "../script/script_if.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -39,6 +40,10 @@ chassis_mode_t task_chassis_get_mode(void);
 /* 切到 SCRIPT 子状态并播放指定脚本（仅在 STANDALONE / AUTO 离线分支生效）。 */
 int   task_chassis_play_script(const script_t* s, float blend_dur_s);
 int   task_chassis_stop_script(float blend_dur_s);
+int   task_chassis_start_stand(float blend_dur_s);
+int   task_chassis_set_trot_params(const gait_params_t* p);
+void  task_chassis_get_trot_params(gait_params_t* out);
+int   task_chassis_start_trot(const gait_params_t* p, float blend_dur_s);
 
 void     task_chassis_set_online_timeout_ms(uint32_t ms);
 uint32_t task_chassis_get_online_timeout_ms(void);

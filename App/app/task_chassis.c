@@ -25,9 +25,10 @@
 #include "gait_trot.h"
 #include "gait_machine.h"
 #include "gait_params.h"
-#include "gait_script.h"
-#include "script_builtin.h"
+#include "../script/gait_script.h"
+#include "../script/script_builtin.h"
 #include "leg_controller.h"
+#include "motor_registry.h"
 #include "motor_go.h"
 #include "motor_m3508.h"
 
@@ -54,9 +55,135 @@ static gait_if_t*       s_script;
 static chassis_mode_t   s_mode = CHASSIS_MODE_AUTO;
 static active_t         s_active = ACT_STAND;
 static uint32_t         s_online_timeout_ms = 500;
+static gait_params_t    s_trot_params;
+static uint8_t          s_manual_gait_hold = 0U;
+
+static const motor_logical_id_t WHEEL_ID[GAIT_LEG_NUM] = {
+    MOTOR_ID_FL_WHEEL, MOTOR_ID_FR_WHEEL, MOTOR_ID_RL_WHEEL, MOTOR_ID_RR_WHEEL
+};
+
+static const gait_params_t S_BRINGUP_TROT_PARAMS = {
+    .body_height_m    = 0.20f,
+    .step_length_m    = 0.015f,
+    .step_height_m    = 0.010f,
+    .period_s         = 1.0f,
+    .duty             = 0.75f,
+    .phase_offset     = { 0.0f, 0.5f, 0.5f, 0.0f },
+    .touchdown_thresh = 0.0f,
+};
+
+static int bringup_is_normal(void) {
+    return APP_BRINGUP_STAGE >= APP_BRINGUP_STAGE_NORMAL;
+}
+
+static int bringup_allow_trot(void) {
+    return bringup_is_normal() || (APP_BRINGUP_STAGE >= APP_BRINGUP_STAGE_TROT_LOW_GAIN);
+}
+
+static int bringup_allow_go_tx(void) {
+    return bringup_is_normal() ||
+           (APP_BRINGUP_STAGE == APP_BRINGUP_STAGE_BUS_ZERO_TX) ||
+           (APP_BRINGUP_STAGE == APP_BRINGUP_STAGE_GO_ZERO) ||
+           (APP_BRINGUP_STAGE == APP_BRINGUP_STAGE_GO_LEG_HOLD) ||
+           (APP_BRINGUP_STAGE == APP_BRINGUP_STAGE_STAND_LOW_GAIN) ||
+           (APP_BRINGUP_STAGE == APP_BRINGUP_STAGE_TROT_LOW_GAIN);
+}
+
+static int bringup_allow_m3508_tx(void) {
+    return bringup_is_normal() ||
+           (APP_BRINGUP_STAGE == APP_BRINGUP_STAGE_BUS_ZERO_TX) ||
+           (APP_BRINGUP_STAGE == APP_BRINGUP_STAGE_M3508_ZERO) ||
+           (APP_BRINGUP_STAGE == APP_BRINGUP_STAGE_M3508_JOG) ||
+           (APP_BRINGUP_STAGE == APP_BRINGUP_STAGE_STAND_LOW_GAIN) ||
+           (APP_BRINGUP_STAGE == APP_BRINGUP_STAGE_TROT_LOW_GAIN);
+}
+
+static void bringup_configure_leg_controller(void) {
+    if (bringup_is_normal()) {
+        leg_controller_set_output_options(0x0Fu, 1U, 1U, 1.5f, 0.1f);
+        return;
+    }
+
+    switch (APP_BRINGUP_STAGE) {
+        case APP_BRINGUP_STAGE_GO_LEG_HOLD:
+            leg_controller_set_output_options((uint8_t)APP_BRINGUP_LEG_MASK, 1U, 0U, 0.08f, 0.02f);
+            break;
+
+        case APP_BRINGUP_STAGE_STAND_LOW_GAIN:
+            leg_controller_set_output_options(0x0Fu, 1U, 1U, 0.15f, 0.03f);
+            break;
+
+        case APP_BRINGUP_STAGE_TROT_LOW_GAIN:
+            leg_controller_set_output_options(0x0Fu, 1U, 1U, 0.20f, 0.04f);
+            break;
+
+        default:
+            leg_controller_set_output_options(0x00u, 0U, 0U, 0.0f, 0.0f);
+            break;
+    }
+}
+
+static void bringup_apply_wheel_jog(void) {
+    for (int i = 0; i < GAIT_LEG_NUM; i++) {
+        motor_dev_t* wheel = motor_get(WHEEL_ID[i]);
+        if (!wheel || !wheel->ops || !wheel->ops->set_velocity) {
+            continue;
+        }
+
+        float target = (((uint8_t)(1U << i) & (uint8_t)APP_BRINGUP_WHEEL_MASK) != 0U) ?
+                       (float)APP_BRINGUP_WHEEL_JOG_RAD_S : 0.0f;
+        (void)wheel->ops->set_velocity(wheel, target);
+    }
+}
+
+static float controller_height_from_body(float body_height_m) {
+    if (!isfinite(body_height_m) || body_height_m == 0.0f) {
+        return -0.18f;
+    }
+    return (body_height_m > 0.0f) ? -body_height_m : body_height_m;
+}
+
+static void apply_controller_height(const gait_params_t* p) {
+    if (!p) return;
+    leg_controller_set_stand_height(controller_height_from_body(p->body_height_m));
+}
+
+static int validate_trot_params(const gait_params_t* p) {
+    if (!p) return 0;
+    if (!isfinite(p->body_height_m) || fabsf(p->body_height_m) < 0.05f ||
+        fabsf(p->body_height_m) > 0.40f) {
+        return 0;
+    }
+    if (!isfinite(p->step_length_m) || p->step_length_m < 0.0f || p->step_length_m > 0.20f) {
+        return 0;
+    }
+    if (!isfinite(p->step_height_m) || p->step_height_m < 0.0f || p->step_height_m > 0.12f) {
+        return 0;
+    }
+    if (!isfinite(p->period_s) || p->period_s < 0.10f || p->period_s > 5.0f) {
+        return 0;
+    }
+    if (!isfinite(p->duty) || p->duty < 0.05f || p->duty > 0.95f) {
+        return 0;
+    }
+    for (int i = 0; i < GAIT_LEG_NUM; i++) {
+        if (!isfinite(p->phase_offset[i])) {
+            return 0;
+        }
+    }
+    if (!isfinite(p->touchdown_thresh)) {
+        return 0;
+    }
+    return 1;
+}
 
 static int request_gait(gait_if_t* g, const gait_params_t* p, float blend) {
-    if (s_gm.current == g) return APP_OK;
+    if (s_gm.current == g) {
+        if (g && g->ops && g->ops->set_param && p) {
+            return g->ops->set_param(g, p);
+        }
+        return APP_OK;
+    }
     /* gait_machine_request 只在 RUN 态接受切换；BLEND 中先用 set 强切 */
     if (s_gm.state != GM_STATE_RUN) {
         return gait_machine_set(&s_gm, g, p);
@@ -70,13 +197,16 @@ void task_chassis_init(void) {
     s_script = gait_script_create();
     gait_machine_init(&s_gm);
     gait_machine_set(&s_gm, s_stand, &GAIT_PARAMS_STAND_DEFAULT);
+    s_trot_params = GAIT_PARAMS_TROT_DEFAULT;
     leg_controller_init(&s_lc);
     leg_controller_bind_from_registry(&s_lc);
+    bringup_configure_leg_controller();
     s_active = ACT_STAND;
     s_mode   = CHASSIS_MODE_AUTO;          /* host 单测可重复 init 时需复位 */
     s_online_timeout_ms = 500;
-    LOGI("chassis init: mode=AUTO active=stand timeout=%ums",
-         (unsigned)s_online_timeout_ms);
+    s_manual_gait_hold = 0U;
+    LOGI("chassis init: mode=AUTO active=stand timeout=%ums bringup_stage=%d",
+         (unsigned)s_online_timeout_ms, (int)APP_BRINGUP_STAGE);
 }
 
 void task_chassis_set_mode(chassis_mode_t m) {
@@ -91,6 +221,7 @@ uint32_t task_chassis_get_online_timeout_ms(void)        { return s_online_timeo
 
 int task_chassis_play_script(const script_t* s, float blend_dur_s) {
     if (!s) return APP_ERR_INVALID_ARG;
+    s_manual_gait_hold = 0U;
     int r = gait_script_set_script(s_script, s);
     if (r != APP_OK) return r;
     r = request_gait(s_script, &GAIT_PARAMS_STAND_DEFAULT, blend_dur_s);
@@ -99,8 +230,46 @@ int task_chassis_play_script(const script_t* s, float blend_dur_s) {
 }
 
 int task_chassis_stop_script(float blend_dur_s) {
+    return task_chassis_start_stand(blend_dur_s);
+}
+
+int task_chassis_start_stand(float blend_dur_s) {
+    s_manual_gait_hold = 0U;
     int r = request_gait(s_stand, &GAIT_PARAMS_STAND_DEFAULT, blend_dur_s);
     if (r == APP_OK) s_active = ACT_STAND;
+    return r;
+}
+
+int task_chassis_set_trot_params(const gait_params_t* p) {
+    if (!validate_trot_params(p)) return APP_ERR_INVALID_ARG;
+    s_trot_params = *p;
+    if (s_active == ACT_TROT && s_gm.current == s_trot) {
+        apply_controller_height(&s_trot_params);
+        return request_gait(s_trot, &s_trot_params, 0.0f);
+    }
+    return APP_OK;
+}
+
+void task_chassis_get_trot_params(gait_params_t* out) {
+    if (!out) return;
+    *out = s_trot_params;
+}
+
+int task_chassis_start_trot(const gait_params_t* p, float blend_dur_s) {
+    if (!bringup_allow_trot()) return APP_ERR_BUSY;
+    if (p) {
+        int r = task_chassis_set_trot_params(p);
+        if (r != APP_OK) return r;
+    }
+    const gait_params_t* trot_params = bringup_is_normal() ?
+                                       &s_trot_params :
+                                       &S_BRINGUP_TROT_PARAMS;
+    apply_controller_height(trot_params);
+    int r = request_gait(s_trot, trot_params, blend_dur_s);
+    if (r == APP_OK) {
+        s_active = ACT_TROT;
+        s_manual_gait_hold = 1U;
+    }
     return r;
 }
 
@@ -126,11 +295,18 @@ static void online_decide(void) {
     float n = fabsf(cmd.vx) + fabsf(cmd.vy) + fabsf(cmd.wz);
     if (n > 0.05f) {
         if (s_active != ACT_TROT) {
-            if (request_gait(s_trot, &GAIT_PARAMS_TROT_DEFAULT, 0.3f) == APP_OK) s_active = ACT_TROT;
+            const gait_params_t* trot_params = bringup_is_normal() ?
+                                               &s_trot_params :
+                                               &S_BRINGUP_TROT_PARAMS;
+            apply_controller_height(trot_params);
+            if (request_gait(s_trot, trot_params, 0.3f) == APP_OK) {
+                s_active = ACT_TROT;
+                s_manual_gait_hold = 0U;
+            }
         }
     } else {
         if (s_active != ACT_STAND) {
-            if (request_gait(s_stand, &GAIT_PARAMS_STAND_DEFAULT, 0.3f) == APP_OK) s_active = ACT_STAND;
+            if (task_chassis_start_stand(0.3f) == APP_OK) s_active = ACT_STAND;
         }
     }
 }
@@ -144,22 +320,59 @@ static void offline_decide(void) {
         }
         return;
     }
+    if (s_manual_gait_hold && s_active == ACT_TROT) {
+        return;
+    }
     if (s_active != ACT_STAND) {
-        if (request_gait(s_stand, &GAIT_PARAMS_STAND_DEFAULT, 0.3f) == APP_OK) s_active = ACT_STAND;
+        if (task_chassis_start_stand(0.3f) == APP_OK) s_active = ACT_STAND;
     }
 }
 
 void task_chassis_step_for_test(float dt_s, uint32_t now_ms) {
-    if (is_offline(now_ms)) offline_decide();
-    else                    online_decide();
+#if !APP_TARGET_HOST
+    if (APP_BRINGUP_STAGE == APP_BRINGUP_STAGE_BOARD_ONLY) {
+        return;
+    }
+
+    if (APP_BRINGUP_STAGE == APP_BRINGUP_STAGE_BUS_ZERO_TX) {
+        motor_go_send_all();
+        motor_m3508_send_all();
+        return;
+    }
+
+    if (APP_BRINGUP_STAGE == APP_BRINGUP_STAGE_M3508_ZERO) {
+        motor_m3508_send_all();
+        return;
+    }
+
+    if (APP_BRINGUP_STAGE == APP_BRINGUP_STAGE_GO_ZERO) {
+        motor_go_send_all();
+        return;
+    }
+
+    if (APP_BRINGUP_STAGE == APP_BRINGUP_STAGE_M3508_JOG) {
+        bringup_apply_wheel_jog();
+        motor_m3508_send_all();
+        return;
+    }
+#endif
+
+    if (!bringup_allow_trot()) offline_decide();
+    else if (is_offline(now_ms)) offline_decide();
+    else                         online_decide();
+
     gait_output_t out;
     gait_machine_update(&s_gm, dt_s, &out);
     leg_controller_apply(&s_lc, &out);
 
 #if !APP_TARGET_HOST
     /* MCU 端：将电机指令推送到物理总线 */
-    motor_go_send_all();
-    motor_m3508_send_all();
+    if (bringup_allow_go_tx()) {
+        motor_go_send_all();
+    }
+    if (bringup_allow_m3508_tx()) {
+        motor_m3508_send_all();
+    }
 #endif
 }
 

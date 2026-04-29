@@ -8,8 +8,10 @@
  *   ORIGINAL: FR / RL
  *   MIRROR:   FL / RR
  *
- * foot_x_dir 用于把机体前向足端位移转换到单腿 IK 局部 x 轴:
- *   左侧腿局部 +x 与机体 +x 一致; 右侧腿局部 +x 相反。
+ * foot_x_dir 是真实装配的 x 镜像符号:
+ *   IK: body-frame dx -> local leg x
+ *   FK: local leg x -> body-frame dx
+ * 如果这里错，PC 显示和板端步态都会左右/前后反。
  *
  * body_x/body_y 用于 PC 可视化中摆放四条腿。
  * 如果后续实测机体尺寸变化，改这里即可同步固件和 PC 工具。
@@ -23,7 +25,7 @@ static const leg_config_t S_LEG_CONFIG[GAIT_LEG_NUM] = {
         .motor = { MOTOR_ID_FL_HIP, MOTOR_ID_FL_KNEE, MOTOR_ID_FL_WHEEL },
         .body_x_m = +0.220f,
         .body_y_m = +0.120f,
-        .foot_x_dir = +1.0f,
+        .foot_x_dir = -1.0f,
     },
     {
         .leg = GAIT_LEG_FR,
@@ -33,7 +35,7 @@ static const leg_config_t S_LEG_CONFIG[GAIT_LEG_NUM] = {
         .motor = { MOTOR_ID_FR_HIP, MOTOR_ID_FR_KNEE, MOTOR_ID_FR_WHEEL },
         .body_x_m = +0.220f,
         .body_y_m = -0.120f,
-        .foot_x_dir = -1.0f,
+        .foot_x_dir = +1.0f,
     },
     {
         .leg = GAIT_LEG_RL,
@@ -43,7 +45,7 @@ static const leg_config_t S_LEG_CONFIG[GAIT_LEG_NUM] = {
         .motor = { MOTOR_ID_RL_HIP, MOTOR_ID_RL_KNEE, MOTOR_ID_RL_WHEEL },
         .body_x_m = -0.220f,
         .body_y_m = +0.120f,
-        .foot_x_dir = +1.0f,
+        .foot_x_dir = -1.0f,
     },
     {
         .leg = GAIT_LEG_RR,
@@ -53,7 +55,7 @@ static const leg_config_t S_LEG_CONFIG[GAIT_LEG_NUM] = {
         .motor = { MOTOR_ID_RR_HIP, MOTOR_ID_RR_KNEE, MOTOR_ID_RR_WHEEL },
         .body_x_m = -0.220f,
         .body_y_m = -0.120f,
-        .foot_x_dir = -1.0f,
+        .foot_x_dir = +1.0f,
     },
 };
 

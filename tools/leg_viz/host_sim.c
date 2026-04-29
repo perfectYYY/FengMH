@@ -108,7 +108,7 @@ int host_sim_init(void) {
 int host_sim_set_stand_height(float height_m) {
     if (!s_ready) host_sim_init();
     if (!isfinite(height_m) || height_m <= 0.0f) return -1;
-    leg_controller_set_stand_height(height_m);
+    leg_controller_set_stand_height(-height_m);
     return 0;
 }
 
@@ -125,6 +125,18 @@ int host_sim_apply_foot_targets(const float* dx_m, const float* dz_m, const floa
         out.leg[i].in_stance = 1;
     }
     return leg_controller_apply(&s_manual_lc, &out);
+}
+
+int host_sim_set_trot_params(const gait_params_t* params) {
+    if (!s_ready) host_sim_init();
+    return task_chassis_set_trot_params(params);
+}
+
+int host_sim_play_trot(const gait_params_t* params, float blend_dur_s) {
+    if (!s_ready) host_sim_init();
+    if (!params) return -1;
+    task_chassis_set_mode(CHASSIS_MODE_STANDALONE);
+    return task_chassis_start_trot(params, blend_dur_s);
 }
 
 int host_sim_play_script(const char* name) {
@@ -177,9 +189,15 @@ int host_sim_get_motor_snapshot(int logical_id, host_motor_snapshot_t* out) {
     return 0;
 }
 
-static float mount_cmd_to_raw(const motor_cfg_t* cfg, float cmd) {
-    if (!cfg || cfg->dir == 0) return cmd;
-    return (cmd - cfg->zero_offset) / (float)cfg->dir;
+static void linkage_point_to_body(const leg_config_t* leg,
+                                  float local_x,
+                                  float local_z,
+                                  float* body_x,
+                                  float* body_y,
+                                  float* down_z) {
+    if (body_x) *body_x = leg->body_x_m + leg->foot_x_dir * local_x;
+    if (body_y) *body_y = leg->body_y_m;
+    if (down_z) *down_z = -local_z;
 }
 
 int host_sim_get_leg_pose(int leg_id, host_leg_pose_t* out) {
@@ -188,8 +206,6 @@ int host_sim_get_leg_pose(int leg_id, host_leg_pose_t* out) {
 
     const leg_config_t* leg = leg_config_get((gait_leg_t)leg_id);
     if (!leg) return -1;
-    const motor_cfg_t* hip_cfg = motor_get_cfg(leg->motor[LEG_ACT_HIP]);
-    const motor_cfg_t* knee_cfg = motor_get_cfg(leg->motor[LEG_ACT_KNEE]);
     motor_dev_t* hip = motor_get(leg->motor[LEG_ACT_HIP]);
     motor_dev_t* knee = motor_get(leg->motor[LEG_ACT_KNEE]);
     if (!hip || !knee) return -1;
@@ -197,14 +213,20 @@ int host_sim_get_leg_pose(int leg_id, host_leg_pose_t* out) {
     memset(out, 0, sizeof(*out));
     out->hip_cmd_rad = hip->state.angle_rad;
     out->knee_cmd_rad = knee->state.angle_rad;
-    out->hip_raw_rad = mount_cmd_to_raw(hip_cfg, out->hip_cmd_rad);
-    out->knee_raw_rad = mount_cmd_to_raw(knee_cfg, out->knee_cmd_rad);
+    out->hip_raw_rad = hip->state.angle_rad;
+    out->knee_raw_rad = knee->state.angle_rad;
 
-    leg_fk_result_t fk;
-    leg_fk_solve(out->hip_raw_rad, out->knee_raw_rad, &LEG_DIM_DEFAULT, &fk);
-    out->foot_body_x_m = leg->body_x_m + leg->foot_x_dir * fk.x;
-    out->foot_body_y_m = leg->body_y_m;
-    out->foot_down_z_m = fk.z;
+    leg_linkage_pose_t linkage;
+    leg_linkage_solve(out->hip_raw_rad, out->knee_raw_rad, &LEG_DIM_DEFAULT, &linkage);
+    linkage_point_to_body(leg, linkage.foot_x, linkage.foot_z,
+                          &out->foot_body_x_m, &out->foot_body_y_m, &out->foot_down_z_m);
+    linkage_point_to_body(leg, linkage.knee_x, linkage.knee_z,
+                          &out->knee_body_x_m, &out->knee_body_y_m, &out->knee_down_z_m);
+    linkage_point_to_body(leg, linkage.crank_x, linkage.crank_z,
+                          &out->crank_body_x_m, &out->crank_body_y_m, &out->crank_down_z_m);
+    linkage_point_to_body(leg, linkage.lower_mount_x, linkage.lower_mount_z,
+                          &out->lower_mount_body_x_m, &out->lower_mount_body_y_m,
+                          &out->lower_mount_down_z_m);
     out->ik_ok = (uint8_t)(hip->state.online && knee->state.online);
     return 0;
 }

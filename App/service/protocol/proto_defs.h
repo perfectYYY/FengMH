@@ -8,6 +8,7 @@
 
 #include "types.h"
 #include "config.h"
+#include "gait_if.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -33,6 +34,23 @@ typedef struct __attribute__((packed)) {
     float vy;   /* m/s  侧向 */
     float wz;   /* rad/s 偏航 */
 } payload_chassis_cmd_t;  /* FuncID 0x10, len=12 */
+
+#define PROTO_GAIT_ACTION_STAND             0u
+#define PROTO_GAIT_ACTION_TROT              1u
+#define PROTO_GAIT_ACTION_SET_TROT_PARAMS   2u
+
+typedef struct __attribute__((packed)) {
+    uint8_t action;      /* PROTO_GAIT_ACTION_* */
+    uint8_t reserved[3];
+    float body_height_m;
+    float step_length_m;
+    float step_height_m;
+    float period_s;
+    float duty;
+    float phase_offset[GAIT_LEG_NUM];
+    float touchdown_thresh;
+    float blend_dur_s;
+} payload_gait_cmd_t;  /* FuncID 0x12, len=48 */
 
 typedef struct __attribute__((packed)) {
     uint8_t req_kind;  /* 0=state, 1=motor, 2=stats */

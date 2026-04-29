@@ -6,7 +6,7 @@
  *   - 腿部构型 ORIGINAL / MIRROR
  *   - hip / knee / wheel 逻辑电机对应关系
  *   - 机体坐标中的腿根大致位置
- *   - 足端局部 x 轴相对机体前向的方向
+ *   - 足端局部 x 轴和机体 x 轴之间的镜像方向
  */
 #ifndef APP_SERVICE_LEG_CONFIG_H_
 #define APP_SERVICE_LEG_CONFIG_H_
@@ -34,7 +34,7 @@ typedef struct {
     motor_logical_id_t  motor[LEG_ACT_NUM];
     float               body_x_m;   /* front +, rear - */
     float               body_y_m;   /* left +, right - */
-    float               foot_x_dir; /* body dx -> local IK x: +1 / -1 */
+    float               foot_x_dir; /* body x <-> local leg x mirror sign: +1 / -1 */
 } leg_config_t;
 
 uint32_t            leg_config_count(void);

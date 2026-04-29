@@ -26,6 +26,7 @@ from tools.leg_viz.sim_bridge import (  # noqa: E402
     LEG_DIM_DEFAULT,
     list_builtin_scripts,
     list_leg_configs,
+    make_gait_params,
 )
 
 
@@ -42,10 +43,15 @@ class LegVizApp:
 
         self.thigh = LEG_DIM_DEFAULT.thigh_length
         self.shin = LEG_DIM_DEFAULT.shin_length
-        self.height = 0.25
-        self.body_z = 0.25
+        self.link = LEG_DIM_DEFAULT.link_length
+        self.height = 0.18
+        self.body_z = self.height
         self.body_pitch_deg = 0.0
         self.body_roll_deg = 0.0
+        self.gait_step_length = 0.06
+        self.gait_step_height = 0.04
+        self.gait_period = 0.4
+        self.gait_duty = 0.5
 
         self.foot_x = [0.0 for _ in self.legs]
         self.foot_z = [0.0 for _ in self.legs]
@@ -58,6 +64,7 @@ class LegVizApp:
         self.scripts = list_builtin_scripts()
         self.active_script_index = self._default_script_index()
         self.playing = False
+        self.trot_playing = False
         self.t_play = 0.0
         self.dt = 0.05
         self._dirty = True
@@ -98,7 +105,7 @@ class LegVizApp:
         self.fig.canvas.mpl_connect("key_press_event", self._on_key)
 
         self.ax3d = self.fig.add_axes([0.04, 0.08, 0.64, 0.86], projection="3d")
-        self.ax3d.set_title("3D chassis / four-leg IK")
+        self.ax3d.set_title("3D chassis / real-linkage IK")
         self.ax3d.set_xlabel("X forward (m)")
         self.ax3d.set_ylabel("Y left (m)")
         self.ax3d.set_zlabel("Z up (m)")
@@ -166,21 +173,20 @@ class LegVizApp:
         self.last_raw[i] = (hip_raw, knee_raw)
         self.last_cmd[i] = (hip_cmd, knee_cmd)
 
-        world_knee_x = leg.foot_x_dir * self.thigh * np.cos(hip_raw)
-        knee_body = np.array([
-            leg.body_x_m + world_knee_x,
-            leg.body_y_m,
-            -self.thigh * np.sin(hip_raw),
+        knee_body = np.array([pose.knee_body_x_m, pose.knee_body_y_m, -pose.knee_down_z_m])
+        crank_body = np.array([pose.crank_body_x_m, pose.crank_body_y_m, -pose.crank_down_z_m])
+        lower_mount_body = np.array([
+            pose.lower_mount_body_x_m,
+            pose.lower_mount_body_y_m,
+            -pose.lower_mount_down_z_m,
         ])
-        foot_body = np.array([
-            pose.foot_body_x_m,
-            pose.foot_body_y_m,
-            -pose.foot_down_z_m,
-        ])
+        foot_body = np.array([pose.foot_body_x_m, pose.foot_body_y_m, -pose.foot_down_z_m])
         hip = self._hip_world(leg)
         knee = self._world_from_body(knee_body)
+        crank = self._world_from_body(crank_body)
+        lower_mount = self._world_from_body(lower_mount_body)
         foot = self._world_from_body(foot_body)
-        return hip, knee, foot, hip_raw, knee_raw, hip_cmd, knee_cmd
+        return hip, crank, knee, lower_mount, foot, hip_raw, knee_raw, hip_cmd, knee_cmd
 
     # --------------------------------------------------------------- drawing
 
@@ -216,8 +222,17 @@ class LegVizApp:
         self._draw_ground()
         info_rows = []
         for i, leg in enumerate(self.legs):
-            hip, knee, foot, hip_raw, knee_raw, hip_cmd, knee_cmd = self._leg_points_world(i)
-            points = np.vstack([hip, knee, foot])
+            hip, crank, knee, lower_mount, foot, hip_raw, knee_raw, hip_cmd, knee_cmd = self._leg_points_world(i)
+            gap = np.full((1, 3), np.nan)
+            points = np.vstack([
+                hip, knee, foot,
+                gap,
+                hip, crank,
+                gap,
+                crank, lower_mount,
+                gap,
+                knee, lower_mount,
+            ])
             self.leg_lines[i].set_data(points[:, 0], points[:, 1])
             self.leg_lines[i].set_3d_properties(points[:, 2])
             self.foot_points[i].set_data([foot[0]], [foot[1]])
@@ -251,19 +266,23 @@ class LegVizApp:
     def _info_text(self, rows):
         lines = [
             "KEYS",
-            "space play/pause | n script | 0 all | 1-4 leg",
+            "space script | g trot | n script | 0 all | 1-4 leg",
             "left/right foot x | up/down lift | w/s height",
+            "[/] step | ;/' lift | ,/. period | y/h duty",
             "q/e pitch | a/d roll | v view | r reset",
             "",
             f"mode     = {self.active_label}",
-            f"playing  = {self.playing}",
+            f"script   = {self.playing}",
+            f"trot     = {self.trot_playing}",
             f"script   = {self.active_script or '(none)'}",
             f"host     = {self.host.active_gait_name()} / real leg_controller",
             f"body z   = {self.body_z:.3f} m",
             f"height   = {self.height:.3f} m",
+            f"gait     = len {self.gait_step_length:.3f} h {self.gait_step_height:.3f} "
+            f"T {self.gait_period:.2f} duty {self.gait_duty:.2f}",
             f"pitch    = {self.body_pitch_deg:+.1f} deg",
             f"roll     = {self.body_roll_deg:+.1f} deg",
-            f"L1/L2    = {self.thigh:.3f} / {self.shin:.3f} m",
+            f"linkage  = {self.thigh:.3f} / {self.link:.3f} / {self.shin:.3f} m",
             "",
             "world foot position + motor command:",
             *rows,
@@ -287,11 +306,17 @@ class LegVizApp:
     def _on_key(self, ev):
         key = ev.key or ""
         if key in (" ", "space"):
+            self.trot_playing = False
             if self.playing:
                 self.playing = False
             elif self.active_script is not None:
                 self._load_script()
                 self.playing = True
+        elif key == "g":
+            self.playing = False
+            self.trot_playing = not self.trot_playing
+            if self.trot_playing:
+                self._load_trot(force=True)
         elif key == "n":
             if self.scripts:
                 self.active_script_index = (self.active_script_index + 1) % len(self.scripts)
@@ -314,11 +339,35 @@ class LegVizApp:
         elif key == "w":
             self.height = min(0.38, self.height + 0.01)
             self.body_z = self.height
-            self.host.set_stand_height(self.height)
+            self._apply_height_change()
         elif key == "s":
             self.height = max(0.08, self.height - 0.01)
             self.body_z = self.height
-            self.host.set_stand_height(self.height)
+            self._apply_height_change()
+        elif key == "]":
+            self.gait_step_length = min(0.20, self.gait_step_length + 0.005)
+            self._apply_trot_param_change()
+        elif key == "[":
+            self.gait_step_length = max(0.0, self.gait_step_length - 0.005)
+            self._apply_trot_param_change()
+        elif key == "'":
+            self.gait_step_height = min(0.12, self.gait_step_height + 0.005)
+            self._apply_trot_param_change()
+        elif key == ";":
+            self.gait_step_height = max(0.0, self.gait_step_height - 0.005)
+            self._apply_trot_param_change()
+        elif key == ".":
+            self.gait_period = min(5.0, self.gait_period + 0.05)
+            self._apply_trot_param_change()
+        elif key == ",":
+            self.gait_period = max(0.10, self.gait_period - 0.05)
+            self._apply_trot_param_change()
+        elif key == "y":
+            self.gait_duty = min(0.95, self.gait_duty + 0.02)
+            self._apply_trot_param_change()
+        elif key == "h":
+            self.gait_duty = max(0.05, self.gait_duty - 0.02)
+            self._apply_trot_param_change()
         elif key == "q":
             self.body_pitch_deg = max(-15.0, self.body_pitch_deg - 1.0)
         elif key == "e":
@@ -334,12 +383,13 @@ class LegVizApp:
             self._reset()
         else:
             return
-        if key in ("left", "right", "up", "down") or (key in ("w", "s") and not self.playing):
+        if key in ("left", "right", "up", "down") or (key in ("w", "s") and not self.playing and not self.trot_playing):
             self._apply_manual_targets()
         self._dirty = True
 
     def _adjust_foot(self, dx=0.0, dz=0.0):
         self.playing = False
+        self.trot_playing = False
         for i in self._selected_leg_indices():
             self.foot_x[i] = float(np.clip(self.foot_x[i] + dx, -0.20, 0.20))
             self.foot_z[i] = float(np.clip(self.foot_z[i] + dz, -0.08, 0.10))
@@ -348,9 +398,35 @@ class LegVizApp:
         self.host.set_stand_height(self.height)
         self.host.apply_foot_targets(self.foot_x, self.foot_z)
 
+    def _make_trot_params(self):
+        return make_gait_params(
+            body_height_m=self.height,
+            step_length_m=self.gait_step_length,
+            step_height_m=self.gait_step_height,
+            period_s=self.gait_period,
+            duty=self.gait_duty,
+            phase_offset=(0.0, 0.5, 0.5, 0.0),
+        )
+
+    def _load_trot(self, force=False):
+        if not self.trot_playing and not force:
+            return
+        self.host.play_trot(self._make_trot_params(), blend_dur_s=0.0)
+
+    def _apply_trot_param_change(self):
+        if self.trot_playing:
+            self._load_trot(force=True)
+
+    def _apply_height_change(self):
+        if self.trot_playing:
+            self._load_trot(force=True)
+        else:
+            self.host.set_stand_height(self.height)
+
     def _load_script(self):
         if self.active_script is None:
             return
+        self.trot_playing = False
         if self._script_loaded == self.active_script:
             return
         self.host.set_stand_height(self.height)
@@ -368,9 +444,14 @@ class LegVizApp:
         self._clear_trails()
         self.t_play = 0.0
         self.playing = False
+        self.trot_playing = False
         self._script_loaded = None
-        self.height = 0.25
+        self.height = 0.18
         self.body_z = self.height
+        self.gait_step_length = 0.06
+        self.gait_step_height = 0.04
+        self.gait_period = 0.4
+        self.gait_duty = 0.5
         self.body_pitch_deg = 0.0
         self.body_roll_deg = 0.0
         self.host = HostSystemSim()
@@ -392,6 +473,11 @@ class LegVizApp:
 
         if self.playing and self.active_script is not None:
             self._load_script()
+            self.host.step(elapsed)
+            self.t_play += elapsed
+            self._dirty = True
+        elif self.trot_playing:
+            self._load_trot()
             self.host.step(elapsed)
             self.t_play += elapsed
             self._dirty = True

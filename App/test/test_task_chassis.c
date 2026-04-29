@@ -13,6 +13,7 @@
 #include "bsp_time.h"
 #include "proto_frame.h"
 #include "proto_defs.h"
+#include "gait_params.h"
 #include "script_builtin.h"
 #include "log.h"
 
@@ -121,6 +122,24 @@ static void t_standalone_ignores_usb(void) {
     TEST_ASSERT_EQUAL_INT(0, strcmp(task_chassis_active_gait_name(), "stand"));
 }
 
+static void t_manual_trot_holds_without_usb_velocity(void) {
+    setup_all();
+    gait_params_t p = GAIT_PARAMS_TROT_DEFAULT;
+    p.body_height_m = 0.18f;
+    p.step_length_m = 0.04f;
+    p.step_height_m = 0.02f;
+    p.period_s = 0.6f;
+    p.duty = 0.65f;
+    task_chassis_set_mode(CHASSIS_MODE_STANDALONE);
+    TEST_ASSERT_EQUAL_INT(APP_OK, task_chassis_start_trot(&p, 0.0f));
+    for (int i = 0; i < 50; i++) task_chassis_step_for_test(0.002f, 100 + i);
+    TEST_ASSERT_EQUAL_INT(0, strcmp(task_chassis_active_gait_name(), "trot"));
+
+    TEST_ASSERT_EQUAL_INT(APP_OK, task_chassis_start_stand(0.0f));
+    task_chassis_step_for_test(0.002f, 300);
+    TEST_ASSERT_EQUAL_INT(0, strcmp(task_chassis_active_gait_name(), "stand"));
+}
+
 static void t_motor_calls_happen(void) {
     setup_all();
     task_chassis_set_mode(CHASSIS_MODE_STANDALONE);
@@ -139,6 +158,7 @@ int main(void) {
     TU_RUN(t_auto_falls_back_on_timeout);
     TU_RUN(t_play_script_then_stop);
     TU_RUN(t_standalone_ignores_usb);
+    TU_RUN(t_manual_trot_holds_without_usb_velocity);
     TU_RUN(t_motor_calls_happen);
     TU_MAIN_EPILOGUE();
 }

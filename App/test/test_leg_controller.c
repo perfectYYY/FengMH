@@ -88,10 +88,10 @@ static void t_real_leg_config_mapping(void) {
     TEST_ASSERT_EQUAL_INT(LEG_TYPE_ORIGINAL, fr->leg_type);
     TEST_ASSERT_EQUAL_INT(LEG_TYPE_ORIGINAL, rl->leg_type);
     TEST_ASSERT_EQUAL_INT(LEG_TYPE_MIRROR, rr->leg_type);
-    TEST_ASSERT_FLOAT_WITHIN(1e-6f, +1.0f, fl->foot_x_dir);
-    TEST_ASSERT_FLOAT_WITHIN(1e-6f, -1.0f, fr->foot_x_dir);
-    TEST_ASSERT_FLOAT_WITHIN(1e-6f, +1.0f, rl->foot_x_dir);
-    TEST_ASSERT_FLOAT_WITHIN(1e-6f, -1.0f, rr->foot_x_dir);
+    TEST_ASSERT_FLOAT_WITHIN(1e-6f, -1.0f, fl->foot_x_dir);
+    TEST_ASSERT_FLOAT_WITHIN(1e-6f, +1.0f, fr->foot_x_dir);
+    TEST_ASSERT_FLOAT_WITHIN(1e-6f, -1.0f, rl->foot_x_dir);
+    TEST_ASSERT_FLOAT_WITHIN(1e-6f, +1.0f, rr->foot_x_dir);
 
     TEST_ASSERT_EQUAL_INT(MOTOR_ID_FL_HIP, fl->motor[LEG_ACT_HIP]);
     TEST_ASSERT_EQUAL_INT(MOTOR_ID_FL_KNEE, fl->motor[LEG_ACT_KNEE]);
@@ -131,8 +131,8 @@ static void t_apply_dispatches(void) {
 static void t_ik_roundtrip(void) {
     /* IK → FK 一致性验证：给定足端位置，IK 解算后 FK 回到原位 */
     const leg_dim_t* dim = &LEG_DIM_DEFAULT;
-    float hight = 0.25f;
-    /* L1+L2=0.42, hight=0.25 → 站立时 D=hight=0.25, 在工作空间内 */
+    float hight = -0.18f;
+    /* firmware-dev 语义：足端在髋关节下方时 z_total 为负。 */
 
     /* 零位移 = 站立状态应可解 */
     {
@@ -152,7 +152,7 @@ static void t_ik_roundtrip(void) {
     /* 测试 ORIGINAL 腿型：微小偏移 (不触发角度限幅) */
     {
         float target_x = 0.02f;
-        float target_z = -0.02f;
+        float target_z = 0.02f;
 
         leg_ik_result_t ik;
         int ret = leg_ik_solve(target_x, target_z, dim, hight,
@@ -170,7 +170,7 @@ static void t_ik_roundtrip(void) {
     /* 测试 MIRROR 腿型：微小偏移 */
     {
         float target_x = 0.02f;
-        float target_z = -0.02f;
+        float target_z = 0.02f;
 
         leg_ik_result_t ik;
         int ret = leg_ik_solve(target_x, target_z, dim, hight,
@@ -194,6 +194,39 @@ static void t_ik_roundtrip(void) {
     }
 }
 
+static float dist2d(float ax, float az, float bx, float bz) {
+    float dx = ax - bx;
+    float dz = az - bz;
+    return sqrtf(dx * dx + dz * dz);
+}
+
+static void t_real_linkage_geometry(void) {
+    const leg_dim_t* dim = &LEG_DIM_DEFAULT;
+    leg_linkage_pose_t linkage;
+    leg_fk_result_t fk;
+
+    leg_linkage_solve(-2.1f, -1.1f, dim, &linkage);
+    leg_fk_solve(-2.1f, -1.1f, dim, &fk);
+
+    TEST_ASSERT_FLOAT_WITHIN(1e-5f, dim->thigh_length,
+                             dist2d(linkage.hip_x, linkage.hip_z,
+                                    linkage.knee_x, linkage.knee_z));
+    TEST_ASSERT_FLOAT_WITHIN(1e-5f, dim->link_length,
+                             dist2d(linkage.hip_x, linkage.hip_z,
+                                    linkage.crank_x, linkage.crank_z));
+    TEST_ASSERT_FLOAT_WITHIN(1e-5f, dim->thigh_length,
+                             dist2d(linkage.crank_x, linkage.crank_z,
+                                    linkage.lower_mount_x, linkage.lower_mount_z));
+    TEST_ASSERT_FLOAT_WITHIN(1e-5f, dim->link_length,
+                             dist2d(linkage.knee_x, linkage.knee_z,
+                                    linkage.lower_mount_x, linkage.lower_mount_z));
+    TEST_ASSERT_FLOAT_WITHIN(1e-5f, dim->shin_length,
+                             dist2d(linkage.knee_x, linkage.knee_z,
+                                    linkage.foot_x, linkage.foot_z));
+    TEST_ASSERT_FLOAT_WITHIN(1e-6f, linkage.foot_x, fk.x);
+    TEST_ASSERT_FLOAT_WITHIN(1e-6f, linkage.foot_z, fk.z);
+}
+
 static void t_missing_increments_miss(void) {
     motor_registry_init();  /* 所有设备都未绑定 */
     leg_controller_t lc;
@@ -214,6 +247,7 @@ int main(void) {
     TU_RUN(t_bind_all_present);
     TU_RUN(t_apply_dispatches);
     TU_RUN(t_ik_roundtrip);
+    TU_RUN(t_real_linkage_geometry);
     TU_RUN(t_missing_increments_miss);
     TU_MAIN_EPILOGUE();
 }
