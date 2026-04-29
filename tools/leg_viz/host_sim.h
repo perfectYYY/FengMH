@@ -1,9 +1,10 @@
 /*
  * host_sim.h — PC-side terminal actuator for the real FengMH control stack.
  *
- * This module is compiled only into build_host/libfengmh_sim.dylib. It binds
- * virtual motors into motor_registry, runs the same chassis/leg controller code
- * used by firmware, and exposes the resulting motor/leg state to Python.
+ * This module is compiled only into the host fengmh_sim shared library
+ * (.dll/.dylib/.so). It binds virtual motors into motor_registry, runs the
+ * same chassis/leg controller code used by firmware, and exposes the resulting
+ * motor/leg state to Python.
  */
 #ifndef TOOLS_LEG_VIZ_HOST_SIM_H_
 #define TOOLS_LEG_VIZ_HOST_SIM_H_

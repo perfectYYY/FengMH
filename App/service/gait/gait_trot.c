@@ -16,6 +16,7 @@
 #include <math.h>
 
 static const char* TAG = "GAIT";
+static const float PI_F = 3.14159265f;
 
 typedef struct {
     gait_if_t base;
@@ -57,7 +58,7 @@ void gait_trot_foot_traj(float leg_phase, float duty,
         float swing_dur = 1.0f - duty;
         float t = (swing_dur > 0.0f) ? ((lp - duty) / swing_dur) : 0.0f;
         if (dx_m) *dx_m = step_len_m * (t - 0.5f);
-        if (dz_m) *dz_m = step_height_m * sinf((float)M_PI * t);
+        if (dz_m) *dz_m = step_height_m * sinf(PI_F * t);
         if (in_stance) *in_stance = 0u;
     }
 }

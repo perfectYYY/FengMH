@@ -1,4 +1,4 @@
-"""ctypes wrapper around libfengmh_sim.dylib.
+"""ctypes wrapper around the host-side fengmh_sim shared library.
 
 Loads the shared library built by `cmake --build build_host --target fengmh_sim`
 and exposes Python-friendly wrappers for IK/FK and script sampling so that
@@ -7,21 +7,62 @@ tools/leg_viz/leg_viz.py can drive the same C code that runs on the MCU.
 from __future__ import annotations
 
 import ctypes as C
+import os
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-DYLIB_PATH = PROJECT_ROOT / "build_host" / "libfengmh_sim.dylib"
+BUILD_DIR = PROJECT_ROOT / "build_host"
 
-if not DYLIB_PATH.exists():
+
+def _library_names() -> tuple[str, ...]:
+    if sys.platform == "win32":
+        return ("fengmh_sim.dll", "libfengmh_sim.dll")
+    if sys.platform == "darwin":
+        return ("libfengmh_sim.dylib",)
+    return ("libfengmh_sim.so",)
+
+
+def _library_search_dirs() -> list[Path]:
+    configs = ("Debug", "Release", "RelWithDebInfo", "MinSizeRel")
+    dirs = [BUILD_DIR]
+    dirs.extend(BUILD_DIR / cfg for cfg in configs)
+    return dirs
+
+
+def _find_shared_library() -> Path | None:
+    names = _library_names()
+    for d in _library_search_dirs():
+        for n in names:
+            p = d / n
+            if p.exists():
+                return p
+    if BUILD_DIR.exists():
+        for n in names:
+            matches = sorted(BUILD_DIR.rglob(n))
+            if matches:
+                return matches[0]
+    return None
+
+
+SHARED_LIB_PATH = _find_shared_library()
+
+if SHARED_LIB_PATH is None:
+    names = ", ".join(_library_names())
     raise RuntimeError(
-        f"libfengmh_sim.dylib not found at {DYLIB_PATH}\n"
+        f"fengmh_sim shared library not found under {BUILD_DIR} "
+        f"(expected one of: {names})\n"
         "Build it first:\n"
         "  cmake -S App/test -B build_host\n"
         "  cmake --build build_host --target fengmh_sim"
     )
 
-_lib = C.CDLL(str(DYLIB_PATH))
+_DLL_DIR_HANDLE = None
+if os.name == "nt" and hasattr(os, "add_dll_directory"):
+    _DLL_DIR_HANDLE = os.add_dll_directory(str(SHARED_LIB_PATH.parent))
+
+_lib = C.CDLL(str(SHARED_LIB_PATH))
 
 
 # --- struct mirrors (must match leg_params.h / leg_ik.h / script_if.h) ---

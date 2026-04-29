@@ -13,11 +13,15 @@ set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_C_EXTENSIONS OFF)
 
-if(NOT CMAKE_BUILD_TYPE)
+if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
     set(CMAKE_BUILD_TYPE Debug)
 endif()
 
-add_compile_options(-Wall -Wextra -Wno-unused-parameter -Wno-unused-function -g)
+if(MSVC)
+    add_compile_options(/W3)
+else()
+    add_compile_options(-Wall -Wextra -Wno-unused-parameter -Wno-unused-function -g)
+endif()
 add_compile_definitions(APP_TARGET_HOST=1)
 
 set(APP_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/..)
@@ -74,7 +78,9 @@ enable_testing()
 
 function(add_app_test name src)
     add_executable(${name} ${src} ${APP_SRCS})
-    target_link_libraries(${name} m)
+    if(NOT MSVC)
+        target_link_libraries(${name} m)
+    endif()
     add_test(NAME ${name} COMMAND ${name})
 endfunction()
 
@@ -121,9 +127,12 @@ add_library(fengmh_sim SHARED
     ${APP_ROOT}/app/task_safety.c
     ${APP_ROOT}/app/task_chassis.c
 )
-target_link_libraries(fengmh_sim m)
+if(NOT MSVC)
+    target_link_libraries(fengmh_sim m)
+endif()
 target_compile_definitions(fengmh_sim PRIVATE APP_TARGET_HOST=1)
 set_target_properties(fengmh_sim PROPERTIES
     OUTPUT_NAME fengmh_sim
     POSITION_INDEPENDENT_CODE ON
+    WINDOWS_EXPORT_ALL_SYMBOLS ON
 )

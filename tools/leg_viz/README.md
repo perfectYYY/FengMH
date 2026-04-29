@@ -1,6 +1,6 @@
 # leg_viz — 3D 整车腿部调试 GUI
 
-Mac 上的纯 PC 调试工具。主视图是一个 3D 底盘：机体、四个髋关节、四条腿、
+Windows / macOS / Linux 上的纯 PC 调试工具。主视图是一个 3D 底盘：机体、四个髋关节、四条腿、
 足端世界坐标和足端轨迹都画在同一坐标系里。
 
 GUI 不再自己计算脚本/IK。它通过 ctypes 启动 `host_sim`：在电脑上绑定 12 个
@@ -10,14 +10,29 @@ motor_registry` 控制链。3D 视图只读取虚拟电机最终收到的命令�
 
 ## 安装与构建
 
-```bash
-# 1. 装 Python 依赖
-pip install -r tools/leg_viz/requirements.txt
+需要 Python 3.10+、CMake，以及一个 C 编译器。Windows 推荐安装 Visual Studio Build Tools
+或 MinGW-w64/Ninja。
 
-# 2. 构建共享库（产物：build_host/libfengmh_sim.dylib）
+macOS / Linux:
+
+```bash
+python3 -m pip install -r tools/leg_viz/requirements.txt
 cmake -S App/test -B build_host
 cmake --build build_host --target fengmh_sim
 ```
+
+Windows PowerShell:
+
+```powershell
+py -3 -m pip install -r tools/leg_viz/requirements.txt
+cmake -S App/test -B build_host
+cmake --build build_host --target fengmh_sim
+```
+
+共享库产物会按平台生成在 `build_host` 下：
+`fengmh_sim.dll` / `libfengmh_sim.dylib` / `libfengmh_sim.so`。若使用 Visual Studio
+这类多配置生成器，`.dll` 可能在 `build_host\Debug` 或 `build_host\Release` 下；
+`sim_bridge.py` 会自动搜索这些位置。
 
 固件里 `App/service/kinematics/leg_ik.c`、`App/service/leg/leg_config.c`、
 `App/device/motor_registry.c` 等配置或公式有改动时，重跑第二步即可，GUI 立即同步。
@@ -26,6 +41,12 @@ cmake --build build_host --target fengmh_sim
 
 ```bash
 python tools/leg_viz/leg_viz.py
+```
+
+Windows 也可以用：
+
+```powershell
+py -3 tools\leg_viz\leg_viz.py
 ```
 
 ## 操作说明
@@ -56,6 +77,13 @@ python tools/leg_viz/gait_client.py --port /dev/tty.usbmodemXXXX set-trot \
 python tools/leg_viz/gait_client.py --port /dev/tty.usbmodemXXXX stand
 ```
 
+Windows 串口示例：
+
+```powershell
+py -3 tools\leg_viz\gait_client.py --port COM4 trot `
+  --height 0.18 --step-length 0.04 --step-height 0.02 --period 0.6 --duty 0.65
+```
+
 不传 `--port` 或加 `--hex` 时只打印待发送帧，便于和串口助手或抓包结果对照。
 
 ## 机械模型说明
@@ -81,7 +109,8 @@ python tools/leg_viz/gait_client.py --port /dev/tty.usbmodemXXXX stand
 
 ## 故障排查
 
-- **`libfengmh_sim.dylib not found`**：去运行 `cmake --build build_host --target fengmh_sim`
-- **窗口空白/不响应**：确保 matplotlib 用的是支持 GUI 的 backend，Mac 默认 `MacOSX` 即可
+- **找不到 `fengmh_sim` 共享库**：去运行 `cmake --build build_host --target fengmh_sim`；Windows 下确认 `build_host`、`build_host\Debug` 或 `build_host\Release` 里有 `fengmh_sim.dll`
+- **Windows 提示缺少编译器**：安装 Visual Studio Build Tools 的 C++ 工作负载，或安装 MinGW-w64/Ninja 后重新运行 CMake
+- **窗口空白/不响应**：确保 matplotlib 用的是支持 GUI 的 backend；Windows 通常用 `TkAgg`，macOS 默认 `MacOSX` 即可
 - **按键无响应**：先用鼠标点一下 3D 窗口让它获得焦点，再按键；旧版按钮/滑条已移除以避开 macOS Matplotlib 3D backend 的 widget 卡死问题
 - **窗口一直抢焦点**：确认运行的是最新版；新版使用后端 timer，不再用 `plt.pause()` 循环抢占前台窗口
