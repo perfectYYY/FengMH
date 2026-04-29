@@ -34,6 +34,11 @@ void      leg_controller_init(leg_controller_t* lc);
 app_err_t leg_controller_bind_from_registry(leg_controller_t* lc);
 /* 设置站立高度 (IK 解算参数) */
 void      leg_controller_set_stand_height(float h);
+void      leg_controller_set_output_options(uint8_t leg_mask,
+                                            uint8_t enable_joints,
+                                            uint8_t enable_wheels,
+                                            float joint_kp,
+                                            float joint_kd);
 /* 应用步态输出：先做 IK 解算，再推送给电机 */
 app_err_t leg_controller_apply(leg_controller_t* lc, const gait_output_t* o);
 

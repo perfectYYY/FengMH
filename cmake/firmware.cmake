@@ -44,6 +44,11 @@ target_link_options(${PROJECT_NAME}.elf PRIVATE -specs=nano.specs -specs=nosys.s
 # -----------------------------------------------------------------------------
 # 4. App/ 分层源与 include
 # -----------------------------------------------------------------------------
+set(APP_BRINGUP_STAGE "100" CACHE STRING "Firmware bring-up stage; 100 means normal firmware")
+set(APP_BRINGUP_LEG_MASK "0x01" CACHE STRING "Bring-up leg bitmask: bit0 FL, bit1 FR, bit2 RL, bit3 RR")
+set(APP_BRINGUP_WHEEL_MASK "0x01" CACHE STRING "Bring-up wheel bitmask: bit0 FL, bit1 FR, bit2 RL, bit3 RR")
+set(APP_BRINGUP_WHEEL_JOG_RAD_S "0.5f" CACHE STRING "Bring-up wheel jog speed in output rad/s")
+
 #  APP_DIRS 是固件 App 层的模块清单。
 set(APP_DIRS
         common
@@ -76,7 +81,15 @@ endforeach()
 file(GLOB APP_SOURCES CONFIGURE_DEPENDS ${_app_globs})
 
 target_sources             (${PROJECT_NAME}.elf PRIVATE ${APP_SOURCES})
-target_compile_definitions (${PROJECT_NAME}.elf PRIVATE APP_TARGET_HOST=0)
+target_compile_definitions (${PROJECT_NAME}.elf PRIVATE
+        APP_TARGET_HOST=0
+        APP_BRINGUP_STAGE=${APP_BRINGUP_STAGE}
+        APP_BRINGUP_LEG_MASK=${APP_BRINGUP_LEG_MASK}
+        APP_BRINGUP_WHEEL_MASK=${APP_BRINGUP_WHEEL_MASK}
+        APP_BRINGUP_WHEEL_JOG_RAD_S=${APP_BRINGUP_WHEEL_JOG_RAD_S}
+)
+
+message(STATUS "APP_BRINGUP_STAGE=${APP_BRINGUP_STAGE}, LEG_MASK=${APP_BRINGUP_LEG_MASK}, WHEEL_MASK=${APP_BRINGUP_WHEEL_MASK}, WHEEL_JOG=${APP_BRINGUP_WHEEL_JOG_RAD_S}")
 
 # -----------------------------------------------------------------------------
 # 5. 健康自检

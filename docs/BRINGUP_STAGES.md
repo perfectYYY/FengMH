@@ -1,0 +1,78 @@
+# FengMH Bring-Up Stages
+
+This workflow builds one firmware image per hardware test stage. Each stage is
+selected at compile time with `APP_BRINGUP_STAGE`, so the firmware itself limits
+what it is allowed to drive.
+
+## Stage Table
+
+| Stage | Name | Allowed Output | Use For |
+|---:|---|---|---|
+| 0 | `board` | No motor TX | MCU, clock, USB CDC, RTOS smoke test |
+| 1 | `bus_zero` | GO disabled frames, M3508 zero-current frames | RS485/CAN waveform and ID check with motor power off |
+| 2 | `m3508_zero` | M3508 zero-current frames only | Connect C620/M3508 and verify feedback with no motion |
+| 3 | `go_zero` | GO disabled frames only | Connect GO motors and verify feedback with no motion |
+| 4 | `m3508_jog` | Selected wheel low-speed jog | One wheel at a time, wheel off the ground |
+| 5 | `go_leg_hold` | Selected leg GO joints, very low gain, wheels disabled | One leg at a time, suspended |
+| 6 | `stand_low` | All legs stand, low gain, wheels zero | Suspended full robot stand check |
+| 7 | `trot_low` | All legs, low gain, tiny trot only after USB velocity command | Suspended tiny-motion check |
+| 100 | `normal` | Normal firmware behavior | Use only after staged tests pass |
+
+Leg and wheel masks use the gait order:
+
+| Bit | Name |
+|---:|---|
+| 0 | `FL` |
+| 1 | `FR` |
+| 2 | `RL` |
+| 3 | `RR` |
+
+## Build
+
+```sh
+tools/bringup/build_stage.sh board
+tools/bringup/build_stage.sh bus_zero
+tools/bringup/build_stage.sh m3508_jog --wheel FL --speed 0.3
+tools/bringup/build_stage.sh go_leg_hold --leg RL
+tools/bringup/build_stage.sh stand_low
+tools/bringup/build_stage.sh trot_low
+```
+
+Artifacts are written under `build/bringup/<stage>/`:
+
+- `FengMH.elf`
+- `FengMH.hex`
+- `FengMH.bin`
+
+## Flash
+
+```sh
+tools/bringup/flash_stage.sh board
+tools/bringup/flash_stage.sh --method openocd board
+tools/bringup/flash_stage.sh bus_zero
+tools/bringup/flash_stage.sh m3508_jog --wheel FL --speed 0.3
+```
+
+The flash script first builds the selected stage. It then tries
+OpenOCD CMSIS-DAP, `STM32_Programmer_CLI`, and finally `st-flash`.
+
+The ICWorkshop PowerDebugger Wireless TX enumerates as CMSIS-DAPv2 for OpenOCD
+with VID/PID `0x303a:0x40ff`:
+
+```sh
+tools/bringup/flash_stage.sh --method openocd board
+```
+
+If OpenOCD reports `CMSIS-DAP command CMD_INFO failed`, verify that the wireless
+receiver is powered, paired, connected to SWDIO/SWCLK/GND/NRST/VREF, and that the
+target board supplies a valid VREF to the debugger.
+
+## Safety Notes
+
+- Flash stage 0 first with all motor power disconnected.
+- Do not connect motor power until stage 1 bus frames have been inspected.
+- Use a current-limited power supply or a fuse for every first-power test.
+- In stages 4 and 5, test exactly one wheel or one leg at a time.
+- Keep wheels off the ground and legs suspended until stage 7 has passed.
+- Stop immediately if a motor moves during a zero stage, moves in the wrong
+  direction, heats unexpectedly, or the MCU resets.

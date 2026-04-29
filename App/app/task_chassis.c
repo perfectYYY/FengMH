@@ -28,6 +28,7 @@
 #include "../script/gait_script.h"
 #include "../script/script_builtin.h"
 #include "leg_controller.h"
+#include "motor_registry.h"
 #include "motor_go.h"
 #include "motor_m3508.h"
 
@@ -55,6 +56,84 @@ static chassis_mode_t   s_mode = CHASSIS_MODE_AUTO;
 static active_t         s_active = ACT_STAND;
 static uint32_t         s_online_timeout_ms = 500;
 
+static const motor_logical_id_t WHEEL_ID[GAIT_LEG_NUM] = {
+    MOTOR_ID_FL_WHEEL, MOTOR_ID_FR_WHEEL, MOTOR_ID_RL_WHEEL, MOTOR_ID_RR_WHEEL
+};
+
+static const gait_params_t S_BRINGUP_TROT_PARAMS = {
+    .body_height_m    = 0.20f,
+    .step_length_m    = 0.015f,
+    .step_height_m    = 0.010f,
+    .period_s         = 1.0f,
+    .duty             = 0.75f,
+    .phase_offset     = { 0.0f, 0.5f, 0.5f, 0.0f },
+    .touchdown_thresh = 0.0f,
+};
+
+static int bringup_is_normal(void) {
+    return APP_BRINGUP_STAGE >= APP_BRINGUP_STAGE_NORMAL;
+}
+
+static int bringup_allow_trot(void) {
+    return bringup_is_normal() || (APP_BRINGUP_STAGE >= APP_BRINGUP_STAGE_TROT_LOW_GAIN);
+}
+
+static int bringup_allow_go_tx(void) {
+    return bringup_is_normal() ||
+           (APP_BRINGUP_STAGE == APP_BRINGUP_STAGE_BUS_ZERO_TX) ||
+           (APP_BRINGUP_STAGE == APP_BRINGUP_STAGE_GO_ZERO) ||
+           (APP_BRINGUP_STAGE == APP_BRINGUP_STAGE_GO_LEG_HOLD) ||
+           (APP_BRINGUP_STAGE == APP_BRINGUP_STAGE_STAND_LOW_GAIN) ||
+           (APP_BRINGUP_STAGE == APP_BRINGUP_STAGE_TROT_LOW_GAIN);
+}
+
+static int bringup_allow_m3508_tx(void) {
+    return bringup_is_normal() ||
+           (APP_BRINGUP_STAGE == APP_BRINGUP_STAGE_BUS_ZERO_TX) ||
+           (APP_BRINGUP_STAGE == APP_BRINGUP_STAGE_M3508_ZERO) ||
+           (APP_BRINGUP_STAGE == APP_BRINGUP_STAGE_M3508_JOG) ||
+           (APP_BRINGUP_STAGE == APP_BRINGUP_STAGE_STAND_LOW_GAIN) ||
+           (APP_BRINGUP_STAGE == APP_BRINGUP_STAGE_TROT_LOW_GAIN);
+}
+
+static void bringup_configure_leg_controller(void) {
+    if (bringup_is_normal()) {
+        leg_controller_set_output_options(0x0Fu, 1U, 1U, 1.5f, 0.1f);
+        return;
+    }
+
+    switch (APP_BRINGUP_STAGE) {
+        case APP_BRINGUP_STAGE_GO_LEG_HOLD:
+            leg_controller_set_output_options((uint8_t)APP_BRINGUP_LEG_MASK, 1U, 0U, 0.08f, 0.02f);
+            break;
+
+        case APP_BRINGUP_STAGE_STAND_LOW_GAIN:
+            leg_controller_set_output_options(0x0Fu, 1U, 1U, 0.15f, 0.03f);
+            break;
+
+        case APP_BRINGUP_STAGE_TROT_LOW_GAIN:
+            leg_controller_set_output_options(0x0Fu, 1U, 1U, 0.20f, 0.04f);
+            break;
+
+        default:
+            leg_controller_set_output_options(0x00u, 0U, 0U, 0.0f, 0.0f);
+            break;
+    }
+}
+
+static void bringup_apply_wheel_jog(void) {
+    for (int i = 0; i < GAIT_LEG_NUM; i++) {
+        motor_dev_t* wheel = motor_get(WHEEL_ID[i]);
+        if (!wheel || !wheel->ops || !wheel->ops->set_velocity) {
+            continue;
+        }
+
+        float target = (((uint8_t)(1U << i) & (uint8_t)APP_BRINGUP_WHEEL_MASK) != 0U) ?
+                       (float)APP_BRINGUP_WHEEL_JOG_RAD_S : 0.0f;
+        (void)wheel->ops->set_velocity(wheel, target);
+    }
+}
+
 static int request_gait(gait_if_t* g, const gait_params_t* p, float blend) {
     if (s_gm.current == g) return APP_OK;
     /* gait_machine_request 只在 RUN 态接受切换；BLEND 中先用 set 强切 */
@@ -72,11 +151,12 @@ void task_chassis_init(void) {
     gait_machine_set(&s_gm, s_stand, &GAIT_PARAMS_STAND_DEFAULT);
     leg_controller_init(&s_lc);
     leg_controller_bind_from_registry(&s_lc);
+    bringup_configure_leg_controller();
     s_active = ACT_STAND;
     s_mode   = CHASSIS_MODE_AUTO;          /* host 单测可重复 init 时需复位 */
     s_online_timeout_ms = 500;
-    LOGI("chassis init: mode=AUTO active=stand timeout=%ums",
-         (unsigned)s_online_timeout_ms);
+    LOGI("chassis init: mode=AUTO active=stand timeout=%ums bringup_stage=%d",
+         (unsigned)s_online_timeout_ms, (int)APP_BRINGUP_STAGE);
 }
 
 void task_chassis_set_mode(chassis_mode_t m) {
@@ -126,7 +206,10 @@ static void online_decide(void) {
     float n = fabsf(cmd.vx) + fabsf(cmd.vy) + fabsf(cmd.wz);
     if (n > 0.05f) {
         if (s_active != ACT_TROT) {
-            if (request_gait(s_trot, &GAIT_PARAMS_TROT_DEFAULT, 0.3f) == APP_OK) s_active = ACT_TROT;
+            const gait_params_t* trot_params = bringup_is_normal() ?
+                                               &GAIT_PARAMS_TROT_DEFAULT :
+                                               &S_BRINGUP_TROT_PARAMS;
+            if (request_gait(s_trot, trot_params, 0.3f) == APP_OK) s_active = ACT_TROT;
         }
     } else {
         if (s_active != ACT_STAND) {
@@ -150,16 +233,50 @@ static void offline_decide(void) {
 }
 
 void task_chassis_step_for_test(float dt_s, uint32_t now_ms) {
-    if (is_offline(now_ms)) offline_decide();
-    else                    online_decide();
+#if !APP_TARGET_HOST
+    if (APP_BRINGUP_STAGE == APP_BRINGUP_STAGE_BOARD_ONLY) {
+        return;
+    }
+
+    if (APP_BRINGUP_STAGE == APP_BRINGUP_STAGE_BUS_ZERO_TX) {
+        motor_go_send_all();
+        motor_m3508_send_all();
+        return;
+    }
+
+    if (APP_BRINGUP_STAGE == APP_BRINGUP_STAGE_M3508_ZERO) {
+        motor_m3508_send_all();
+        return;
+    }
+
+    if (APP_BRINGUP_STAGE == APP_BRINGUP_STAGE_GO_ZERO) {
+        motor_go_send_all();
+        return;
+    }
+
+    if (APP_BRINGUP_STAGE == APP_BRINGUP_STAGE_M3508_JOG) {
+        bringup_apply_wheel_jog();
+        motor_m3508_send_all();
+        return;
+    }
+#endif
+
+    if (!bringup_allow_trot()) offline_decide();
+    else if (is_offline(now_ms)) offline_decide();
+    else                         online_decide();
+
     gait_output_t out;
     gait_machine_update(&s_gm, dt_s, &out);
     leg_controller_apply(&s_lc, &out);
 
 #if !APP_TARGET_HOST
     /* MCU 端：将电机指令推送到物理总线 */
-    motor_go_send_all();
-    motor_m3508_send_all();
+    if (bringup_allow_go_tx()) {
+        motor_go_send_all();
+    }
+    if (bringup_allow_m3508_tx()) {
+        motor_m3508_send_all();
+    }
 #endif
 }
 
