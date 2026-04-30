@@ -44,22 +44,18 @@
 #include "GO-motor.h"
 #include "gait_plan.h"
 #include <string.h>
-// #include "M3508.h"
-#include "3508_motor.h"
+#include "M3508.h"
 #endif
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
 #if USE_LEGACY_MAIN
-//8010电机所需结构体
+//8010电池所需结构体
 static MotorBack Motor_r;
 static MotorInstance motor_instance[MOTOR_NUM];//4路485线，我就记作每组3个电机，从&huart1到&huart4电机依次从【0】到【11】，id与huart的对应办法是（id+3）/3就行
 int idx;//转存MotorInstance motor_instance[MOTOR_NUM]专用的整数变量
 MotorCmd GO1;//结构体变量，一个用于中转的宇树8010命令的结构体
-
-//M3508电机所需结构体
-extern Motor_3508_T Motors[4];
 
 //步态参数
 gait_action Gait;
@@ -118,9 +114,6 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart){
 
 	memset(&Motor_r, 0, sizeof(MotorBack));
 }
-
-//3508电机的can收发回调函数
-
 
 void Init_up_down(vector *so){
 	so[0].data[0] = 0;
@@ -198,11 +191,6 @@ int main(void)
   for(int i = 0; i < 12; i ++){
 	  MotorInstance_Init(&motor_instance[i], i);
   }
-
-  //初始化M3508电机数据
-  FDCAN1_Filter_Init();
-  FDCAN2_Filter_Init();
-  D3508_Init();
 
   Init_up_down(up_down);
 
@@ -338,27 +326,17 @@ int main(void)
 	  }
 
 	  if(t > 500 && t <= 2000){
-      //这个是M3508.c中的函数
-// //		  PID_M3508_CAN1(0, -45, 0, 0);
-// //		  PID_M3508_CAN2(0, 0, 45, 0);
-// 	  set_motor_current_can1(-4000, -4000, 0, 0);
-// 	  set_motor_current_can2(0, 0, 4000, 4000);
-      //这个是更新版的3508函数
-      PID_Calc_SetSpeed(2, 45);
-      PID_Calc_SetSpeed(3, 45);
-		  send_current();
-      HAL_Delay(1);
+//		  PID_M3508_CAN1(0, -45, 0, 0);
+//		  PID_M3508_CAN2(0, 0, 45, 0);
+	  set_motor_current_can1(-4000, -4000, 0, 0);
+	  set_motor_current_can2(0, 0, 4000, 4000);
+		  HAL_Delay(1);
 	  }
 	  if(t > 10000){
-      //这个是M3508.c中的函数
-// //		  PID_M3508_CAN1(0, -45, 0, 0);
-// //		  PID_M3508_CAN2(0, 0, 45, 0);
-// 	  set_motor_current_can1(0, 0, 0, 0);
-// 	  set_motor_current_can2(0, 0, 0, 0);
-      //这个是更新版的3508函数
-      PID_Calc_SetSpeed(2, 0);
-      PID_Calc_SetSpeed(3, 0);
-      send_current();
+//		  PID_M3508_CAN1(0, -45, 0, 0);
+//		  PID_M3508_CAN2(0, 0, 45, 0);
+	  set_motor_current_can1(0, 0, 0, 0);
+	  set_motor_current_can2(0, 0, 0, 0);
 		  HAL_Delay(1);
 	  }
 	  t += 1;//简易定时器
