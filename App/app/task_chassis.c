@@ -70,6 +70,20 @@ static const gait_params_t S_BRINGUP_TROT_PARAMS = {
     .touchdown_thresh = 0.0f,
 };
 
+static const gait_params_t S_OFFLINE_MARCH_PARAMS = {
+    .body_height_m    = 0.20f,
+    .step_length_m    = 0.0f,
+    .step_height_m    = 0.015f,
+    .period_s         = 1.0f,
+    .duty             = 0.50f,
+    .phase_offset     = { 0.0f, 0.5f, 0.5f, 0.0f },
+    .touchdown_thresh = 0.0f,
+};
+
+static uint8_t  s_offline_seq_active = 0U;
+static uint8_t  s_offline_seq_done = 0U;
+static uint32_t s_offline_seq_start_ms = 0U;
+
 static int bringup_is_normal(void) {
     return APP_BRINGUP_STAGE >= APP_BRINGUP_STAGE_NORMAL;
 }
@@ -156,6 +170,9 @@ void task_chassis_init(void) {
     s_active = ACT_STAND;
     s_mode   = CHASSIS_MODE_AUTO;          /* host 单测可重复 init 时需复位 */
     s_online_timeout_ms = 500;
+    s_offline_seq_active = 0U;
+    s_offline_seq_done = 0U;
+    s_offline_seq_start_ms = 0U;
     LOGI("chassis init: mode=AUTO active=stand timeout=%ums bringup_stage=%d",
          (unsigned)s_online_timeout_ms, (int)APP_BRINGUP_STAGE);
 }
@@ -220,7 +237,48 @@ static void online_decide(void) {
 }
 
 /* 离线分支：保留当前 SCRIPT；否则确保是 stand */
-static void offline_decide(void) {
+static void offline_decide(uint32_t now_ms) {
+    if (!s_offline_seq_active) {
+        s_offline_seq_active = 1U;
+        s_offline_seq_done = 0U;
+        s_offline_seq_start_ms = now_ms;
+        if (request_gait(s_stand, &GAIT_PARAMS_STAND_DEFAULT, 0.0f) == APP_OK) {
+            s_active = ACT_STAND;
+        }
+        LOGI("offline sequence start: stand 2s -> march 5s -> stand");
+    }
+
+    if (!s_offline_seq_done) {
+        uint32_t elapsed_ms = now_ms - s_offline_seq_start_ms;
+
+        if (elapsed_ms < 2000U) {
+            if (s_active != ACT_STAND) {
+                if (request_gait(s_stand, &GAIT_PARAMS_STAND_DEFAULT, 0.3f) == APP_OK) {
+                    s_active = ACT_STAND;
+                }
+            }
+            return;
+        }
+
+        if (elapsed_ms < 7000U) {
+            if (s_active != ACT_TROT) {
+                if (request_gait(s_trot, &S_OFFLINE_MARCH_PARAMS, 0.3f) == APP_OK) {
+                    s_active = ACT_TROT;
+                }
+            }
+            return;
+        }
+
+        if (s_active != ACT_STAND) {
+            if (request_gait(s_stand, &GAIT_PARAMS_STAND_DEFAULT, 0.3f) == APP_OK) {
+                s_active = ACT_STAND;
+            }
+        }
+        s_offline_seq_done = 1U;
+        LOGI("offline sequence done: stand");
+        return;
+    }
+
     if (s_active == ACT_SCRIPT) {
         /* 脚本播完自动回 stand */
         if (gait_script_state(s_script) == SP_STATE_DONE) {
@@ -286,9 +344,21 @@ void task_chassis_step_for_test(float dt_s, uint32_t now_ms) {
     }
 #endif
 
-    if (!bringup_allow_trot()) offline_decide();
-    else if (is_offline(now_ms)) offline_decide();
-    else                         online_decide();
+    if (!bringup_allow_trot()) {
+        s_offline_seq_active = 0U;
+        s_offline_seq_done = 0U;
+        if (s_active != ACT_STAND) {
+            if (request_gait(s_stand, &GAIT_PARAMS_STAND_DEFAULT, 0.3f) == APP_OK) {
+                s_active = ACT_STAND;
+            }
+        }
+    } else if (is_offline(now_ms)) {
+        offline_decide(now_ms);
+    } else {
+        s_offline_seq_active = 0U;
+        s_offline_seq_done = 0U;
+        online_decide();
+    }
 
     gait_output_t out;
     gait_machine_update(&s_gm, dt_s, &out);

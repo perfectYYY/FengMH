@@ -17,7 +17,7 @@
 #include "motor_if.h"
 #include "bsp_fdcan.h"
 /* 使用带路径的 include，避免与 Core/Inc/pid.h (旧版 PID_Controller) 冲突 */
-#include "service/pid/pid.h"
+#include "../service/pid/pid.h"
 
 #ifdef __cplusplus
 extern "C" {
