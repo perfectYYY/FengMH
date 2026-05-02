@@ -78,16 +78,22 @@ static float go_cfg_gear(const motor_cfg_t* cfg) {
     return cfg->gear_ratio;
 }
 
+static float go_cfg_boot_angle(const motor_cfg_t* cfg) {
+    return cfg ? cfg->boot_angle : 0.0f;
+}
+
 static float go_motor_pos_to_joint(const motor_cfg_t* cfg,
                                     float zero_offset,
                                     float motor_pos) {
-    return go_cfg_sign(cfg) * ((motor_pos - zero_offset) / go_cfg_gear(cfg));
+    return go_cfg_boot_angle(cfg) +
+           go_cfg_sign(cfg) * ((motor_pos - zero_offset) / go_cfg_gear(cfg));
 }
 
 static float go_joint_pos_to_motor(const motor_cfg_t* cfg,
                                     float zero_offset,
                                     float joint_pos) {
-    return (go_cfg_sign(cfg) * joint_pos * go_cfg_gear(cfg)) + zero_offset;
+    return (go_cfg_sign(cfg) * (joint_pos - go_cfg_boot_angle(cfg)) * go_cfg_gear(cfg))
+         + zero_offset;
 }
 
 static float go_motor_vel_to_joint(const motor_cfg_t* cfg, float motor_vel) {
@@ -271,14 +277,14 @@ static int go_enable(motor_dev_t* dev) {
     const motor_cfg_t* cfg = go_cfg(dev);
     ctx->mode = 1;  /* FOC 闭环 */
     if (!ctx->calibrated && dev->state.rx_cnt > 0U) {
-        float boot_angle = cfg ? cfg->boot_angle : 0.0f;
+        /* 锁存 enable 时刻最近一次回传的原始电机位置作为参考点。 */
         float raw_pos = go_joint_pos_to_motor(cfg, ctx->zero_offset, dev->state.angle_rad);
-        ctx->zero_offset = raw_pos - (go_cfg_sign(cfg) * boot_angle * go_cfg_gear(cfg));
-        dev->state.angle_rad = boot_angle;
+        ctx->zero_offset = raw_pos;
+        dev->state.angle_rad = go_cfg_boot_angle(cfg);
         ctx->calibrated  = 1;
         LOGI("GO motor %u on bus%u calibrated, zero=%.3f rad boot=%.3f",
              (unsigned)ctx->motor_id, (unsigned)ctx->bus_id,
-             (double)ctx->zero_offset, (double)boot_angle);
+             (double)ctx->zero_offset, (double)go_cfg_boot_angle(cfg));
     }
     return APP_OK;
 }

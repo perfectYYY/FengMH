@@ -33,7 +33,7 @@ typedef struct {
     uint8_t         bus_id;      /* UART 总线索引 (BSP_UART_2 或 BSP_UART_3) */
     uint8_t         motor_id;    /* RIS 帧里的老工程全局电机 ID */
     uint8_t         mode;        /* 当前模式: 0=锁定, 1=FOC闭环, 2=校准 */
-    float           zero_offset; /* 零位偏移 (rad)，enable 时自动记录 */
+    float           zero_offset; /* enable 时锁存的原始电机位置参考 (rad) */
     uint8_t         calibrated;  /* 是否已完成零位标定 */
     uint8_t         online;      /* 是否在线 (收到过有效反馈) */
 

@@ -46,9 +46,9 @@ typedef struct {
     uint8_t            can_bus;
     uint32_t           can_id;
     int8_t             dir;          /* joint sign: raw motor -> joint */
-    float              zero_offset;  /* raw motor rad when joint angle is zero */
+    float              zero_offset;  /* raw motor rad latched at power-on/enable as reference */
     float              gear_ratio;   /* motor-side rad / joint-side rad */
-    float              boot_angle;   /* expected joint angle at boot calibration pose */
+    float              boot_angle;   /* expected joint angle at the latched boot pose */
     float              limit_min;    /* rad */
     float              limit_max;    /* rad */
     const char*        name;
