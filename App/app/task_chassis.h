@@ -47,6 +47,10 @@ uint32_t task_chassis_get_online_timeout_ms(void);
 void  task_chassis_step_for_test(float dt_s, uint32_t now_ms);
 const char* task_chassis_active_gait_name(void);
 
+/* BMI088 转向接口 */
+void  task_chassis_reset_yaw(void);
+float task_chassis_get_yaw(void);
+
 #ifdef __cplusplus
 }
 #endif

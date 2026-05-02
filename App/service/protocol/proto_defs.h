@@ -32,7 +32,10 @@ typedef struct __attribute__((packed)) {
     float vx;   /* m/s  前后 */
     float vy;   /* m/s  侧向 */
     float wz;   /* rad/s 偏航 */
-} payload_chassis_cmd_t;  /* FuncID 0x10, len=12 */
+} payload_chassis_cmd_t;  /* FuncID 0x10, 旧帧 len=12 */
+
+/* 扩展版: 增加 target_yaw + steer_mode (17 bytes)
+ *   向后兼容: 旧协议 12 字节帧也接受, steer_mode 默认 0 */
 
 typedef struct __attribute__((packed)) {
     uint8_t req_kind;  /* 0=state, 1=motor, 2=stats */

@@ -31,6 +31,9 @@
 #include "motor_registry.h"
 #include "motor_go.h"
 #include "motor_m3508.h"
+#include "imu_bmi088.h"
+#include "service/attitude/attitude_estimator.h"
+#include "service/attitude/steer_controller.h"
 
 #if APP_TARGET_MCU
 #include "cmsis_os.h"
@@ -156,6 +159,11 @@ void task_chassis_init(void) {
     s_active = ACT_STAND;
     s_mode   = CHASSIS_MODE_AUTO;          /* host 单测可重复 init 时需复位 */
     s_online_timeout_ms = 500;
+
+    /* BMI088 转向初始化 */
+    attitude_estimator_init();
+    steer_controller_init();
+
     LOGI("chassis init: mode=AUTO active=stand timeout=%ums bringup_stage=%d",
          (unsigned)s_online_timeout_ms, (int)APP_BRINGUP_STAGE);
 }
@@ -188,6 +196,16 @@ int task_chassis_stop_script(float blend_dur_s) {
 const char* task_chassis_active_gait_name(void) {
     if (!s_gm.current || !s_gm.current->ops || !s_gm.current->ops->name) return "?";
     return s_gm.current->ops->name();
+}
+
+/* ─── BMI088 转向接口 ─── */
+
+void task_chassis_reset_yaw(void) {
+    attitude_estimator_reset_yaw();
+}
+
+float task_chassis_get_yaw(void) {
+    return attitude_estimator_get_yaw();
 }
 
 /* 是否处在"事实上的离线"状态 */
@@ -289,6 +307,28 @@ void task_chassis_step_for_test(float dt_s, uint32_t now_ms) {
     if (!bringup_allow_trot()) offline_decide();
     else if (is_offline(now_ms)) offline_decide();
     else                         online_decide();
+
+    /* ─── BMI088 转向: IMU 读取 + 姿态估计 + 转向 PID ─── */
+    {
+        imu_bmi088_data_t imu_data;
+        if (imu_bmi088_read(&imu_data) == APP_OK) {
+            attitude_estimator_update(imu_data.gyro, imu_data.accel, dt_s);
+
+            /* 转向控制: 从 task_comm 获取 steer_mode, 若为 YAW 则运行 PID */
+            task_comm_chassis_cmd_t cmd;
+            task_comm_get_chassis(&cmd);
+            if (cmd.steer_mode == 1) {  /* STEER_MODE_YAW */
+                steer_controller_set_mode(1);  /* STEER_MODE_YAW */
+                steer_controller_set_target_yaw(cmd.target_yaw);
+            } else {
+                steer_controller_set_mode(0);  /* STEER_MODE_OFF */
+            }
+
+            float current_yaw = attitude_estimator_get_yaw();
+            (void)steer_controller_update(current_yaw, dt_s);
+            /* TODO: 将 steer PID 输出的 wz 修正传入 gait/leg_controller 实现转向 */
+        }
+    }
 
     gait_output_t out;
     gait_machine_update(&s_gm, dt_s, &out);

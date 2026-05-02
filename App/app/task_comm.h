@@ -22,6 +22,8 @@ uint32_t task_comm_dispatch_miss(void);
 /* 当前最近一次的 chassis 指令（被 dispatch 时更新；task_chassis 读取） */
 typedef struct {
     float vx, vy, wz;
+    float target_yaw;        /* 目标偏航角 (rad), BMI088 转向 */
+    uint8_t steer_mode;      /* 0=OFF(现有行为), 1=YAW(偏航闭环) */
     uint32_t seq;
 } task_comm_chassis_cmd_t;
 

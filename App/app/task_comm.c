@@ -38,19 +38,35 @@ static const uint32_t MOTOR_TX_INTERVAL_MS  = 50;  /* 20Hz */
 #endif
 
 static int handle_chassis(const uint8_t* p, uint8_t len) {
-    if (len != sizeof(payload_chassis_cmd_t)) return -1;
+    /*
+     * 兼容两种帧长:
+     *   12 bytes: 旧协议 {vx, vy, wz}
+     *   17 bytes: 新协议 {vx, vy, wz, target_yaw, steer_mode}
+     */
+    if (len < sizeof(payload_chassis_cmd_t)) return -1;
+
     payload_chassis_cmd_t cmd;
     memcpy(&cmd, p, sizeof(cmd));
     s_chassis.vx = cmd.vx;
     s_chassis.vy = cmd.vy;
     s_chassis.wz = cmd.wz;
+
+    /* 新协议扩展字段 (>= 17 bytes 时有效) */
+    if (len >= 17U) {
+        memcpy(&s_chassis.target_yaw, p + 12, 4);
+        s_chassis.steer_mode = p[16];
+    } else {
+        s_chassis.target_yaw = 0.0f;
+        s_chassis.steer_mode = 0;  /* OFF: 保持现有行为 */
+    }
+
     s_chassis.seq++;
     s_last_rx_ms = (uint32_t)bsp_time_now_ms();
     return 0;
 }
 
 static const proto_entry_t s_tbl[] = {
-    { PROTO_FUNC_CHASSIS_CMD, sizeof(payload_chassis_cmd_t), handle_chassis, "chassis" },
+    { PROTO_FUNC_CHASSIS_CMD, 0, handle_chassis, "chassis" },  /* expect_len=0: 由 handler 内自行校验 */
 };
 
 static void on_usb_rx(const uint8_t* d, uint32_t n, void* user) {

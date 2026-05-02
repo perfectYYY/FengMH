@@ -60,6 +60,7 @@ set(APP_DIRS
         service/leg
         service/kinematics
         service/script
+        service/attitude
         app
 )
 
