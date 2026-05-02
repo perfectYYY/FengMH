@@ -63,6 +63,13 @@ app_err_t motor_go_init_all(void);
 app_err_t motor_go_send_all(void);
 
 /*
+ * 零位标定：对所有已在线但未标定的 GO 电机计算 zero_offset。
+ * 在 GO_ZERO 阶段调用 — 电机保持锁定态，仅更新 ctx->zero_offset。
+ * 返回值：至少一个电机成功标定返回 APP_OK；全部离线返回 APP_ERR_TIMEOUT。
+ */
+app_err_t motor_go_calibrate_all(void);
+
+/*
  * 获取指定总线上 GO 电机共享的 RX 回调
  * 供 bsp_uart_attach_rx 使用
  */

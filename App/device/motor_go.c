@@ -240,11 +240,20 @@ static int go_set_torque(motor_dev_t* dev, float tau_nm) {
     return APP_OK;
 }
 
+/* 前向声明：go_set_position 自动校准需要 */
+static int go_calibrate(motor_dev_t* dev);
+
 static int go_set_position(motor_dev_t* dev, float pos, float vel,
                             float kp, float kd, float tau_ff) {
     if (!dev || !dev->drv_ctx) return APP_ERR_INVALID_ARG;
     go_drv_ctx_t* ctx = (go_drv_ctx_t*)dev->drv_ctx;
     const motor_cfg_t* cfg = go_cfg(dev);
+
+    /* 首次进入闭环位置控制前自动校准（安全网：即使 GO_ZERO 没跑也能正常工作） */
+    if (!ctx->calibrated && dev->state.rx_cnt > 0U) {
+        (void)go_calibrate(dev);
+    }
+
     ctx->cmd_pos = go_joint_pos_to_motor(cfg, ctx->zero_offset, pos);
     ctx->cmd_vel = go_joint_vel_to_motor(cfg, vel);
     ctx->cmd_kp  = kp;
@@ -265,21 +274,39 @@ static int go_set_velocity(motor_dev_t* dev, float vel_rads) {
     return APP_OK;
 }
 
-static int go_enable(motor_dev_t* dev) {
+/*
+ * 仅计算零位偏移，不改变电机模式。
+ * 在 GO_ZERO 阶段调用 — 电机保持锁定态，但 zero_offset 已就绪。
+ */
+static int go_calibrate(motor_dev_t* dev) {
     if (!dev || !dev->drv_ctx) return APP_ERR_INVALID_ARG;
     go_drv_ctx_t* ctx = (go_drv_ctx_t*)dev->drv_ctx;
     const motor_cfg_t* cfg = go_cfg(dev);
+
+    if (ctx->calibrated) return APP_OK;
+    if (dev->state.rx_cnt == 0U) return APP_ERR_TIMEOUT; /* 还没收到过反馈 */
+
+    float boot_angle = cfg ? cfg->boot_angle : 0.0f;
+    float raw_pos = go_joint_pos_to_motor(cfg, ctx->zero_offset, dev->state.angle_rad);
+
+    ctx->zero_offset = raw_pos - (go_cfg_sign(cfg) * boot_angle * go_cfg_gear(cfg));
+    ctx->calibrated  = 1;
+    dev->state.angle_rad = boot_angle;
+
+    LOGI("GO%u bus%u calib: zero=%.3f rad boot=%.3f",
+         (unsigned)ctx->motor_id, (unsigned)ctx->bus_id,
+         (double)ctx->zero_offset, (double)boot_angle);
+    return APP_OK;
+}
+
+static int go_enable(motor_dev_t* dev) {
+    if (!dev || !dev->drv_ctx) return APP_ERR_INVALID_ARG;
+    go_drv_ctx_t* ctx = (go_drv_ctx_t*)dev->drv_ctx;
+
+    /* 先校准（如果还未校准） */
+    (void)go_calibrate(dev);
+
     ctx->mode = 1;  /* FOC 闭环 */
-    if (!ctx->calibrated && dev->state.rx_cnt > 0U) {
-        float boot_angle = cfg ? cfg->boot_angle : 0.0f;
-        float raw_pos = go_joint_pos_to_motor(cfg, ctx->zero_offset, dev->state.angle_rad);
-        ctx->zero_offset = raw_pos - (go_cfg_sign(cfg) * boot_angle * go_cfg_gear(cfg));
-        dev->state.angle_rad = boot_angle;
-        ctx->calibrated  = 1;
-        LOGI("GO motor %u on bus%u calibrated, zero=%.3f rad boot=%.3f",
-             (unsigned)ctx->motor_id, (unsigned)ctx->bus_id,
-             (double)ctx->zero_offset, (double)boot_angle);
-    }
     return APP_OK;
 }
 
@@ -412,7 +439,11 @@ void motor_go_uart_rx_cb(bsp_uart_bus_t bus, const uint8_t* data,
 /* ─── 周期性发送 ─── */
 
 app_err_t motor_go_send_all(void) {
-    /* 按总线分组发送 */
+    /* 按总线分组发送:
+     * RS485 半双工 + DMA，每发一帧后 HAL_Delay(1) 等待 DMA 完成，
+     * 否则 s_tx_busy 标志会导致同一总线上后续电机帧被丢弃。
+     * 17B @ 4Mbps 物理传输 ~42.5µs，1ms 远大于实际耗时。
+     */
     for (int bus = BSP_UART_2; bus <= BSP_UART_3; bus++) {
         for (int i = 0; i < GO_MOTOR_COUNT; i++) {
             if (s_go_ctxs[i].bus_id != (uint8_t)bus) continue;
@@ -423,7 +454,22 @@ app_err_t motor_go_send_all(void) {
             bsp_uart_send((bsp_uart_bus_t)bus,
                           (const uint8_t*)&frame,
                           sizeof(frame));
+
+#if !APP_TARGET_HOST
+            /* 等待 DMA 传输完成，ISR 会清除 s_tx_busy 并重启 RX */
+            HAL_Delay(1);
+#endif
         }
     }
     return APP_OK;
+}
+
+app_err_t motor_go_calibrate_all(void) {
+    int ok = 0;
+    for (int i = 0; i < GO_MOTOR_COUNT; i++) {
+        if (go_calibrate(&s_go_devs[i]) == APP_OK) {
+            ok++;
+        }
+    }
+    return (ok > 0) ? APP_OK : APP_ERR_TIMEOUT;
 }

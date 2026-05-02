@@ -108,7 +108,8 @@ static void bringup_configure_leg_controller(void) {
             break;
 
         case APP_BRINGUP_STAGE_STAND_LOW_GAIN:
-            leg_controller_set_output_options(0x0Fu, 1U, 1U, 0.15f, 0.03f);
+            /* 匹配 Wheel-legged stand: KP=0.35 KD=0.08 */
+            leg_controller_set_output_options(0x0Fu, 1U, 1U, 0.35f, 0.08f);
             break;
 
         case APP_BRINGUP_STAGE_TROT_LOW_GAIN:
@@ -251,6 +252,8 @@ void task_chassis_step_for_test(float dt_s, uint32_t now_ms) {
 
     if (APP_BRINGUP_STAGE == APP_BRINGUP_STAGE_GO_ZERO) {
         motor_go_send_all();
+        /* 在锁定态下计算 zero_offset，避免 GO_LEG_HOLD 切入闭环时飞踢 */
+        (void)motor_go_calibrate_all();
         return;
     }
 
@@ -258,6 +261,28 @@ void task_chassis_step_for_test(float dt_s, uint32_t now_ms) {
         bringup_apply_wheel_jog();
         motor_m3508_send_all();
         return;
+    }
+
+    /*
+     * 预标定安全网：当 stage >= GO_LEG_HOLD 但未跑过 GO_ZERO 时，
+     * 先在锁定态下收几个周期编码器反馈、算 zero_offset，避免首次闭环飞踢。
+     */
+    {
+        static uint32_t s_pre_calib_cnt = 0;
+        static uint8_t  s_pre_calib_done = 0;
+
+        if (!s_pre_calib_done && APP_BRINGUP_STAGE >= APP_BRINGUP_STAGE_GO_LEG_HOLD) {
+            motor_go_send_all();          /* 锁定态收发：mode=0，收集编码器反馈 */
+            if (s_pre_calib_cnt < 50U) {  /* 100ms @ 500Hz */
+                s_pre_calib_cnt++;
+                return;
+            }
+            (void)motor_go_calibrate_all();
+            s_pre_calib_done = 1;
+            LOGI("pre-calib: motors calibrated, entering stand");
+            /* 同周期不继续：下一个周期走正常控制流程 */
+            return;
+        }
     }
 #endif
 

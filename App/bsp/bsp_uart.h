@@ -45,6 +45,13 @@ app_err_t bsp_uart_send(bsp_uart_bus_t bus, const uint8_t* data, uint32_t len);
 void bsp_uart_on_rx(bsp_uart_bus_t bus, const uint8_t* data, uint32_t len);
 void bsp_uart_on_tx_done(bsp_uart_bus_t bus);
 
+/* MCU 端：HAL 回调直接桥接（UART_HandleTypeDef → bus 自动映射）*/
+#if !APP_TARGET_HOST
+#include "stm32h7xx_hal.h"
+void bsp_uart_hal_rx_event(UART_HandleTypeDef *huart, uint16_t size);
+void bsp_uart_hal_tx_done(UART_HandleTypeDef *huart);
+#endif
+
 /* Host 单测辅助 */
 uint32_t  bsp_uart_test_tx_count(bsp_uart_bus_t bus);
 app_err_t bsp_uart_test_pop_tx(bsp_uart_bus_t bus, uint8_t* out, uint32_t* out_len, uint32_t max_len);
