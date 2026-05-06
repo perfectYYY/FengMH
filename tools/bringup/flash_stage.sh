@@ -13,7 +13,7 @@ Flash options:
   --method auto|openocd|stm32prog|st-flash
   --openocd-bin PATH
   --openocd-scripts DIR
-  --cmsis-dap-vid-pid VID:PID   default: 0x303a:0x40ff for ICWorkshop PowerDebugger
+  --cmsis-dap-vid-pid VID:PID   default: 0xFAED:0x4870 for Horco CMSIS-DAP
 
 Examples:
   tools/bringup/flash_stage.sh board
@@ -35,7 +35,7 @@ fi
 method="auto"
 openocd_bin="${OPENOCD_BIN:-}"
 openocd_scripts="${OPENOCD_SCRIPTS:-}"
-cmsis_dap_vid_pid="${OPENOCD_CMSIS_DAP_VID_PID:-0x303a:0x40ff}"
+cmsis_dap_vid_pid="${OPENOCD_CMSIS_DAP_VID_PID:-0xFAED:0x4870}"
 build_args=()
 
 while [[ $# -gt 0 ]]; do

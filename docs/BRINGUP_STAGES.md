@@ -62,8 +62,8 @@ tools/bringup/flash_stage.sh m3508_jog --wheel FL --speed 0.3
 The flash script first builds the selected stage. It then tries
 OpenOCD CMSIS-DAP, `STM32_Programmer_CLI`, and finally `st-flash`.
 
-The ICWorkshop PowerDebugger Wireless TX enumerates as CMSIS-DAPv2 for OpenOCD
-with VID/PID `0x303a:0x40ff`:
+The Horco wireless CMSIS-DAP enumerates as CMSIS-DAPv2 for OpenOCD with VID/PID
+`0xFAED:0x4870`:
 
 ```sh
 tools/bringup/flash_stage.sh --method openocd board
