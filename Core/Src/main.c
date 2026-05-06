@@ -45,7 +45,6 @@
 #include "GO-motor.h"
 #include "gait_plan.h"
 #include <string.h>
-// #include "M3508.h"
 #include "3508_motor.h"
 #endif
 /* USER CODE END Includes */
@@ -365,24 +364,14 @@ int main(void)
 	  }
 
 	  if(t > 500 && t <= 2000){
-      //这个是M3508.c中的函数
-// //		  PID_M3508_CAN1(0, -45, 0, 0);
-// //		  PID_M3508_CAN2(0, 0, 45, 0);
-// 	  set_motor_current_can1(-4000, -4000, 0, 0);
-// 	  set_motor_current_can2(0, 0, 4000, 4000);
-      //这个是更新版的3508函数
+
       PID_Calc_SetSpeed(0, 450);
       PID_Calc_SetSpeed(1, 450);
 
       HAL_Delay(1);
 	  }
 	  if(t > 10000){
-      //这个是M3508.c中的函数
-// //		  PID_M3508_CAN1(0, -45, 0, 0);
-// //		  PID_M3508_CAN2(0, 0, 45, 0);
-// 	  set_motor_current_can1(0, 0, 0, 0);
-// 	  set_motor_current_can2(0, 0, 0, 0);
-      //这个是更新版的3508函数
+
       PID_Calc_SetSpeed(0, 0);
       PID_Calc_SetSpeed(1, 0);
 
@@ -500,6 +489,7 @@ void MPU_Config(void)
 void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 {
   /* USER CODE BEGIN Callback 0 */
+	//开个定时器中断，稳定发送3508电机指令
 	  if (htim->Instance == TIM1)
 	  {
 		  send_current();
