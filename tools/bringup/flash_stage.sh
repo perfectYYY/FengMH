@@ -18,6 +18,7 @@ Flash options:
 Examples:
   tools/bringup/flash_stage.sh board
   tools/bringup/flash_stage.sh --method openocd board
+  tools/bringup/flash_stage.sh imu
   tools/bringup/flash_stage.sh --method openocd go_leg_hold --leg FL
   tools/bringup/flash_stage.sh m3508_jog --wheel FL --speed 0.3
 USAGE
@@ -93,6 +94,7 @@ case "$stage_arg" in
     5|go_leg_hold|go-leg-hold) stage_name="05_go_leg_hold" ;;
     6|stand_low|stand-low) stage_name="06_stand_low" ;;
     7|trot_low|trot-low) stage_name="07_trot_low" ;;
+    8|imu|imu_test|imu-test) stage_name="08_imu_test" ;;
     100|normal) stage_name="99_normal" ;;
     *) echo "Unknown stage after build: $stage_arg" >&2; exit 2 ;;
 esac

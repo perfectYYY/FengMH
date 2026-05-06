@@ -183,9 +183,9 @@ int main(void)
   MX_USART1_UART_Init();
   MX_USART2_UART_Init();
   MX_USART3_UART_Init();
-  MX_SPI2_Init();
   MX_FDCAN1_Init();
   MX_FDCAN2_Init();
+  MX_SPI2_Init();
   /* USER CODE BEGIN 2 */
 #if USE_LEGACY_MAIN
   PID_M3508_CAN_Init();

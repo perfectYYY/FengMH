@@ -17,6 +17,7 @@ Stages:
   go_leg_hold    5   selected leg GO low-gain stand hold
   stand_low      6   all legs low-gain stand hold
   trot_low       7   all legs low-gain, tiny trot allowed by USB command
+  imu            8   BMI088 read + USB telemetry, no motor task
   normal       100   normal firmware behavior
 
 Examples:
@@ -56,6 +57,7 @@ case "$stage_arg" in
     5|go_leg_hold|go-leg-hold) stage=5; stage_name="05_go_leg_hold" ;;
     6|stand_low|stand-low) stage=6; stage_name="06_stand_low" ;;
     7|trot_low|trot-low) stage=7; stage_name="07_trot_low" ;;
+    8|imu|imu_test|imu-test) stage=8; stage_name="08_imu_test" ;;
     100|normal) stage=100; stage_name="99_normal" ;;
     -h|--help|help) usage; exit 0 ;;
     *) echo "Unknown stage: $stage_arg" >&2; usage; exit 2 ;;

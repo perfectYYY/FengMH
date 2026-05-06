@@ -5,7 +5,7 @@
  *   - 加速度计 (ACC): ±3G ~ ±24G, ODR up to 1600Hz
  *   - 陀螺仪 (GYRO):  ±125dps ~ ±2000dps, ODR up to 2000Hz
  *
- * SPI2 总线, 模式0 (CPOL=0 CPHA=1), 软 NSS,
+ * SPI2 总线, 模式0 (CPOL=0 CPHA=1Edge), 软 NSS,
  * 通过 bsp_spi 抽象层访问, 支持 host mock 测试。
  */
 #ifndef APP_DEVICE_IMU_BMI088_H_
@@ -101,6 +101,7 @@ app_err_t imu_bmi088_init(void);
 app_err_t imu_bmi088_read(imu_bmi088_data_t* data);
 app_err_t imu_bmi088_set_accel_range(imu_bmi088_accel_range_t range);
 app_err_t imu_bmi088_set_gyro_range(imu_bmi088_gyro_range_t range);
+uint8_t   imu_bmi088_is_ready(void);
 
 #ifdef __cplusplus
 }

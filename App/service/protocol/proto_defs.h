@@ -26,6 +26,7 @@ extern "C" {
 #define PROTO_FUNC_STATE        0x80
 #define PROTO_FUNC_MOTOR_STATE  0x81
 #define PROTO_FUNC_LOG_MIRROR   0x82
+#define PROTO_FUNC_IMU_STATE    0x83
 #define PROTO_FUNC_EVENT        0x8F
 
 typedef struct __attribute__((packed)) {
