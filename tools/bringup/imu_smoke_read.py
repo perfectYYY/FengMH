@@ -16,7 +16,20 @@ import time
 
 HEAD = b"\x55\xAA"
 FUNC_IMU_STATE = 0x83
-PAYLOAD_STRUCT = struct.Struct("<IIhBBffffff f".replace(" ", ""))
+PAYLOAD_STRUCT = struct.Struct("<IIhhhBBBBBBBBBfffffff")
+STAGE_NAMES = {
+    0: "none",
+    1: "acc_initial_id",
+    2: "acc_softreset",
+    3: "acc_chip_id",
+    4: "acc_cfg",
+    5: "gyro_initial_id",
+    6: "gyro_softreset",
+    7: "gyro_chip_id",
+    8: "gyro_cfg",
+    9: "ready",
+    10: "read",
+}
 
 
 def checksum(frame_without_sum: bytes) -> int:
@@ -82,13 +95,58 @@ def main() -> int:
         if func != FUNC_IMU_STATE or len(payload) != PAYLOAD_STRUCT.size:
             continue
 
-        seq, uptime_ms, err, ready, status, ax, ay, az, gx, gy, gz, temp_c = PAYLOAD_STRUCT.unpack(payload)
+        (
+            seq,
+            uptime_ms,
+            err,
+            diag_err,
+            diag_io_err,
+            ready,
+            status,
+            diag_stage,
+            diag_reg,
+            diag_val,
+            acc_initial_id,
+            acc_chip_id,
+            gyro_initial_id,
+            gyro_chip_id,
+            ax,
+            ay,
+            az,
+            gx,
+            gy,
+            gz,
+            temp_c,
+        ) = PAYLOAD_STRUCT.unpack(payload)
         accel_norm = math.sqrt(ax * ax + ay * ay + az * az)
         gyro_norm = math.sqrt(gx * gx + gy * gy + gz * gz)
-        last = (seq, uptime_ms, err, ready, status, accel_norm, gyro_norm, temp_c)
+        stage_name = STAGE_NAMES.get(diag_stage, f"stage_{diag_stage}")
+        last = (
+            seq,
+            uptime_ms,
+            err,
+            ready,
+            status,
+            stage_name,
+            diag_err,
+            diag_io_err,
+            diag_reg,
+            diag_val,
+            acc_initial_id,
+            acc_chip_id,
+            gyro_initial_id,
+            gyro_chip_id,
+            accel_norm,
+            gyro_norm,
+            temp_c,
+        )
 
         print(
             f"seq={seq:6d} t={uptime_ms:8d}ms err={err:3d} ready={ready} status={status} "
+            f"diag={stage_name} derr={diag_err:3d} io={diag_io_err:3d} "
+            f"reg=0x{diag_reg:02X} val=0x{diag_val:02X} "
+            f"ids=acc0:0x{acc_initial_id:02X}/acc:0x{acc_chip_id:02X} "
+            f"gyro0:0x{gyro_initial_id:02X}/gyro:0x{gyro_chip_id:02X} "
             f"acc=[{ax:+7.3f} {ay:+7.3f} {az:+7.3f}] |a|={accel_norm:6.3f} "
             f"gyro=[{gx:+8.4f} {gy:+8.4f} {gz:+8.4f}] |g|={gyro_norm:7.4f} "
             f"temp={temp_c:6.2f}C"

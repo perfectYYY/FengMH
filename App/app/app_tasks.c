@@ -39,13 +39,10 @@ void app_tasks_create(void) {
         return;
     }
 
-    task_comm_init();
-
     if (APP_BRINGUP_STAGE == APP_BRINGUP_STAGE_IMU_TEST) {
         task_imu_test_init();
 #if APP_TARGET_MCU
         osThreadNew(task_log_entry,      NULL, &s_attr_log);
-        osThreadNew(task_comm_entry,     NULL, &s_attr_comm);
         osThreadNew(task_imu_test_entry, NULL, &s_attr_imu);
         LOGI("app_tasks_create: IMU test tasks spawned");
 #else
@@ -53,6 +50,8 @@ void app_tasks_create(void) {
 #endif
         return;
     }
+
+    task_comm_init();
 
     /* 业务初始化：注册 USB 解析器 + chassis 步态 */
     task_chassis_init();

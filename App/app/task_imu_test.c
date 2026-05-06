@@ -23,6 +23,7 @@
 static const char* TAG = "IMUTEST";
 
 #define IMU_TEST_PERIOD_MS          10U
+#define IMU_TEST_BOOT_WAIT_MS      800U
 #define IMU_TEST_LOG_PERIOD_MS      1000U
 #define IMU_TEST_USB_PERIOD_MS      20U
 
@@ -31,8 +32,17 @@ typedef struct {
     uint32_t seq;
     uint32_t uptime_ms;
     int16_t  err;
+    int16_t  diag_err;
+    int16_t  diag_io_err;
     uint8_t  ready;
     uint8_t  status;
+    uint8_t  diag_stage;
+    uint8_t  diag_reg;
+    uint8_t  diag_val;
+    uint8_t  acc_initial_id;
+    uint8_t  acc_chip_id;
+    uint8_t  gyro_initial_id;
+    uint8_t  gyro_chip_id;
     float    accel[3];
     float    gyro[3];
     float    temp_c;
@@ -43,19 +53,32 @@ static uint32_t s_seq;
 static uint32_t s_ok_cnt;
 static uint32_t s_err_cnt;
 static app_err_t s_last_err = APP_ERR_UNINIT;
+static app_err_t s_init_err = APP_ERR_UNINIT;
 
 static void imu_test_send_frame(const imu_bmi088_data_t* data,
                                 app_err_t err,
                                 uint32_t now_ms) {
     payload_imu_state_t payload;
+    imu_bmi088_diag_t diag;
     uint8_t frame[80];
     int n;
 
     memset(&payload, 0, sizeof(payload));
+    memset(&diag, 0, sizeof(diag));
+    imu_bmi088_get_diag(&diag);
     payload.seq = s_seq;
     payload.uptime_ms = now_ms;
     payload.err = (int16_t)err;
+    payload.diag_err = (int16_t)diag.err;
+    payload.diag_io_err = (int16_t)diag.io_err;
     payload.ready = imu_bmi088_is_ready();
+    payload.diag_stage = (uint8_t)diag.stage;
+    payload.diag_reg = diag.reg;
+    payload.diag_val = diag.val;
+    payload.acc_initial_id = diag.acc_initial_id;
+    payload.acc_chip_id = diag.acc_chip_id;
+    payload.gyro_initial_id = diag.gyro_initial_id;
+    payload.gyro_chip_id = diag.gyro_chip_id;
 
     if (data) {
         payload.status = data->status;
@@ -79,6 +102,7 @@ void task_imu_test_init(void) {
     s_ok_cnt = 0U;
     s_err_cnt = 0U;
     s_last_err = imu_bmi088_is_ready() ? APP_OK : APP_ERR_UNINIT;
+    s_init_err = APP_ERR_UNINIT;
     LOGI("imu board test init: ready=%u", (unsigned)imu_bmi088_is_ready());
 }
 
@@ -92,10 +116,15 @@ void task_imu_test_entry(void* arg) {
     uint32_t last_log_ms = 0U;
     uint32_t last_usb_ms = 0U;
 
+    osDelay(IMU_TEST_BOOT_WAIT_MS);
+    s_init_err = imu_bmi088_init();
+    s_last_err = s_init_err;
+    LOGI("imu init result: err=%d ready=%u", (int)s_init_err, (unsigned)imu_bmi088_is_ready());
+
     for (;;) {
         uint32_t now_ms = (uint32_t)bsp_time_now_ms();
         imu_bmi088_data_t data;
-        app_err_t err = imu_bmi088_read(&data);
+        app_err_t err = (s_init_err == APP_OK) ? imu_bmi088_read(&data) : s_init_err;
 
         s_seq++;
         s_last_err = err;
