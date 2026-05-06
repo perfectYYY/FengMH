@@ -21,6 +21,7 @@
 #include "cmsis_os.h"
 #include "dma.h"
 #include "fdcan.h"
+#include "tim.h"
 #include "usart.h"
 #include "usb_device.h"
 #include "gpio.h"
@@ -37,7 +38,7 @@
  *     不要再回头改 main.c。
  */
 #ifndef USE_LEGACY_MAIN
-#define USE_LEGACY_MAIN 0
+#define USE_LEGACY_MAIN 1
 #endif
 
 #if USE_LEGACY_MAIN
@@ -120,7 +121,28 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart){
 }
 
 //3508电机的can收发回调函数
+void HAL_FDCAN_RxFifo0Callback(FDCAN_HandleTypeDef *hfdcan, uint32_t RxFifo0ITs)
+{
+    FDCAN_RxHeaderTypeDef RxHeader;
+    uint8_t RxData[8];
 
+    if ((RxFifo0ITs & FDCAN_IT_RX_FIFO0_NEW_MESSAGE) != 0) {
+        // 必须使用 while 循环将 FIFO 彻底读空，防止多电机并发导致丢帧
+        while (HAL_FDCAN_GetRxFifoFillLevel(hfdcan, FDCAN_RX_FIFO0) > 0) {
+            if (HAL_FDCAN_GetRxMessage(hfdcan, FDCAN_RX_FIFO0, &RxHeader, RxData) == HAL_OK) {
+
+                // FDCAN1：接收 3508 的电机 1、2
+                if (hfdcan->Instance == FDCAN1) {
+                    D3508_Decode(RxData, (uint16_t)RxHeader.Identifier);
+                }
+                // FDCAN2：接收 3508 的电机 3、4
+                else if (hfdcan->Instance == FDCAN2) {
+                	D3508_Decode(RxData, (uint16_t)RxHeader.Identifier);
+                }
+            }
+        }
+    }
+}
 
 void Init_up_down(vector *so){
 	so[0].data[0] = 0;
@@ -191,9 +213,10 @@ int main(void)
   MX_USART3_UART_Init();
   MX_FDCAN1_Init();
   MX_FDCAN2_Init();
+  MX_TIM2_Init();
   /* USER CODE BEGIN 2 */
 #if USE_LEGACY_MAIN
-  PID_M3508_CAN_Init();
+//  PID_M3508_CAN_Init();
   //初始化宇树电机的回传数据，现在是只开了usart2，自己用的时候要用其他串口记得自己进函数里开；
   for(int i = 0; i < 12; i ++){
 	  MotorInstance_Init(&motor_instance[i], i);
@@ -204,6 +227,8 @@ int main(void)
   FDCAN2_Filter_Init();
   D3508_Init();
 
+  //启动定时器中断
+  HAL_TIM_Base_Start_IT(&htim2);
   Init_up_down(up_down);
 
   //初始化狗腿参数,测试时必定修改
@@ -284,6 +309,7 @@ int main(void)
 
   HAL_Delay(2000);
 #endif /* USE_LEGACY_MAIN */
+#if !USE_LEGACY_MAIN
   /* USER CODE END 2 */
 
   /* Init scheduler */
@@ -297,6 +323,7 @@ int main(void)
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
+#endif /* USE_LEGACY_MAIN */
   while (1)
   {
 #if USE_LEGACY_MAIN
@@ -344,9 +371,9 @@ int main(void)
 // 	  set_motor_current_can1(-4000, -4000, 0, 0);
 // 	  set_motor_current_can2(0, 0, 4000, 4000);
       //这个是更新版的3508函数
-      PID_Calc_SetSpeed(2, 45);
-      PID_Calc_SetSpeed(3, 45);
-		  send_current();
+      PID_Calc_SetSpeed(0, 450);
+      PID_Calc_SetSpeed(1, 450);
+
       HAL_Delay(1);
 	  }
 	  if(t > 10000){
@@ -356,9 +383,9 @@ int main(void)
 // 	  set_motor_current_can1(0, 0, 0, 0);
 // 	  set_motor_current_can2(0, 0, 0, 0);
       //这个是更新版的3508函数
-      PID_Calc_SetSpeed(2, 0);
-      PID_Calc_SetSpeed(3, 0);
-      send_current();
+      PID_Calc_SetSpeed(0, 0);
+      PID_Calc_SetSpeed(1, 0);
+
 		  HAL_Delay(1);
 	  }
 	  t += 1;//简易定时器
@@ -473,7 +500,10 @@ void MPU_Config(void)
 void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 {
   /* USER CODE BEGIN Callback 0 */
-
+	  if (htim->Instance == TIM1)
+	  {
+		  send_current();
+	  }
   /* USER CODE END Callback 0 */
   if (htim->Instance == TIM1)
   {

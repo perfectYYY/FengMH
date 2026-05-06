@@ -1,4 +1,4 @@
-#include "3508_driver.h"
+#include "3508_motor.h"
 #include <string.h>
 #include "main.h"
 
@@ -341,50 +341,6 @@ void D3508_Decode(uint8_t* RxData, uint16_t ID) {
     }
     m->total_angle = m->total_round * 8192 + m->cur_angle;
 
-}
-
-static int D3508_IsExpectedFeedback(FDCAN_HandleTypeDef *hfdcan, uint32_t id)
-{
-    if (hfdcan == &hfdcan1) {
-        return (id == 0x201U || id == 0x202U);
-    }
-    if (hfdcan == &hfdcan2) {
-        return (id == 0x203U || id == 0x204U);
-    }
-    return 0;
-}
-
-static void D3508_RxFifo0Callback(FDCAN_HandleTypeDef *hfdcan, uint32_t RxFifo0ITs)
-{
-    FDCAN_RxHeaderTypeDef rx_header;
-    uint8_t rx_data[8];
-
-    if ((RxFifo0ITs & FDCAN_IT_RX_FIFO0_NEW_MESSAGE) == 0U) {
-        return;
-    }
-
-    while (HAL_FDCAN_GetRxFifoFillLevel(hfdcan, FDCAN_RX_FIFO0) > 0U) {
-        if (HAL_FDCAN_GetRxMessage(hfdcan, FDCAN_RX_FIFO0, &rx_header, rx_data) != HAL_OK) {
-            return;
-        }
-
-        if (rx_header.IdType != FDCAN_STANDARD_ID ||
-            rx_header.RxFrameType != FDCAN_DATA_FRAME ||
-            rx_header.DataLength != FDCAN_DLC_BYTES_8) {
-            continue;
-        }
-
-        if (!D3508_IsExpectedFeedback(hfdcan, rx_header.Identifier)) {
-            continue;
-        }
-
-        D3508_Decode(rx_data, (uint16_t)rx_header.Identifier);
-    }
-}
-
-void HAL_FDCAN_RxFifo0Callback(FDCAN_HandleTypeDef *hfdcan, uint32_t RxFifo0ITs)
-{
-    D3508_RxFifo0Callback(hfdcan, RxFifo0ITs);
 }
 
 
