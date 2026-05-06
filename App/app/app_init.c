@@ -14,6 +14,7 @@
 #include "bsp_uart.h"
 #include "bsp_usb_cdc.h"
 #include "bsp_spi.h"
+#include "config.h"
 #include "motor_registry.h"
 #include "motor_go.h"
 #include "motor_m3508.h"
@@ -26,8 +27,15 @@ app_err_t app_init(void) {
     log_set_global_level(LOG_LVL_INFO);
     LOGI("FengMH app_init start");
 
-    /* BSP 层初始化 */
     bsp_time_init();
+
+    if (APP_BRINGUP_STAGE == APP_BRINGUP_STAGE_USB_CDC_TEST) {
+        bsp_usb_cdc_init();
+        LOGI("FengMH app_init done (usb cdc test)");
+        return APP_OK;
+    }
+
+    /* BSP 层初始化 */
     bsp_fdcan_init();
     bsp_uart_init(BSP_UART_2);
     bsp_uart_init(BSP_UART_3);

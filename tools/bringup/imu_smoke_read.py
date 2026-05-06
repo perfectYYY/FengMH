@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Read BMI088 smoke-test telemetry from USB CDC.
 
-The board must run APP_BRINGUP_STAGE_IMU_TEST. The firmware sends
+Run tools/bringup/usb_cdc_smoke.py first. Then flash APP_BRINGUP_STAGE_IMU_TEST.
+The firmware sends
 PROTO_FUNC_IMU_STATE (0x83) frames with packed payload_imu_state_t.
 """
 from __future__ import annotations

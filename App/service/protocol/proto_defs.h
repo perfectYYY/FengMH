@@ -21,12 +21,15 @@ extern "C" {
 #define PROTO_FUNC_ARM_CMD      0x11
 #define PROTO_FUNC_GAIT_CMD     0x12
 #define PROTO_FUNC_STATUS_REQ   0x20
+#define PROTO_FUNC_USB_CDC_PING 0x21
 
 /* 上行（下位机 → 上位机） */
 #define PROTO_FUNC_STATE        0x80
 #define PROTO_FUNC_MOTOR_STATE  0x81
 #define PROTO_FUNC_LOG_MIRROR   0x82
 #define PROTO_FUNC_IMU_STATE    0x83
+#define PROTO_FUNC_USB_CDC_STATE 0x84
+#define PROTO_FUNC_USB_CDC_PONG 0x85
 #define PROTO_FUNC_EVENT        0x8F
 
 typedef struct __attribute__((packed)) {
