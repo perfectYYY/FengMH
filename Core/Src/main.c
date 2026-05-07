@@ -22,6 +22,7 @@
 #include "dma.h"
 #include "fdcan.h"
 #include "spi.h"
+#include "tim.h"
 #include "usart.h"
 #include "usb_device.h"
 #include "gpio.h"
@@ -38,25 +39,28 @@
  *     不要再回头改 main.c。
  */
 #ifndef USE_LEGACY_MAIN
-#define USE_LEGACY_MAIN 0
+#define USE_LEGACY_MAIN 1
 #endif
 
 #if USE_LEGACY_MAIN
 #include "GO-motor.h"
 #include "gait_plan.h"
 #include <string.h>
-#include "M3508.h"
+#include "3508_motor.h"
 #endif
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
 #if USE_LEGACY_MAIN
-//8010电池所需结构体
+//8010电机所需结构体
 static MotorBack Motor_r;
 static MotorInstance motor_instance[MOTOR_NUM];//4路485线，我就记作每组3个电机，从&huart1到&huart4电机依次从【0】到【11】，id与huart的对应办法是（id+3）/3就行
 int idx;//转存MotorInstance motor_instance[MOTOR_NUM]专用的整数变量
 MotorCmd GO1;//结构体变量，一个用于中转的宇树8010命令的结构体
+
+//M3508电机所需结构体
+extern Motor_3508_T Motors[4];
 
 //步态参数
 gait_action Gait;
@@ -114,6 +118,30 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart){
 	}
 
 	memset(&Motor_r, 0, sizeof(MotorBack));
+}
+
+//3508电机的can收发回调函数
+void HAL_FDCAN_RxFifo0Callback(FDCAN_HandleTypeDef *hfdcan, uint32_t RxFifo0ITs)
+{
+    FDCAN_RxHeaderTypeDef RxHeader;
+    uint8_t RxData[8];
+
+    if ((RxFifo0ITs & FDCAN_IT_RX_FIFO0_NEW_MESSAGE) != 0) {
+        // 必须使用 while 循环将 FIFO 彻底读空，防止多电机并发导致丢帧
+        while (HAL_FDCAN_GetRxFifoFillLevel(hfdcan, FDCAN_RX_FIFO0) > 0) {
+            if (HAL_FDCAN_GetRxMessage(hfdcan, FDCAN_RX_FIFO0, &RxHeader, RxData) == HAL_OK) {
+
+                // FDCAN1：接收 3508 的电机 1、2
+                if (hfdcan->Instance == FDCAN1) {
+                    D3508_Decode(RxData, (uint16_t)RxHeader.Identifier);
+                }
+                // FDCAN2：接收 3508 的电机 3、4
+                else if (hfdcan->Instance == FDCAN2) {
+                    D3508_Decode(RxData, (uint16_t)RxHeader.Identifier);
+                }
+            }
+        }
+    }
 }
 
 void Init_up_down(vector *so){
@@ -186,14 +214,22 @@ int main(void)
   MX_FDCAN1_Init();
   MX_FDCAN2_Init();
   MX_SPI2_Init();
+  MX_TIM2_Init();
   /* USER CODE BEGIN 2 */
 #if USE_LEGACY_MAIN
-  PID_M3508_CAN_Init();
+//  PID_M3508_CAN_Init();
   //初始化宇树电机的回传数据，现在是只开了usart2，自己用的时候要用其他串口记得自己进函数里开；
   for(int i = 0; i < 12; i ++){
 	  MotorInstance_Init(&motor_instance[i], i);
   }
 
+  //初始化M3508电机数据
+  FDCAN1_Filter_Init();
+  FDCAN2_Filter_Init();
+  D3508_Init();
+
+  //启动定时器中断
+  HAL_TIM_Base_Start_IT(&htim2);
   Init_up_down(up_down);
 
   //初始化狗腿参数,测试时必定修改
@@ -274,6 +310,7 @@ int main(void)
 
   HAL_Delay(2000);
 #endif /* USE_LEGACY_MAIN */
+#if !USE_LEGACY_MAIN
   /* USER CODE END 2 */
 
   /* Init scheduler */
@@ -287,6 +324,7 @@ int main(void)
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
+#endif /* USE_LEGACY_MAIN */
   while (1)
   {
 #if USE_LEGACY_MAIN
@@ -328,17 +366,17 @@ int main(void)
 	  }
 
 	  if(t > 500 && t <= 2000){
-//		  PID_M3508_CAN1(0, -45, 0, 0);
-//		  PID_M3508_CAN2(0, 0, 45, 0);
-	  set_motor_current_can1(-4000, -4000, 0, 0);
-	  set_motor_current_can2(0, 0, 4000, 4000);
-		  HAL_Delay(1);
+
+      PID_Calc_SetSpeed(0, 450);
+      PID_Calc_SetSpeed(1, 450);
+
+      HAL_Delay(1);
 	  }
 	  if(t > 10000){
-//		  PID_M3508_CAN1(0, -45, 0, 0);
-//		  PID_M3508_CAN2(0, 0, 45, 0);
-	  set_motor_current_can1(0, 0, 0, 0);
-	  set_motor_current_can2(0, 0, 0, 0);
+
+      PID_Calc_SetSpeed(0, 0);
+      PID_Calc_SetSpeed(1, 0);
+
 		  HAL_Delay(1);
 	  }
 	  t += 1;//简易定时器
@@ -416,6 +454,7 @@ void SystemClock_Config(void)
  * 当 USE_LEGACY_MAIN=0 时，旧代码的回调不再注册，
  * 新架构通过 bsp_fdcan / bsp_uart 接收数据。
  */
+#if !USE_LEGACY_MAIN
 
 /* FDCAN RX 回调 → bsp_fdcan */
 extern void bsp_fdcan_hal_rxfifo0_cb(FDCAN_HandleTypeDef *hfdcan, uint32_t RxFifo0ITs);
@@ -434,6 +473,8 @@ extern void bsp_uart_hal_tx_done(UART_HandleTypeDef *huart);
 void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart) {
     bsp_uart_hal_tx_done(huart);
 }
+
+#endif /* !USE_LEGACY_MAIN */
 
 /* USER CODE END 4 */
 
@@ -477,7 +518,11 @@ void MPU_Config(void)
 void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 {
   /* USER CODE BEGIN Callback 0 */
-
+	//开个定时器中断，稳定发送3508电机指令
+	  if (htim->Instance == TIM1)
+	  {
+		  send_current();
+	  }
   /* USER CODE END Callback 0 */
   if (htim->Instance == TIM1)
   {
