@@ -57,6 +57,7 @@ set(APP_DIRS
         service/pid
         service/protocol
         service/gait
+        service/chassis
         service/leg
         service/kinematics
         service/script

@@ -13,11 +13,13 @@ Flash options:
   --method auto|openocd|stm32prog|st-flash
   --openocd-bin PATH
   --openocd-scripts DIR
-  --cmsis-dap-vid-pid VID:PID   default: 0x303a:0x40ff for ICWorkshop PowerDebugger
+  --cmsis-dap-vid-pid VID:PID   default: 0xFAED:0x4870 for Horco CMSIS-DAP
 
 Examples:
   tools/bringup/flash_stage.sh board
   tools/bringup/flash_stage.sh --method openocd board
+  tools/bringup/flash_stage.sh usb_cdc
+  tools/bringup/flash_stage.sh imu
   tools/bringup/flash_stage.sh --method openocd go_leg_hold --leg FL
   tools/bringup/flash_stage.sh m3508_jog --wheel FL --speed 0.3
 USAGE
@@ -33,7 +35,7 @@ fi
 method="auto"
 openocd_bin="${OPENOCD_BIN:-}"
 openocd_scripts="${OPENOCD_SCRIPTS:-}"
-cmsis_dap_vid_pid="${OPENOCD_CMSIS_DAP_VID_PID:-0x303a:0x40ff}"
+cmsis_dap_vid_pid="${OPENOCD_CMSIS_DAP_VID_PID:-0xFAED:0x4870}"
 build_args=()
 
 while [[ $# -gt 0 ]]; do
@@ -93,6 +95,8 @@ case "$stage_arg" in
     5|go_leg_hold|go-leg-hold) stage_name="05_go_leg_hold" ;;
     6|stand_low|stand-low) stage_name="06_stand_low" ;;
     7|trot_low|trot-low) stage_name="07_trot_low" ;;
+    8|usb_cdc|usb-cdc|cdc|usb) stage_name="08_usb_cdc_test" ;;
+    9|imu|imu_test|imu-test) stage_name="09_imu_test" ;;
     100|normal) stage_name="99_normal" ;;
     *) echo "Unknown stage after build: $stage_arg" >&2; exit 2 ;;
 esac

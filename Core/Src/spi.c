@@ -96,8 +96,8 @@ void HAL_SPI_MspInit(SPI_HandleTypeDef* spiHandle)
     __HAL_RCC_GPIOB_CLK_ENABLE();
     /**SPI2 GPIO Configuration
     PC1     ------> SPI2_MOSI
-    PC2_C   ------> SPI2_MISO
-    PB13    ------> SPI2_SCK
+    PC2_C     ------> SPI2_MISO
+    PB13     ------> SPI2_SCK
     */
     GPIO_InitStruct.Pin = GPIO_PIN_1|GPIO_PIN_2;
     GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
@@ -132,8 +132,8 @@ void HAL_SPI_MspDeInit(SPI_HandleTypeDef* spiHandle)
 
     /**SPI2 GPIO Configuration
     PC1     ------> SPI2_MOSI
-    PC2_C   ------> SPI2_MISO
-    PB13    ------> SPI2_SCK
+    PC2_C     ------> SPI2_MISO
+    PB13     ------> SPI2_SCK
     */
     HAL_GPIO_DeInit(GPIOC, GPIO_PIN_1|GPIO_PIN_2);
 

@@ -25,6 +25,7 @@
 #include "gait_trot.h"
 #include "gait_machine.h"
 #include "gait_params.h"
+#include "chassis_planner.h"
 #include "../script/gait_script.h"
 #include "../script/script_builtin.h"
 #include "leg_controller.h"
@@ -58,6 +59,9 @@ static gait_if_t*       s_script;
 static chassis_mode_t   s_mode = CHASSIS_MODE_AUTO;
 static active_t         s_active = ACT_STAND;
 static uint32_t         s_online_timeout_ms = 500;
+static gait_params_t    s_trot_params;
+static uint8_t          s_manual_gait_hold = 0U;
+static float            s_last_effective_wz = 0.0f;
 
 static const motor_logical_id_t WHEEL_ID[GAIT_LEG_NUM] = {
     MOTOR_ID_FL_WHEEL, MOTOR_ID_FR_WHEEL, MOTOR_ID_RL_WHEEL, MOTOR_ID_RR_WHEEL
@@ -86,6 +90,8 @@ static const gait_params_t S_OFFLINE_MARCH_PARAMS = {
 static uint8_t  s_offline_seq_active = 0U;
 static uint8_t  s_offline_seq_done = 0U;
 static uint32_t s_offline_seq_start_ms = 0U;
+static steer_mode_t s_steer_mode = STEER_MODE_OFF;
+static chassis_plan_t s_chassis_plan;
 
 static int bringup_is_normal(void) {
     return APP_BRINGUP_STAGE >= APP_BRINGUP_STAGE_NORMAL;
@@ -152,8 +158,54 @@ static void bringup_apply_wheel_jog(void) {
     }
 }
 
+static float controller_height_from_body(float body_height_m) {
+    if (!isfinite(body_height_m) || body_height_m == 0.0f) {
+        return -0.18f;
+    }
+    return (body_height_m > 0.0f) ? -body_height_m : body_height_m;
+}
+
+static void apply_controller_height(const gait_params_t* p) {
+    if (!p) return;
+    leg_controller_set_stand_height(controller_height_from_body(p->body_height_m));
+}
+
+static int validate_trot_params(const gait_params_t* p) {
+    if (!p) return 0;
+    if (!isfinite(p->body_height_m) || fabsf(p->body_height_m) < 0.05f ||
+        fabsf(p->body_height_m) > 0.40f) {
+        return 0;
+    }
+    if (!isfinite(p->step_length_m) || p->step_length_m < 0.0f || p->step_length_m > 0.20f) {
+        return 0;
+    }
+    if (!isfinite(p->step_height_m) || p->step_height_m < 0.0f || p->step_height_m > 0.12f) {
+        return 0;
+    }
+    if (!isfinite(p->period_s) || p->period_s < 0.10f || p->period_s > 5.0f) {
+        return 0;
+    }
+    if (!isfinite(p->duty) || p->duty < 0.05f || p->duty > 0.95f) {
+        return 0;
+    }
+    for (int i = 0; i < GAIT_LEG_NUM; i++) {
+        if (!isfinite(p->phase_offset[i])) {
+            return 0;
+        }
+    }
+    if (!isfinite(p->touchdown_thresh)) {
+        return 0;
+    }
+    return 1;
+}
+
 static int request_gait(gait_if_t* g, const gait_params_t* p, float blend) {
-    if (s_gm.current == g) return APP_OK;
+    if (s_gm.current == g) {
+        if (g && g->ops && g->ops->set_param && p) {
+            return g->ops->set_param(g, p);
+        }
+        return APP_OK;
+    }
     /* gait_machine_request 只在 RUN 态接受切换；BLEND 中先用 set 强切 */
     if (s_gm.state != GM_STATE_RUN) {
         return gait_machine_set(&s_gm, g, p);
@@ -167,16 +219,21 @@ void task_chassis_init(void) {
     s_script = gait_script_create();
     gait_machine_init(&s_gm);
     gait_machine_set(&s_gm, s_stand, &GAIT_PARAMS_STAND_DEFAULT);
+    s_trot_params = GAIT_PARAMS_TROT_DEFAULT;
     leg_controller_init(&s_lc);
     leg_controller_bind_from_registry(&s_lc);
     bringup_configure_leg_controller();
     s_active = ACT_STAND;
     s_mode   = CHASSIS_MODE_AUTO;          /* host 单测可重复 init 时需复位 */
     s_online_timeout_ms = 500;
+    s_manual_gait_hold = 0U;
+    s_last_effective_wz = 0.0f;
 
     /* BMI088 转向初始化 */
     attitude_estimator_init();
     steer_controller_init();
+    chassis_planner_init();
+    s_steer_mode = STEER_MODE_OFF;
 
     s_offline_seq_active = 0U;
     s_offline_seq_done = 0U;
@@ -197,6 +254,7 @@ uint32_t task_chassis_get_online_timeout_ms(void)        { return s_online_timeo
 
 int task_chassis_play_script(const script_t* s, float blend_dur_s) {
     if (!s) return APP_ERR_INVALID_ARG;
+    s_manual_gait_hold = 0U;
     int r = gait_script_set_script(s_script, s);
     if (r != APP_OK) return r;
     r = request_gait(s_script, &GAIT_PARAMS_STAND_DEFAULT, blend_dur_s);
@@ -205,8 +263,46 @@ int task_chassis_play_script(const script_t* s, float blend_dur_s) {
 }
 
 int task_chassis_stop_script(float blend_dur_s) {
+    return task_chassis_start_stand(blend_dur_s);
+}
+
+int task_chassis_start_stand(float blend_dur_s) {
+    s_manual_gait_hold = 1U;
     int r = request_gait(s_stand, &GAIT_PARAMS_STAND_DEFAULT, blend_dur_s);
     if (r == APP_OK) s_active = ACT_STAND;
+    return r;
+}
+
+int task_chassis_set_trot_params(const gait_params_t* p) {
+    if (!validate_trot_params(p)) return APP_ERR_INVALID_ARG;
+    s_trot_params = *p;
+    if (s_active == ACT_TROT && s_gm.current == s_trot) {
+        apply_controller_height(&s_trot_params);
+        return request_gait(s_trot, &s_trot_params, 0.0f);
+    }
+    return APP_OK;
+}
+
+void task_chassis_get_trot_params(gait_params_t* out) {
+    if (!out) return;
+    *out = s_trot_params;
+}
+
+int task_chassis_start_trot(const gait_params_t* p, float blend_dur_s) {
+    if (!bringup_allow_trot()) return APP_ERR_BUSY;
+    if (p) {
+        int r = task_chassis_set_trot_params(p);
+        if (r != APP_OK) return r;
+    }
+    const gait_params_t* trot_params = bringup_is_normal() ?
+                                       &s_trot_params :
+                                       &S_BRINGUP_TROT_PARAMS;
+    apply_controller_height(trot_params);
+    int r = request_gait(s_trot, trot_params, blend_dur_s);
+    if (r == APP_OK) {
+        s_active = ACT_TROT;
+        s_manual_gait_hold = 1U;
+    }
     return r;
 }
 
@@ -225,6 +321,10 @@ float task_chassis_get_yaw(void) {
     return attitude_estimator_get_yaw();
 }
 
+float task_chassis_get_effective_wz(void) {
+    return s_last_effective_wz;
+}
+
 /* 是否处在"事实上的离线"状态 */
 static int is_offline(uint32_t now_ms) {
     if (s_mode == CHASSIS_MODE_STANDALONE) return 1;
@@ -235,27 +335,68 @@ static int is_offline(uint32_t now_ms) {
     return (now_ms - last) > s_online_timeout_ms;
 }
 
-/* 在线分支：根据 chassis_cmd 二选一 stand/trot */
-static void online_decide(void) {
-    task_comm_chassis_cmd_t cmd;
-    task_comm_get_chassis(&cmd);
-    float n = fabsf(cmd.vx) + fabsf(cmd.vy) + fabsf(cmd.wz);
-    if (n > 0.05f) {
+/* 在线分支：根据规划结果二选一 stand/trot */
+static void online_decide(const chassis_plan_t* plan) {
+    if (!plan) return;
+    if (plan->moving) {
         if (s_active != ACT_TROT) {
             const gait_params_t* trot_params = bringup_is_normal() ?
-                                               &GAIT_PARAMS_TROT_DEFAULT :
+                                               &plan->gait_params :
                                                &S_BRINGUP_TROT_PARAMS;
-            if (request_gait(s_trot, trot_params, 0.3f) == APP_OK) s_active = ACT_TROT;
+            apply_controller_height(trot_params);
+            if (request_gait(s_trot, trot_params, 0.3f) == APP_OK) {
+                s_active = ACT_TROT;
+                s_manual_gait_hold = 0U;
+            }
+        } else if (s_trot && s_trot->ops && s_trot->ops->set_param) {
+            const gait_params_t* trot_params = bringup_is_normal() ?
+                                               &plan->gait_params :
+                                               &S_BRINGUP_TROT_PARAMS;
+            apply_controller_height(trot_params);
+            (void)s_trot->ops->set_param(s_trot, trot_params);
         }
     } else {
         if (s_active != ACT_STAND) {
-            if (request_gait(s_stand, &GAIT_PARAMS_STAND_DEFAULT, 0.3f) == APP_OK) s_active = ACT_STAND;
+            if (task_chassis_start_stand(0.3f) == APP_OK) s_active = ACT_STAND;
         }
+    }
+}
+
+static void apply_plan_wheel_speed(gait_output_t* out, const chassis_plan_t* plan) {
+    if (!out || !plan) return;
+    for (int i = 0; i < GAIT_LEG_NUM; i++) {
+        out->leg[i].wheel_rads = plan->wheel_rads[i];
+    }
+}
+
+static void update_steering(float dt_s, const task_comm_chassis_cmd_t* cmd, float* wz_out) {
+    if (!cmd || !wz_out) return;
+
+    *wz_out = cmd->wz;
+
+    imu_bmi088_data_t imu_data;
+    if (imu_bmi088_read(&imu_data) == APP_OK) {
+        attitude_estimator_update(imu_data.gyro, imu_data.accel, dt_s);
+    }
+
+    steer_mode_t requested = (cmd->steer_mode == 1U) ? STEER_MODE_YAW : STEER_MODE_OFF;
+    if (requested != s_steer_mode) {
+        s_steer_mode = requested;
+        (void)steer_controller_set_mode(requested);
+    }
+
+    if (s_steer_mode == STEER_MODE_YAW && imu_bmi088_is_ready()) {
+        (void)steer_controller_set_target_yaw(cmd->target_yaw);
+        *wz_out = steer_controller_update(attitude_estimator_get_yaw(), dt_s);
     }
 }
 
 /* 离线分支：保留当前 SCRIPT；否则确保是 stand */
 static void offline_decide(uint32_t now_ms) {
+    if (s_manual_gait_hold && (s_active == ACT_STAND || s_active == ACT_TROT)) {
+        return;
+    }
+
     if (!s_offline_seq_active) {
         s_offline_seq_active = 1U;
         s_offline_seq_done = 0U;
@@ -310,6 +451,10 @@ static void offline_decide(uint32_t now_ms) {
 }
 
 void task_chassis_step_for_test(float dt_s, uint32_t now_ms) {
+    task_comm_chassis_cmd_t cmd;
+    float effective_wz = 0.0f;
+    uint8_t online = 0U;
+
 #if !APP_TARGET_HOST
     if (APP_BRINGUP_STAGE == APP_BRINGUP_STAGE_BOARD_ONLY) {
         return;
@@ -362,6 +507,19 @@ void task_chassis_step_for_test(float dt_s, uint32_t now_ms) {
     }
 #endif
 
+    task_comm_get_chassis(&cmd);
+    update_steering(dt_s, &cmd, &effective_wz);
+    s_last_effective_wz = effective_wz;
+
+    chassis_cmd_plan_t plan_cmd = {
+        .vx_m_s = cmd.vx,
+        .vy_m_s = cmd.vy,
+        .wz_rad_s = effective_wz,
+    };
+    (void)chassis_planner_update(&plan_cmd, &s_trot_params, &s_chassis_plan);
+
+    online = (uint8_t)!is_offline(now_ms);
+
     if (!bringup_allow_trot()) {
         s_offline_seq_active = 0U;
         s_offline_seq_done = 0U;
@@ -370,38 +528,19 @@ void task_chassis_step_for_test(float dt_s, uint32_t now_ms) {
                 s_active = ACT_STAND;
             }
         }
-    } else if (is_offline(now_ms)) {
+    } else if (!online) {
         offline_decide(now_ms);
     } else {
         s_offline_seq_active = 0U;
         s_offline_seq_done = 0U;
-        online_decide();
-    }
-
-    /* ─── BMI088 转向: IMU 读取 + 姿态估计 + 转向 PID ─── */
-    {
-        imu_bmi088_data_t imu_data;
-        if (imu_bmi088_read(&imu_data) == APP_OK) {
-            attitude_estimator_update(imu_data.gyro, imu_data.accel, dt_s);
-
-            /* 转向控制: 从 task_comm 获取 steer_mode, 若为 YAW 则运行 PID */
-            task_comm_chassis_cmd_t cmd;
-            task_comm_get_chassis(&cmd);
-            if (cmd.steer_mode == 1) {  /* STEER_MODE_YAW */
-                steer_controller_set_mode(1);  /* STEER_MODE_YAW */
-                steer_controller_set_target_yaw(cmd.target_yaw);
-            } else {
-                steer_controller_set_mode(0);  /* STEER_MODE_OFF */
-            }
-
-            float current_yaw = attitude_estimator_get_yaw();
-            (void)steer_controller_update(current_yaw, dt_s);
-            /* TODO: 将 steer PID 输出的 wz 修正传入 gait/leg_controller 实现转向 */
-        }
+        online_decide(&s_chassis_plan);
     }
 
     gait_output_t out;
     gait_machine_update(&s_gm, dt_s, &out);
+    if (online && bringup_allow_trot()) {
+        apply_plan_wheel_speed(&out, &s_chassis_plan);
+    }
     leg_controller_apply(&s_lc, &out);
 
 #if !APP_TARGET_HOST

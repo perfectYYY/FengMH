@@ -5,7 +5,7 @@
  *   - 加速度计 (ACC): ±3G ~ ±24G, ODR up to 1600Hz
  *   - 陀螺仪 (GYRO):  ±125dps ~ ±2000dps, ODR up to 2000Hz
  *
- * SPI2 总线, 模式0 (CPOL=0 CPHA=1), 软 NSS,
+ * SPI2 总线, 模式0 (CPOL=0 CPHA=1Edge), 软 NSS,
  * 通过 bsp_spi 抽象层访问, 支持 host mock 测试。
  */
 #ifndef APP_DEVICE_IMU_BMI088_H_
@@ -95,12 +95,40 @@ typedef struct {
     uint8_t status;    /* 0=OK */
 } imu_bmi088_data_t;
 
+typedef enum {
+    IMU_BMI088_DIAG_NONE = 0,
+    IMU_BMI088_DIAG_ACC_INITIAL_ID,
+    IMU_BMI088_DIAG_ACC_SOFTRESET,
+    IMU_BMI088_DIAG_ACC_CHIP_ID,
+    IMU_BMI088_DIAG_ACC_CFG,
+    IMU_BMI088_DIAG_GYRO_INITIAL_ID,
+    IMU_BMI088_DIAG_GYRO_SOFTRESET,
+    IMU_BMI088_DIAG_GYRO_CHIP_ID,
+    IMU_BMI088_DIAG_GYRO_CFG,
+    IMU_BMI088_DIAG_READY,
+    IMU_BMI088_DIAG_READ,
+} imu_bmi088_diag_stage_t;
+
+typedef struct {
+    imu_bmi088_diag_stage_t stage;
+    app_err_t err;
+    app_err_t io_err;
+    uint8_t reg;
+    uint8_t val;
+    uint8_t acc_initial_id;
+    uint8_t acc_chip_id;
+    uint8_t gyro_initial_id;
+    uint8_t gyro_chip_id;
+} imu_bmi088_diag_t;
+
 /* ─── API ─── */
 
 app_err_t imu_bmi088_init(void);
 app_err_t imu_bmi088_read(imu_bmi088_data_t* data);
 app_err_t imu_bmi088_set_accel_range(imu_bmi088_accel_range_t range);
 app_err_t imu_bmi088_set_gyro_range(imu_bmi088_gyro_range_t range);
+uint8_t   imu_bmi088_is_ready(void);
+void      imu_bmi088_get_diag(imu_bmi088_diag_t* out);
 
 #ifdef __cplusplus
 }

@@ -8,6 +8,7 @@
 
 #include "types.h"
 #include "config.h"
+#include "gait_if.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -21,11 +22,15 @@ extern "C" {
 #define PROTO_FUNC_ARM_CMD      0x11
 #define PROTO_FUNC_GAIT_CMD     0x12
 #define PROTO_FUNC_STATUS_REQ   0x20
+#define PROTO_FUNC_USB_CDC_PING 0x21
 
 /* 上行（下位机 → 上位机） */
 #define PROTO_FUNC_STATE        0x80
 #define PROTO_FUNC_MOTOR_STATE  0x81
 #define PROTO_FUNC_LOG_MIRROR   0x82
+#define PROTO_FUNC_IMU_STATE    0x83
+#define PROTO_FUNC_USB_CDC_STATE 0x84
+#define PROTO_FUNC_USB_CDC_PONG 0x85
 #define PROTO_FUNC_EVENT        0x8F
 
 typedef struct __attribute__((packed)) {
@@ -36,6 +41,25 @@ typedef struct __attribute__((packed)) {
 
 /* 扩展版: 增加 target_yaw + steer_mode (17 bytes)
  *   向后兼容: 旧协议 12 字节帧也接受, steer_mode 默认 0 */
+#define PROTO_CHASSIS_CMD_LEGACY_LEN   12u
+#define PROTO_CHASSIS_CMD_EXT_LEN      17u
+
+#define PROTO_GAIT_ACTION_STAND             0u
+#define PROTO_GAIT_ACTION_TROT              1u
+#define PROTO_GAIT_ACTION_SET_TROT_PARAMS   2u
+
+typedef struct __attribute__((packed)) {
+    uint8_t action;      /* PROTO_GAIT_ACTION_* */
+    uint8_t reserved[3];
+    float body_height_m;
+    float step_length_m;
+    float step_height_m;
+    float period_s;
+    float duty;
+    float phase_offset[GAIT_LEG_NUM];
+    float touchdown_thresh;
+    float blend_dur_s;
+} payload_gait_cmd_t;  /* FuncID 0x12, len=48 */
 
 typedef struct __attribute__((packed)) {
     uint8_t req_kind;  /* 0=state, 1=motor, 2=stats */

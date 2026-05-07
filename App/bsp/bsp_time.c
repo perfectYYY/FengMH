@@ -39,6 +39,14 @@ void bsp_time_delay_ms(uint32_t ms) {
     nanosleep(&ts, 0);
 }
 
+void bsp_time_delay_us(uint32_t us) {
+    struct timespec ts = {
+        .tv_sec = us / 1000000U,
+        .tv_nsec = (long)(us % 1000000U) * 1000L
+    };
+    nanosleep(&ts, 0);
+}
+
 void bsp_time_test_advance_ms(uint32_t ms) {
     s_host_fake_offset_ms += ms;
 }
@@ -57,6 +65,13 @@ uint64_t bsp_time_now_us(void) {
 }
 
 void bsp_time_delay_ms(uint32_t ms) { HAL_Delay(ms); }
+
+void bsp_time_delay_us(uint32_t us) {
+    uint64_t start = bsp_time_now_us();
+    while ((bsp_time_now_us() - start) < (uint64_t)us) {
+        /* busy wait */
+    }
+}
 
 void bsp_time_test_advance_ms(uint32_t ms) { (void)ms; }
 

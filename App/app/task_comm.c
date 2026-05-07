@@ -15,6 +15,7 @@
 #include "motor_registry.h"
 #include "task_chassis.h"
 #include "task_safety.h"
+#include "err.h"
 
 #if APP_TARGET_MCU
 #include "cmsis_os.h"
@@ -52,12 +53,12 @@ static int handle_chassis(const uint8_t* p, uint8_t len) {
     s_chassis.wz = cmd.wz;
 
     /* 新协议扩展字段 (>= 17 bytes 时有效) */
-    if (len >= 17U) {
-        memcpy(&s_chassis.target_yaw, p + 12, 4);
+    if (len >= PROTO_CHASSIS_CMD_EXT_LEN) {
+        memcpy(&s_chassis.target_yaw, p + sizeof(payload_chassis_cmd_t), sizeof(float));
         s_chassis.steer_mode = p[16];
     } else {
         s_chassis.target_yaw = 0.0f;
-        s_chassis.steer_mode = 0;  /* OFF: 保持现有行为 */
+        s_chassis.steer_mode = 0U;  /* OFF: 保持现有行为 */
     }
 
     s_chassis.seq++;
@@ -65,8 +66,56 @@ static int handle_chassis(const uint8_t* p, uint8_t len) {
     return 0;
 }
 
+static void gait_params_from_payload(const payload_gait_cmd_t* in, gait_params_t* out) {
+    memset(out, 0, sizeof(*out));
+    out->body_height_m = in->body_height_m;
+    out->step_length_m = in->step_length_m;
+    out->step_height_m = in->step_height_m;
+    out->period_s = in->period_s;
+    out->duty = in->duty;
+    for (int i = 0; i < GAIT_LEG_NUM; i++) {
+        out->phase_offset[i] = in->phase_offset[i];
+    }
+    out->touchdown_thresh = in->touchdown_thresh;
+}
+
+static int handle_gait(const uint8_t* p, uint8_t len) {
+    if (len != sizeof(payload_gait_cmd_t)) return -1;
+
+    payload_gait_cmd_t cmd;
+    gait_params_t params;
+    int ret = APP_ERR_INVALID_ARG;
+
+    memcpy(&cmd, p, sizeof(cmd));
+    gait_params_from_payload(&cmd, &params);
+
+    switch (cmd.action) {
+        case PROTO_GAIT_ACTION_STAND:
+            task_chassis_set_mode(CHASSIS_MODE_STANDALONE);
+            ret = task_chassis_start_stand(cmd.blend_dur_s);
+            break;
+        case PROTO_GAIT_ACTION_TROT:
+            task_chassis_set_mode(CHASSIS_MODE_STANDALONE);
+            ret = task_chassis_start_trot(&params, cmd.blend_dur_s);
+            break;
+        case PROTO_GAIT_ACTION_SET_TROT_PARAMS:
+            ret = task_chassis_set_trot_params(&params);
+            break;
+        default:
+            ret = APP_ERR_INVALID_ARG;
+            break;
+    }
+
+    if (ret == APP_OK) {
+        s_last_rx_ms = (uint32_t)bsp_time_now_ms();
+        return 0;
+    }
+    return ret;
+}
+
 static const proto_entry_t s_tbl[] = {
     { PROTO_FUNC_CHASSIS_CMD, 0, handle_chassis, "chassis" },  /* expect_len=0: 由 handler 内自行校验 */
+    { PROTO_FUNC_GAIT_CMD, sizeof(payload_gait_cmd_t), handle_gait, "gait" },
 };
 
 static void on_usb_rx(const uint8_t* d, uint32_t n, void* user) {
