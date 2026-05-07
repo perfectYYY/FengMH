@@ -31,6 +31,19 @@ static int16_t m3508_limit_current(float raw) {
     return (int16_t)raw;
 }
 
+/* 功率限制：根据转子转速限制最大允许电流 raw 值 */
+static int16_t m3508_power_limit(float desire_current, float rpm) {
+    float w = fabsf(rpm) * 2.0f * 3.14159265f / 60.0f;
+    if (w < 0.5f) w = 0.5f;
+    float max_torque   = M3508_POWER_LIMIT_W / w;
+    float max_curr_a   = max_torque / M3508_TORQUE_KT;
+    float max_curr_val = max_curr_a * ((float)M3508_CURRENT_RAW_MAX / M3508_CURRENT_LIMIT_A);
+    if (max_curr_val > 16000.0f) max_curr_val = 16000.0f;
+    if (desire_current >  max_curr_val) return (int16_t) max_curr_val;
+    if (desire_current < -max_curr_val) return (int16_t)-max_curr_val;
+    return (int16_t)desire_current;
+}
+
 static float m3508_rpm_to_rads(float rpm) {
     return rpm * 2.0f * 3.14159265f / 60.0f;
 }
@@ -86,35 +99,35 @@ static int m3508_set_current(motor_dev_t* dev, float iq_a) {
     if (!dev || !dev->drv_ctx) return APP_ERR_INVALID_ARG;
     m3508_drv_ctx_t* ctx = (m3508_drv_ctx_t*)dev->drv_ctx;
     ctx->cmd_current_raw = m3508_ampere_to_raw(iq_a);
+    ctx->ctrl_mode = M3508_MODE_CURRENT;
     return APP_OK;
 }
 
 static int m3508_set_torque(motor_dev_t* dev, float tau_nm) {
     if (!dev || !dev->drv_ctx) return APP_ERR_INVALID_ARG;
     m3508_drv_ctx_t* ctx = (m3508_drv_ctx_t*)dev->drv_ctx;
-    /* 转矩 → 电流 → raw */
-    float current_a = tau_nm / M3508_TORQUE_KT;
-    ctx->cmd_current_raw = m3508_ampere_to_raw(current_a);
+    ctx->target_torque_nm = tau_nm;
+    ctx->ctrl_mode = M3508_MODE_TORQUE;
     return APP_OK;
 }
 
 static int m3508_set_position(motor_dev_t* dev, float pos, float vel,
                                float kp, float kd, float tau_ff) {
-    /* M3508 无原生位置模式，通过速度 PID 间接实现 */
     if (!dev || !dev->drv_ctx) return APP_ERR_INVALID_ARG;
     m3508_drv_ctx_t* ctx = (m3508_drv_ctx_t*)dev->drv_ctx;
-    /* 简化实现：位置误差 × kp → 目标速度 → 速度 PID */
-    float pos_err = pos - dev->state.angle_rad;
-    float target_vel = CLAMP(pos_err * kp + vel, -50.0f, 50.0f);
-    ctx->target_vel_rads = target_vel;
+    (void)vel; (void)kp; (void)kd; (void)tau_ff;
+    /* 输出轴 rad → 转子侧累计编码器计数，与 ctx->total_angle 单位一致 */
+    ctx->target_position = (int32_t)(pos * M3508_REDUCTION_RATIO
+                           / (2.0f * 3.14159265f) * (float)M3508_ENCODER_COUNTS);
+    ctx->ctrl_mode = M3508_MODE_POSITION;
     return APP_OK;
 }
 
 static int m3508_set_velocity(motor_dev_t* dev, float vel_rads) {
     if (!dev || !dev->drv_ctx) return APP_ERR_INVALID_ARG;
     m3508_drv_ctx_t* ctx = (m3508_drv_ctx_t*)dev->drv_ctx;
-    /* 转换为输出轴目标速度 → 转子侧目标速度 (rpm) */
     ctx->target_vel_rads = vel_rads;
+    ctx->ctrl_mode = M3508_MODE_VELOCITY;
     return APP_OK;
 }
 
@@ -122,7 +135,8 @@ static int m3508_enable(motor_dev_t* dev) {
     if (!dev || !dev->drv_ctx) return APP_ERR_INVALID_ARG;
     m3508_drv_ctx_t* ctx = (m3508_drv_ctx_t*)dev->drv_ctx;
     ctx->online = 1;
-    /* M3508 无显式使能命令，使能即开始速度环 */
+    ctx->pos_err_sum = 0.0f;
+    ctx->trq_err_sum = 0.0f;
     app_pid_reset(&ctx->speed_pid);
     return APP_OK;
 }
@@ -133,6 +147,8 @@ static int m3508_disable(motor_dev_t* dev) {
     ctx->online = 0;
     ctx->cmd_current_raw = 0;
     ctx->target_vel_rads = 0.0f;
+    ctx->pos_err_sum = 0.0f;
+    ctx->trq_err_sum = 0.0f;
     app_pid_reset(&ctx->speed_pid);
     return APP_OK;
 }
@@ -155,6 +171,15 @@ static int m3508_feed_rx(motor_dev_t* dev, const uint8_t* data, uint8_t dlc) {
 
     /* 编码器多圈解算 */
     m3508_update_angle(ctx, ecd);
+
+    /* EMA 速度滤波 + 电流反馈存储 */
+    ctx->actual_current_raw = current_raw;
+    if (ctx->msg_cnt == 1) {
+        ctx->filter_speed = (float)speed_rpm;   /* 首帧：直接赋初值，防止滤波器冷启动跳变 */
+    } else {
+        ctx->filter_speed = M3508_EMA_ALPHA * (float)speed_rpm
+                          + (1.0f - M3508_EMA_ALPHA) * ctx->filter_speed;
+    }
 
     /* 更新 motor_state_t (输出轴物理量) */
     dev->state.angle_rad     = m3508_encoder_to_rad(ctx->total_angle) / M3508_REDUCTION_RATIO;
@@ -220,6 +245,26 @@ static const m3508_bus_map_t s_m3508_map[M3508_MOTOR_COUNT] = {
 #define M3508_PID_MAX_OUT   16000.0f
 #define M3508_PID_MAX_SUM   10000.0f
 #define M3508_PID_DT_S      0.002f   /* 500Hz = 2ms */
+
+/* EMA 速度滤波系数 */
+#define M3508_EMA_ALPHA     0.3f
+
+/* 功率限制 (W) */
+#define M3508_POWER_LIMIT_W 162.0f
+
+/* 位置环 PID 参数 */
+#define M3508_POS_KP        1.0f
+#define M3508_POS_KI        0.03f
+#define M3508_POS_KD        0.15f
+#define M3508_POS_MAX_OUT   6000.0f   /* 最大输出转速 (转子侧 rpm) */
+#define M3508_POS_MAX_SUM   5000.0f
+#define M3508_POS_DEADBAND  25.0f     /* 死区 (编码器计数) */
+
+/* 力矩环 PID 参数 */
+#define M3508_TRQ_KP        0.5f
+#define M3508_TRQ_KI        0.01f
+#define M3508_TRQ_MAX_OUT   16000.0f
+#define M3508_TRQ_MAX_SUM   8000.0f
 
 app_err_t motor_m3508_init_all(void) {
     memset(s_m3508_devs, 0, sizeof(s_m3508_devs));
@@ -299,27 +344,71 @@ app_err_t motor_m3508_send_all(void) {
         for (int i = 0; i < M3508_MOTOR_COUNT; i++) {
             if (s_m3508_ctxs[i].bus_id != (uint8_t)bus) continue;
 
-            /* 运行速度 PID (转子侧) */
+            /* 按控制模式运行 PID */
             m3508_drv_ctx_t* ctx = &s_m3508_ctxs[i];
             if (ctx->online) {
-                /* 输出轴目标速度 → 转子侧目标速度 (rpm) */
-                float target_rpm = ctx->target_vel_rads * M3508_REDUCTION_RATIO
-                                 * 60.0f / (2.0f * 3.14159265f);
-                float current_rpm = s_m3508_devs[i].state.velocity_rads
-                                  * M3508_REDUCTION_RATIO
-                                  * 60.0f / (2.0f * 3.14159265f);
+                float output = 0.0f;
+                switch (ctx->ctrl_mode) {
 
-                float output = app_pid_update_dt(&ctx->speed_pid,
-                                                  target_rpm,
-                                                  current_rpm,
-                                                  M3508_PID_DT_S);
-
-                /* 温度限功率 */
-                if (ctx->temp_limit_phase == 1) {
-                    output *= 0.5f;
+                case M3508_MODE_POSITION: {
+                    float err = (float)(ctx->target_position - ctx->total_angle);
+                    if (fabsf(err) < M3508_POS_DEADBAND) {
+                        ctx->cmd_current_raw = 0;
+                        ctx->pos_err_sum     = 0.0f;
+                        break;
+                    }
+                    ctx->pos_err_sum += err;
+                    if (ctx->pos_err_sum >  M3508_POS_MAX_SUM) ctx->pos_err_sum =  M3508_POS_MAX_SUM;
+                    if (ctx->pos_err_sum < -M3508_POS_MAX_SUM) ctx->pos_err_sum = -M3508_POS_MAX_SUM;
+                    /* D 项直接用滤波速度反馈，与新版 Core 驱动行为一致 */
+                    float pos_speed = M3508_POS_KP * err
+                                    + M3508_POS_KI * ctx->pos_err_sum * M3508_PID_DT_S
+                                    - M3508_POS_KD * ctx->filter_speed;
+                    if (pos_speed >  M3508_POS_MAX_OUT) pos_speed =  M3508_POS_MAX_OUT;
+                    if (pos_speed < -M3508_POS_MAX_OUT) pos_speed = -M3508_POS_MAX_OUT;
+                    output = app_pid_update_dt(&ctx->speed_pid, pos_speed,
+                                               ctx->filter_speed, M3508_PID_DT_S);
+                    if (ctx->temp_limit_phase == 1) output *= 0.5f;
+                    ctx->cmd_current_raw = m3508_power_limit(output, ctx->filter_speed);
+                    break;
                 }
 
-                ctx->cmd_current_raw = m3508_limit_current(output);
+                case M3508_MODE_TORQUE: {
+                    /* 前馈：目标力矩 → 目标电流 raw；PID 做闭环补偿 */
+                    float int_curr   = (float)M3508_CURRENT_RAW_MAX / M3508_CURRENT_LIMIT_A;
+                    float tgt_curr   = (ctx->target_torque_nm / M3508_TORQUE_KT) * int_curr;
+                    float err        = tgt_curr - (float)ctx->actual_current_raw;
+                    ctx->trq_err_sum += err;
+                    if (ctx->trq_err_sum >  M3508_TRQ_MAX_SUM) ctx->trq_err_sum =  M3508_TRQ_MAX_SUM;
+                    if (ctx->trq_err_sum < -M3508_TRQ_MAX_SUM) ctx->trq_err_sum = -M3508_TRQ_MAX_SUM;
+                    output = tgt_curr
+                           + M3508_TRQ_KP * err
+                           + M3508_TRQ_KI * ctx->trq_err_sum * M3508_PID_DT_S;
+                    if (output >  M3508_TRQ_MAX_OUT) output =  M3508_TRQ_MAX_OUT;
+                    if (output < -M3508_TRQ_MAX_OUT) output = -M3508_TRQ_MAX_OUT;
+                    if (ctx->temp_limit_phase == 1) output *= 0.5f;
+                    ctx->cmd_current_raw = m3508_power_limit(output, ctx->filter_speed);
+                    break;
+                }
+
+                case M3508_MODE_CURRENT:
+                    /* cmd_current_raw 已由 set_current 直接写入，仅做温度限功率 */
+                    if (ctx->temp_limit_phase == 1) {
+                        ctx->cmd_current_raw = (int16_t)((float)ctx->cmd_current_raw * 0.5f);
+                    }
+                    break;
+
+                case M3508_MODE_VELOCITY:
+                default: {
+                    float target_rpm = ctx->target_vel_rads * M3508_REDUCTION_RATIO
+                                     * 60.0f / (2.0f * 3.14159265f);
+                    output = app_pid_update_dt(&ctx->speed_pid, target_rpm,
+                                               ctx->filter_speed, M3508_PID_DT_S);
+                    if (ctx->temp_limit_phase == 1) output *= 0.5f;
+                    ctx->cmd_current_raw = m3508_power_limit(output, ctx->filter_speed);
+                    break;
+                }
+                }
             }
 
             /* 将电流指令填入 0x200 帧 */

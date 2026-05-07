@@ -36,11 +36,18 @@ extern "C" {
 #define M3508_TORQUE_KT        0.01562f /* 转矩常数 N·m/A */
 #define M3508_REDUCTION_RATIO  187.0f   /* 减速比 */
 
+/* 控制模式 */
+#define M3508_MODE_VELOCITY  0u   /* 速度环 */
+#define M3508_MODE_POSITION  1u   /* 位置环 (级联速度环) */
+#define M3508_MODE_TORQUE    2u   /* 力矩环 (前馈 + 电流 PI) */
+#define M3508_MODE_CURRENT   3u   /* 直接电流控制 */
+
 /* M3508 驱动私有上下文 */
 typedef struct {
     uint8_t       bus_id;       /* FDCAN 总线索引 (BSP_FDCAN_1 或 BSP_FDCAN_2) */
     uint8_t       dji_id;       /* C620 DJI ID (1~4)，决定 0x200 帧中的字节偏移 */
     uint8_t       online;
+    uint8_t       ctrl_mode;    /* 当前控制模式 M3508_MODE_* */
 
     /* 编码器多圈解算 */
     uint16_t      ecd;          /* 当前编码器原始值 */
@@ -50,10 +57,22 @@ typedef struct {
     int16_t       round_cnt;    /* 累计圈数 */
     uint32_t      msg_cnt;      /* 接收帧计数 */
 
-    /* 速度 PID (转子侧) */
+    /* 速度反馈 */
+    int16_t       actual_current_raw;   /* C620 反馈电流 raw */
+    float         filter_speed;         /* EMA 滤波速度 (转子侧 rpm) */
+
+    /* 速度环 */
     app_pid_t     speed_pid;
-    float         target_vel_rads;  /* 目标速度 (输出轴 rad/s) */
-    int16_t       cmd_current_raw;  /* 当前下发的电流 raw 指令 */
+    float         target_vel_rads;      /* 目标速度 (输出轴 rad/s) */
+    int16_t       cmd_current_raw;      /* 当前下发的电流 raw 指令 */
+
+    /* 位置环状态 */
+    int32_t       target_position;      /* 目标位置 (转子侧累计编码器计数) */
+    float         pos_err_sum;          /* 位置环积分 */
+
+    /* 力矩环状态 */
+    float         target_torque_nm;     /* 目标力矩 (Nm, 输出轴) */
+    float         trq_err_sum;          /* 力矩环积分 */
 
     /* 温度保护 */
     uint8_t       temp_limit_phase; /* 0=正常 1=限功率 2=停机 */
