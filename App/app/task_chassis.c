@@ -477,7 +477,7 @@ void task_chassis_step_for_test(float dt_s, uint32_t now_ms) {
 
     if (APP_BRINGUP_STAGE == APP_BRINGUP_STAGE_GO_ZERO) {
         motor_go_send_all();
-        /* 在锁定态下计算 zero_offset，避免 GO_LEG_HOLD 切入闭环时飞踢 */
+        /* 在零力矩模式下计算 zero_offset，避免 GO_LEG_HOLD 切入闭环时飞踢 */
         (void)motor_go_calibrate_all();
         return;
     }
@@ -490,14 +490,14 @@ void task_chassis_step_for_test(float dt_s, uint32_t now_ms) {
 
     /*
      * 预标定安全网：当 stage >= GO_LEG_HOLD 但未跑过 GO_ZERO 时，
-     * 先在锁定态下收几个周期编码器反馈、算 zero_offset，避免首次闭环飞踢。
+     * 先在零力矩模式下收几个周期编码器反馈、算 zero_offset，避免首次闭环飞踢。
      */
     {
         static uint32_t s_pre_calib_cnt = 0;
         static uint8_t  s_pre_calib_done = 0;
 
         if (!s_pre_calib_done && APP_BRINGUP_STAGE >= APP_BRINGUP_STAGE_GO_LEG_HOLD) {
-            motor_go_send_all();          /* 锁定态收发：mode=0，收集编码器反馈 */
+            motor_go_send_all();          /* 零力矩收发：mode=1, kp/kd/tau=0，收集编码器反馈 */
             if (s_pre_calib_cnt < 50U) {  /* 100ms @ 500Hz */
                 s_pre_calib_cnt++;
                 return;
