@@ -4,7 +4,7 @@
  *
  * 1. 4 个 M3508 轮毂电机分属 2 条 FDCAN 总线
  * 2. 每条总线发送一个 0x200 控制帧，包含最多 4 个电机的电流指令
- * 3. 反馈帧 0x201~0x204 各自独立，通过 FDCAN RX 回调解码
+ * 3. 反馈帧每条总线独立：0x201 (DJI_ID=1)、0x202 (DJI_ID=2)，通过 FDCAN RX 回调解码
  * 4. 减速比 187:1 自动在 vtable 中处理：对外角度/速度已除以减速比
  * 5. 温度保护：>80°C 限功率 50%，>85°C 调用 disable
  */
@@ -315,7 +315,7 @@ void motor_m3508_fdcan_rx_cb(bsp_fdcan_bus_t bus,
     /* 只处理 0x201~0x208 反馈帧 */
     if (f->can_id < M3508_FB_ID_BASE || f->can_id > 0x208) return;
 
-    uint8_t dji_id = (uint8_t)(f->can_id - M3508_FB_ID_BASE + 1);  /* 1~8 */
+    uint8_t dji_id = (uint8_t)(f->can_id - M3508_FB_ID_BASE + 1);  /* 每条总线实际只有 1 或 2 */
 
     /* 查找匹配的电机实例 */
     for (int i = 0; i < M3508_MOTOR_COUNT; i++) {
@@ -332,7 +332,7 @@ void motor_m3508_fdcan_rx_cb(bsp_fdcan_bus_t bus,
 
 /*
  * 每条总线构造一个 0x200 控制帧 (8B)。
- * 每个电机的电流 raw 占 2 字节，按 DJI ID 1~4 排列。
+ * 每个电机的电流 raw 占 2 字节，按 DJI ID 排列（每条总线 DJI_ID=1→slot0, 2→slot1）。
  * 未使用的槽位填 0。
  */
 app_err_t motor_m3508_send_all(void) {
@@ -412,7 +412,7 @@ app_err_t motor_m3508_send_all(void) {
             }
 
             /* 将电流指令填入 0x200 帧 */
-            uint8_t slot = ctx->dji_id - 1;  /* DJI ID 1→slot0, 2→slot1, ... */
+            uint8_t slot = ctx->dji_id - 1;  /* DJI ID 1→slot0, 2→slot1 */
             if (slot < 4) {
                 int16_t iq = ctx->cmd_current_raw;
                 tx_data[slot * 2]     = (uint8_t)(iq >> 8);

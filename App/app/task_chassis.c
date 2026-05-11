@@ -148,6 +148,7 @@ static void bringup_configure_leg_controller(void) {
 static void bringup_apply_wheel_jog(void) {
     for (int i = 0; i < GAIT_LEG_NUM; i++) {
         motor_dev_t* wheel = motor_get(WHEEL_ID[i]);
+        m3508_enable(wheel);//使能得跟上
         if (!wheel || !wheel->ops || !wheel->ops->set_velocity) {
             continue;
         }

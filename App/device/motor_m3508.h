@@ -4,9 +4,10 @@
  * 实现 motor_ops_t vtable，通过 bsp_fdcan 与 C620 电调通信。
  * C620 协议：0x200 控制帧 (8B, 4×int16_t 电流), 0x201~0x208 反馈帧。
  *
- * 4 个 M3508 电机分属 2 条 FDCAN 总线：
- *   - FDCAN1: FL_WHEEL (ID=1), FR_WHEEL (ID=2)
- *   - FDCAN2: RL_WHEEL (ID=3), RR_WHEEL (ID=4)
+ * 4 个 M3508 电机分属 2 条 FDCAN 总线（左右各一条）：
+ *   - FDCAN1: FL_WHEEL (DJI_ID=1), RL_WHEEL (DJI_ID=2)  → 反馈 0x201, 0x202
+ *   - FDCAN2: RR_WHEEL (DJI_ID=1), FR_WHEEL (DJI_ID=2)  → 反馈 0x201, 0x202
+ * DJI_ID 在每条总线上独立编号（1 或 2），不跨总线连续。
  *
  * 速度 PID 闭环使用 app_pid_t，默认参数 Kp=3.0, Ki=0.3, Kd=0.0
  * 减速比 187:1 自动在 vtable 中处理。
@@ -45,7 +46,7 @@ extern "C" {
 /* M3508 驱动私有上下文 */
 typedef struct {
     uint8_t       bus_id;       /* FDCAN 总线索引 (BSP_FDCAN_1 或 BSP_FDCAN_2) */
-    uint8_t       dji_id;       /* C620 DJI ID (1~4)，决定 0x200 帧中的字节偏移 */
+    uint8_t       dji_id;       /* C620 DJI ID (1 或 2，每条总线独立)，决定 0x200 帧中的字节偏移 */
     uint8_t       online;
     uint8_t       ctrl_mode;    /* 当前控制模式 M3508_MODE_* */
 
