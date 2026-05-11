@@ -39,7 +39,7 @@
  *     不要再回头改 main.c。
  */
 #ifndef USE_LEGACY_MAIN
-#define USE_LEGACY_MAIN 1
+#define USE_LEGACY_MAIN 0
 #endif
 
 #if USE_LEGACY_MAIN
@@ -518,11 +518,13 @@ void MPU_Config(void)
 void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 {
   /* USER CODE BEGIN Callback 0 */
+#if USE_LEGACY_MAIN
 	//开个定时器中断，稳定发送3508电机指令
 	  if (htim->Instance == TIM1)
 	  {
 		  send_current();
 	  }
+#endif
   /* USER CODE END Callback 0 */
   if (htim->Instance == TIM1)
   {

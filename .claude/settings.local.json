@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(ls \"D:\\\\ES\\\\STM32CubeCLT_1.21.0\\\\CMake\\\\bin\\\\\" 2>/dev/null || dir \"D:\\\\ES\\\\STM32CubeCLT_1.21.0\\\\CMake\\\\bin\\\\\")",
+      "Read(//d/ES/STM32CubeCLT_1.21.0/CMake/bin\" 2>/dev/**)"
+    ]
+  }
+}

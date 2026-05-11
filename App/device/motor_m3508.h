@@ -36,6 +36,8 @@ extern "C" {
 #define M3508_CURRENT_LIMIT_A  20.0f    /* 满量程电流 (A) */
 #define M3508_TORQUE_KT        0.01562f /* 转矩常数 N·m/A */
 #define M3508_REDUCTION_RATIO  187.0f   /* 减速比 */
+#define M3508_POWER_LIMIT_W    150.0f   /* 功率保护上限 (W)；高转速时限制最大电流 */
+#define M3508_EMA_ALPHA        0.3f     /* 速度 EMA 滤波系数：0=全平滑 1=无滤波 */
 
 /* 控制模式 */
 #define M3508_MODE_VELOCITY  0u   /* 速度环 */

@@ -79,8 +79,8 @@ static const gait_params_t S_BRINGUP_TROT_PARAMS = {
 
 static const gait_params_t S_OFFLINE_MARCH_PARAMS = {
     .body_height_m    = 0.20f,
-    .step_length_m    = 0.0f,
-    .step_height_m    = 0.015f,
+    .step_length_m    = 0.06f,
+    .step_height_m    = 0.04f,
     .period_s         = 1.0f,
     .duty             = 0.50f,
     .phase_offset     = { 0.0f, 0.5f, 0.5f, 0.0f },
@@ -90,6 +90,7 @@ static const gait_params_t S_OFFLINE_MARCH_PARAMS = {
 static uint8_t  s_offline_seq_active = 0U;
 static uint8_t  s_offline_seq_done = 0U;
 static uint32_t s_offline_seq_start_ms = 0U;
+static uint8_t  s_offline_wheel_spin = 0U;
 static steer_mode_t s_steer_mode = STEER_MODE_OFF;
 static chassis_plan_t s_chassis_plan;
 
@@ -242,6 +243,7 @@ void task_chassis_init(void) {
     s_offline_seq_active = 0U;
     s_offline_seq_done = 0U;
     s_offline_seq_start_ms = 0U;
+    s_offline_wheel_spin = 0U;
     LOGI("chassis init: mode=AUTO active=stand timeout=%ums bringup_stage=%d",
          (unsigned)s_online_timeout_ms, (int)APP_BRINGUP_STAGE);
 }
@@ -405,16 +407,18 @@ static void offline_decide(uint32_t now_ms) {
         s_offline_seq_active = 1U;
         s_offline_seq_done = 0U;
         s_offline_seq_start_ms = now_ms;
+        s_offline_wheel_spin = 0U;
         if (request_gait(s_stand, &GAIT_PARAMS_STAND_DEFAULT, 0.0f) == APP_OK) {
             s_active = ACT_STAND;
         }
-        LOGI("offline sequence start: stand 2s -> march 5s -> stand");
+        LOGI("offline sequence start: stand 2s -> march 5s -> wheel 13s -> stand");
     }
 
     if (!s_offline_seq_done) {
         uint32_t elapsed_ms = now_ms - s_offline_seq_start_ms;
 
         if (elapsed_ms < 2000U) {
+            s_offline_wheel_spin = 0U;
             if (s_active != ACT_STAND) {
                 if (request_gait(s_stand, &GAIT_PARAMS_STAND_DEFAULT, 0.3f) == APP_OK) {
                     s_active = ACT_STAND;
@@ -424,6 +428,7 @@ static void offline_decide(uint32_t now_ms) {
         }
 
         if (elapsed_ms < 7000U) {
+            s_offline_wheel_spin = 0U;
             if (s_active != ACT_TROT) {
                 if (request_gait(s_trot, &S_OFFLINE_MARCH_PARAMS, 0.3f) == APP_OK) {
                     s_active = ACT_TROT;
@@ -432,6 +437,18 @@ static void offline_decide(uint32_t now_ms) {
             return;
         }
 
+        if (elapsed_ms < 15000U) {
+            /* 7~15s: 站立 + 轮毂转动（2.0 rad/s，可在此处调整） */
+            s_offline_wheel_spin = 1U;
+            if (s_active != ACT_STAND) {
+                if (request_gait(s_stand, &GAIT_PARAMS_STAND_DEFAULT, 0.3f) == APP_OK) {
+                    s_active = ACT_STAND;
+                }
+            }
+            return;
+        }
+
+        s_offline_wheel_spin = 0U;
         if (s_active != ACT_STAND) {
             if (request_gait(s_stand, &GAIT_PARAMS_STAND_DEFAULT, 0.3f) == APP_OK) {
                 s_active = ACT_STAND;
@@ -546,6 +563,15 @@ void task_chassis_step_for_test(float dt_s, uint32_t now_ms) {
         apply_plan_wheel_speed(&out, &s_chassis_plan);
     }
     leg_controller_apply(&s_lc, &out);
+
+    if (s_offline_wheel_spin) {
+        for (int i = 0; i < GAIT_LEG_NUM; i++) {
+            motor_dev_t* wheel = motor_get(WHEEL_ID[i]);
+            if (!wheel || !wheel->ops || !wheel->ops->set_velocity) continue;
+            if (wheel->ops->enable) wheel->ops->enable(wheel);
+            (void)wheel->ops->set_velocity(wheel, 1.0f); /* 1.0 rad/s，按需调整 */
+        }
+    }
 
 #if !APP_TARGET_HOST
     /* MCU 端：将电机指令推送到物理总线 */

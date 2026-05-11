@@ -38,15 +38,15 @@
 #endif
 
 #ifndef APP_BRINGUP_LEG_MASK
-#define APP_BRINGUP_LEG_MASK 0x01u  /* default: FL only */
+#define APP_BRINGUP_LEG_MASK 0x04u  /* default: FL only */
 #endif
 
 #ifndef APP_BRINGUP_WHEEL_MASK
-#define APP_BRINGUP_WHEEL_MASK 0x01u  /* default: FL wheel only */
+#define APP_BRINGUP_WHEEL_MASK 0x04u  /* default: FL wheel only */
 #endif
 
 #ifndef APP_BRINGUP_WHEEL_JOG_RAD_S
-#define APP_BRINGUP_WHEEL_JOG_RAD_S 0.5f
+#define APP_BRINGUP_WHEEL_JOG_RAD_S 10.0f
 #endif
 
 /* 过渡期：旧 Core/Src 代码与 App/ 并行编译；M1 完成阶段保持 1，M2 起逐步关闭 */
