@@ -148,13 +148,16 @@ static void bringup_configure_leg_controller(void) {
 static void bringup_apply_wheel_jog(void) {
     for (int i = 0; i < GAIT_LEG_NUM; i++) {
         motor_dev_t* wheel = motor_get(WHEEL_ID[i]);
-        m3508_enable(wheel);//使能得跟上
         if (!wheel || !wheel->ops || !wheel->ops->set_velocity) {
             continue;
         }
 
         float target = (((uint8_t)(1U << i) & (uint8_t)APP_BRINGUP_WHEEL_MASK) != 0U) ?
                        (float)APP_BRINGUP_WHEEL_JOG_RAD_S : 0.0f;
+                       // bringup_apply_wheel_jog 中，set_velocity 之前：
+        if (target != 0.0f && wheel->ops->enable) {
+            wheel->ops->enable(wheel);
+        }
         (void)wheel->ops->set_velocity(wheel, target);
     }
 }
