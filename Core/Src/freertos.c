@@ -97,8 +97,7 @@ void MX_FREERTOS_Init(void) {
   defaultTaskHandle = osThreadNew(StartDefaultTask, NULL, &defaultTask_attributes);
 
   /* USER CODE BEGIN RTOS_THREADS */
-  /* 由 App 层统一创建业务任务（task_log / task_safety / task_comm / task_chassis） */
-  app_init();
+  /* app_init() runs in main.c before osKernelInitialize(); create only threads here. */
   app_tasks_create();
   /* USER CODE END RTOS_THREADS */
 

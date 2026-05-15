@@ -285,6 +285,9 @@ uint8_t CDC_Transmit_HS(uint8_t* Buf, uint16_t Len)
   uint8_t result = USBD_OK;
   /* USER CODE BEGIN 12 */
   USBD_CDC_HandleTypeDef *hcdc = (USBD_CDC_HandleTypeDef*)hUsbDeviceHS.pClassData;
+  if (hUsbDeviceHS.dev_state != USBD_STATE_CONFIGURED || hcdc == NULL) {
+    return USBD_BUSY;
+  }
   if (hcdc->TxState != 0){
     return USBD_BUSY;
   }

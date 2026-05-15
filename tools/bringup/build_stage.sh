@@ -19,12 +19,14 @@ Stages:
   trot_low       7   all legs low-gain, tiny trot allowed by USB command
   usb_cdc        8   USB CDC ping/pong + telemetry, no motor/IMU init
   imu            9   BMI088 read + USB telemetry, no motor task
+  motor_test    10   one-shot fixed GO joint + M3508 wheel motion test
   normal       100   normal firmware behavior
 
 Examples:
   tools/bringup/build_stage.sh board
   tools/bringup/build_stage.sh m3508_jog --wheel FL --speed 0.3
   tools/bringup/build_stage.sh go_leg_hold --leg RL
+  tools/bringup/build_stage.sh motor_test --leg all --wheel all --speed 0.3
 USAGE
 }
 
@@ -60,6 +62,7 @@ case "$stage_arg" in
     7|trot_low|trot-low) stage=7; stage_name="07_trot_low" ;;
     8|usb_cdc|usb-cdc|cdc|usb) stage=8; stage_name="08_usb_cdc_test" ;;
     9|imu|imu_test|imu-test) stage=9; stage_name="09_imu_test" ;;
+    10|motor_test|motor-test|motors) stage=10; stage_name="10_motor_fixed_test" ;;
     100|normal) stage=100; stage_name="99_normal" ;;
     -h|--help|help) usage; exit 0 ;;
     *) echo "Unknown stage: $stage_arg" >&2; usage; exit 2 ;;

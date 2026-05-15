@@ -22,6 +22,7 @@ Examples:
   tools/bringup/flash_stage.sh imu
   tools/bringup/flash_stage.sh --method openocd go_leg_hold --leg FL
   tools/bringup/flash_stage.sh m3508_jog --wheel FL --speed 0.3
+  tools/bringup/flash_stage.sh motor_test --leg all --wheel all --speed 0.3
 USAGE
 }
 
@@ -97,6 +98,7 @@ case "$stage_arg" in
     7|trot_low|trot-low) stage_name="07_trot_low" ;;
     8|usb_cdc|usb-cdc|cdc|usb) stage_name="08_usb_cdc_test" ;;
     9|imu|imu_test|imu-test) stage_name="09_imu_test" ;;
+    10|motor_test|motor-test|motors) stage_name="10_motor_fixed_test" ;;
     100|normal) stage_name="99_normal" ;;
     *) echo "Unknown stage after build: $stage_arg" >&2; exit 2 ;;
 esac

@@ -41,6 +41,9 @@ app_err_t bsp_uart_attach_rx(bsp_uart_bus_t bus, bsp_uart_rx_cb_t cb, void* user
 /* 发送数据 (MCU: RS485 DE 拉高 → HAL_UART_Transmit_DMA → TX完成回调 DE 拉低; Host: mock) */
 app_err_t bsp_uart_send(bsp_uart_bus_t bus, const uint8_t* data, uint32_t len);
 
+/* 等待当前 DMA TX 完成；MCU 用于半双工 RS485 连续发包，Host 直接返回 APP_OK */
+app_err_t bsp_uart_wait_tx_done(bsp_uart_bus_t bus, uint32_t timeout_us);
+
 /* MCU 端 HAL 回调桥接：HAL_UART_RxCpltCallback / HAL_UART_TxCpltCallback 中调用 */
 void bsp_uart_on_rx(bsp_uart_bus_t bus, const uint8_t* data, uint32_t len);
 void bsp_uart_on_tx_done(bsp_uart_bus_t bus);

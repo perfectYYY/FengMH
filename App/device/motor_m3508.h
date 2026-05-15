@@ -5,11 +5,11 @@
  * C620 协议：0x200 控制帧 (8B, 4×int16_t 电流), 0x201~0x208 反馈帧。
  *
  * 4 个 M3508 电机分属 2 条 FDCAN 总线：
- *   - FDCAN1: FL_WHEEL (ID=1), FR_WHEEL (ID=2)
- *   - FDCAN2: RL_WHEEL (ID=3), RR_WHEEL (ID=4)
+ *   - FDCAN1: FL_WHEEL (DJI ID=1), RL_WHEEL (DJI ID=2)
+ *   - FDCAN2: RR_WHEEL (DJI ID=3), FR_WHEEL (DJI ID=4)
  *
  * 速度 PID 闭环使用 app_pid_t，默认参数 Kp=3.0, Ki=0.3, Kd=0.0
- * 减速比 187:1 自动在 vtable 中处理。
+ * 减速比约 19.2:1 自动在 vtable 中处理。
  */
 #ifndef APP_DEVICE_MOTOR_M3508_H_
 #define APP_DEVICE_MOTOR_M3508_H_
@@ -34,12 +34,19 @@ extern "C" {
 #define M3508_CURRENT_RAW_MAX  16384    /* 电流指令 raw 上限 */
 #define M3508_CURRENT_LIMIT_A  20.0f    /* 满量程电流 (A) */
 #define M3508_TORQUE_KT        0.01562f /* 转矩常数 N·m/A */
-#define M3508_REDUCTION_RATIO  187.0f   /* 减速比 */
+/* M3508 P19 reduction ratio: 3591 / 187 ~= 19.203 */
+#define M3508_REDUCTION_RATIO  (3591.0f / 187.0f)
+
+typedef enum {
+    M3508_CTRL_DISABLED = 0,
+    M3508_CTRL_CURRENT,
+    M3508_CTRL_VELOCITY,
+} m3508_ctrl_mode_t;
 
 /* M3508 驱动私有上下文 */
 typedef struct {
     uint8_t       bus_id;       /* FDCAN 总线索引 (BSP_FDCAN_1 或 BSP_FDCAN_2) */
-    uint8_t       dji_id;       /* C620 DJI ID (1~4)，决定 0x200 帧中的字节偏移 */
+    uint8_t       dji_id;       /* C620 DJI ID (1~4), decides the 0x200 frame slot */
     uint8_t       online;
 
     /* 编码器多圈解算 */
@@ -52,6 +59,7 @@ typedef struct {
 
     /* 速度 PID (转子侧) */
     app_pid_t     speed_pid;
+    m3508_ctrl_mode_t ctrl_mode;
     float         target_vel_rads;  /* 目标速度 (输出轴 rad/s) */
     int16_t       cmd_current_raw;  /* 当前下发的电流 raw 指令 */
 

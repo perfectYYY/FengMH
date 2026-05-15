@@ -60,9 +60,9 @@ app_err_t bsp_fdcan_init(void) {
         filter.FilterIndex = 0;
         filter.FilterType = FDCAN_FILTER_MASK;
         filter.FilterConfig = FDCAN_FILTER_TO_RXFIFO0;
-        /* 接收 0x200~0x20F (M3508 控制/反馈) */
-        filter.FilterID1 = 0x000;
-        filter.FilterID2 = 0x700;
+        /* Accept the DJI C620/M3508 control and feedback range: 0x200~0x20F. */
+        filter.FilterID1 = 0x200;
+        filter.FilterID2 = 0x7F0;
 
         HAL_FDCAN_ConfigGlobalFilter(s_hfdcan[i],
                                       FDCAN_REJECT, FDCAN_REJECT,

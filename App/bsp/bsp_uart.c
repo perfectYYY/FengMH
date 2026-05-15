@@ -56,6 +56,17 @@ static UART_HandleTypeDef* s_huart[BSP_UART_BUS_MAX] = {
 #define BSP_UART_RX_BUF_SIZE  32
 static uint8_t s_rx_buf[BSP_UART_BUS_MAX][BSP_UART_RX_BUF_SIZE];
 static volatile uint8_t s_tx_busy[BSP_UART_BUS_MAX];  /* DMA 发送中标志 */
+
+static void uart_dwt_enable(void) {
+    CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
+    DWT->CTRL |= DWT_CTRL_CYCCNTENA_Msk;
+}
+
+static uint32_t uart_cycles_per_us(void) {
+    uint32_t hz = SystemCoreClock ? SystemCoreClock : HAL_RCC_GetHCLKFreq();
+    uint32_t cycles = hz / 1000000U;
+    return cycles ? cycles : 1U;
+}
 #endif
 
 /* ─── 公共接口 ─── */
@@ -122,6 +133,26 @@ app_err_t bsp_uart_send(bsp_uart_bus_t bus, const uint8_t* data, uint32_t len) {
         s_tx_busy[bus] = 0;
         LOGE("uart%u HAL TX error %d", (unsigned)bus, (int)ret);
         return APP_ERR_IO;
+    }
+    return APP_OK;
+#endif
+}
+
+app_err_t bsp_uart_wait_tx_done(bsp_uart_bus_t bus, uint32_t timeout_us) {
+    if (bus >= BSP_UART_BUS_MAX) return APP_ERR_INVALID_ARG;
+
+#if APP_TARGET_HOST
+    (void)timeout_us;
+    return APP_OK;
+#else
+    uart_dwt_enable();
+    uint32_t start = DWT->CYCCNT;
+    uint32_t timeout_cycles = timeout_us * uart_cycles_per_us();
+
+    while (s_tx_busy[bus]) {
+        if ((uint32_t)(DWT->CYCCNT - start) >= timeout_cycles) {
+            return APP_ERR_BUSY;
+        }
     }
     return APP_OK;
 #endif

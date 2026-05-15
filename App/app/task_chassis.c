@@ -67,6 +67,14 @@ static const motor_logical_id_t WHEEL_ID[GAIT_LEG_NUM] = {
     MOTOR_ID_FL_WHEEL, MOTOR_ID_FR_WHEEL, MOTOR_ID_RL_WHEEL, MOTOR_ID_RR_WHEEL
 };
 
+static const motor_logical_id_t HIP_ID[GAIT_LEG_NUM] = {
+    MOTOR_ID_FL_HIP, MOTOR_ID_FR_HIP, MOTOR_ID_RL_HIP, MOTOR_ID_RR_HIP
+};
+
+static const motor_logical_id_t KNEE_ID[GAIT_LEG_NUM] = {
+    MOTOR_ID_FL_KNEE, MOTOR_ID_FR_KNEE, MOTOR_ID_RL_KNEE, MOTOR_ID_RR_KNEE
+};
+
 static const gait_params_t S_BRINGUP_TROT_PARAMS = {
     .body_height_m    = 0.20f,
     .step_length_m    = 0.015f,
@@ -156,6 +164,245 @@ static void bringup_apply_wheel_jog(void) {
                        (float)APP_BRINGUP_WHEEL_JOG_RAD_S : 0.0f;
         (void)wheel->ops->set_velocity(wheel, target);
     }
+}
+
+#define MOTOR_TEST_WARMUP_MS      3000U
+#define MOTOR_TEST_JOINT_MOVE_MS  2500U
+#define MOTOR_TEST_JOINT_GAP_MS    700U
+#define MOTOR_TEST_WHEEL_MOVE_MS  2500U
+#define MOTOR_TEST_WHEEL_STOP_MS   700U
+#define MOTOR_TEST_JOINT_KP          0.08f
+#define MOTOR_TEST_JOINT_KD          0.02f
+#define MOTOR_TEST_HIP_AMP_RAD       0.08f
+#define MOTOR_TEST_KNEE_AMP_RAD      0.06f
+#define MOTOR_TEST_TWO_PI            6.28318530f
+
+typedef enum {
+    MOTOR_TEST_PHASE_WARMUP = 0,
+    MOTOR_TEST_PHASE_HIP,
+    MOTOR_TEST_PHASE_JOINT_GAP,
+    MOTOR_TEST_PHASE_KNEE,
+    MOTOR_TEST_PHASE_WHEEL_FWD,
+    MOTOR_TEST_PHASE_WHEEL_STOP,
+    MOTOR_TEST_PHASE_WHEEL_REV,
+    MOTOR_TEST_PHASE_DONE,
+} motor_test_phase_t;
+
+static uint32_t s_motor_test_start_ms = 0U;
+static uint8_t  s_motor_test_started = 0U;
+static volatile uint8_t  s_motor_test_phase = MOTOR_TEST_PHASE_WARMUP;
+static volatile uint8_t  s_motor_test_index = 0U;
+static volatile uint32_t s_motor_test_elapsed_ms = 0U;
+static volatile float    s_motor_test_joint_wave = 0.0f;
+static volatile float    s_motor_test_wheel_target = 0.0f;
+
+static int bringup_mask_has(uint32_t mask, int index) {
+    return ((mask & (1UL << (uint32_t)index)) != 0UL);
+}
+
+static float bringup_clamp_joint_target(const motor_cfg_t* cfg, float target) {
+    if (!cfg) return target;
+    if (cfg->limit_min < cfg->limit_max) {
+        if (target < cfg->limit_min) return cfg->limit_min;
+        if (target > cfg->limit_max) return cfg->limit_max;
+    }
+    return target;
+}
+
+static float bringup_joint_test_target(const motor_cfg_t* cfg, float amp, float wave) {
+    float center = cfg ? cfg->boot_angle : 0.0f;
+    if (cfg && cfg->limit_min < cfg->limit_max) {
+        float lo = cfg->limit_min + amp;
+        float hi = cfg->limit_max - amp;
+        if (lo <= hi) {
+            if (center < lo) center = lo;
+            if (center > hi) center = hi;
+        }
+    }
+    return bringup_clamp_joint_target(cfg, center + amp * wave);
+}
+
+static void bringup_disable_motor(motor_logical_id_t id) {
+    motor_dev_t* dev = motor_get(id);
+    if (dev && dev->ops && dev->ops->disable) {
+        (void)dev->ops->disable(dev);
+    }
+}
+
+static void bringup_set_joint_if_ready(motor_logical_id_t id, float target) {
+    motor_dev_t* dev = motor_get(id);
+    if (!dev || !dev->ops || !dev->ops->set_position || dev->state.rx_cnt == 0U) {
+        bringup_disable_motor(id);
+        return;
+    }
+    (void)dev->ops->set_position(dev, target, 0.0f,
+                                 MOTOR_TEST_JOINT_KP,
+                                 MOTOR_TEST_JOINT_KD,
+                                 0.0f);
+}
+
+static void bringup_motor_test_zero_go(void) {
+    for (int i = 0; i < GAIT_LEG_NUM; i++) {
+        bringup_disable_motor(HIP_ID[i]);
+        bringup_disable_motor(KNEE_ID[i]);
+    }
+}
+
+static void bringup_motor_test_zero_wheels(int closed_loop_stop) {
+    for (int i = 0; i < GAIT_LEG_NUM; i++) {
+        motor_dev_t* wheel = motor_get(WHEEL_ID[i]);
+        if (!wheel || !wheel->ops) continue;
+        if (closed_loop_stop && wheel->ops->set_velocity) {
+            (void)wheel->ops->set_velocity(wheel, 0.0f);
+        } else if (wheel->ops->disable) {
+            (void)wheel->ops->disable(wheel);
+        }
+    }
+}
+
+static void bringup_motor_test_apply_joint(int leg_index, int move_hip,
+                                           int move_knee, float wave) {
+    bringup_motor_test_zero_wheels(0);
+
+    for (int i = 0; i < GAIT_LEG_NUM; i++) {
+        const int active = (i == leg_index) &&
+                           bringup_mask_has((uint32_t)APP_BRINGUP_LEG_MASK, i);
+        if (!active) {
+            bringup_disable_motor(HIP_ID[i]);
+            bringup_disable_motor(KNEE_ID[i]);
+            continue;
+        }
+
+        const motor_cfg_t* hip_cfg = motor_get_cfg(HIP_ID[i]);
+        const motor_cfg_t* knee_cfg = motor_get_cfg(KNEE_ID[i]);
+        float hip_wave = move_hip ? wave : 0.0f;
+        float knee_wave = move_knee ? wave : 0.0f;
+
+        bringup_set_joint_if_ready(HIP_ID[i],
+            bringup_joint_test_target(hip_cfg, MOTOR_TEST_HIP_AMP_RAD, hip_wave));
+        bringup_set_joint_if_ready(KNEE_ID[i],
+            bringup_joint_test_target(knee_cfg, MOTOR_TEST_KNEE_AMP_RAD, knee_wave));
+    }
+}
+
+static void bringup_motor_test_apply_wheel(int wheel_index, float target_rads) {
+    bringup_motor_test_zero_go();
+
+    for (int i = 0; i < GAIT_LEG_NUM; i++) {
+        motor_dev_t* wheel = motor_get(WHEEL_ID[i]);
+        if (!wheel || !wheel->ops || !wheel->ops->set_velocity) {
+            continue;
+        }
+
+        float target = (i == wheel_index &&
+                        bringup_mask_has((uint32_t)APP_BRINGUP_WHEEL_MASK, i)) ?
+                       target_rads : 0.0f;
+        (void)wheel->ops->set_velocity(wheel, target);
+    }
+}
+
+static void bringup_motor_fixed_test_step(uint32_t now_ms) {
+    const uint32_t joint_slot_ms = MOTOR_TEST_JOINT_MOVE_MS +
+                                   MOTOR_TEST_JOINT_GAP_MS +
+                                   MOTOR_TEST_JOINT_MOVE_MS +
+                                   MOTOR_TEST_JOINT_GAP_MS;
+    const uint32_t wheel_slot_ms = MOTOR_TEST_WHEEL_MOVE_MS +
+                                   MOTOR_TEST_WHEEL_STOP_MS +
+                                   MOTOR_TEST_WHEEL_MOVE_MS +
+                                   MOTOR_TEST_WHEEL_STOP_MS;
+    const uint32_t joint_total_ms = joint_slot_ms * (uint32_t)GAIT_LEG_NUM;
+    const uint32_t wheel_total_ms = wheel_slot_ms * (uint32_t)GAIT_LEG_NUM;
+
+    if (!s_motor_test_started) {
+        s_motor_test_start_ms = now_ms;
+        s_motor_test_started = 1U;
+        LOGI("motor fixed test start: leg_mask=0x%02x wheel_mask=0x%02x wheel_speed=%.3f",
+             (unsigned)APP_BRINGUP_LEG_MASK,
+             (unsigned)APP_BRINGUP_WHEEL_MASK,
+             (double)APP_BRINGUP_WHEEL_JOG_RAD_S);
+    }
+
+    uint32_t elapsed = now_ms - s_motor_test_start_ms;
+    s_motor_test_elapsed_ms = elapsed;
+    s_motor_test_joint_wave = 0.0f;
+    s_motor_test_wheel_target = 0.0f;
+
+    if (elapsed < MOTOR_TEST_WARMUP_MS) {
+        s_motor_test_phase = MOTOR_TEST_PHASE_WARMUP;
+        s_motor_test_index = 0U;
+        bringup_motor_test_zero_go();
+        bringup_motor_test_zero_wheels(0);
+        (void)motor_go_calibrate_all();
+        motor_go_send_all();
+        motor_m3508_send_all();
+        return;
+    }
+
+    elapsed -= MOTOR_TEST_WARMUP_MS;
+    (void)motor_go_calibrate_all();
+
+    if (elapsed < joint_total_ms) {
+        uint32_t leg = elapsed / joint_slot_ms;
+        uint32_t t = elapsed % joint_slot_ms;
+        s_motor_test_index = (uint8_t)leg;
+
+        if (t < MOTOR_TEST_JOINT_MOVE_MS) {
+            float wave = sinf(MOTOR_TEST_TWO_PI * (float)t / (float)MOTOR_TEST_JOINT_MOVE_MS);
+            s_motor_test_phase = MOTOR_TEST_PHASE_HIP;
+            s_motor_test_joint_wave = wave;
+            bringup_motor_test_apply_joint((int)leg, 1, 0, wave);
+        } else if (t < (MOTOR_TEST_JOINT_MOVE_MS + MOTOR_TEST_JOINT_GAP_MS)) {
+            s_motor_test_phase = MOTOR_TEST_PHASE_JOINT_GAP;
+            bringup_motor_test_apply_joint((int)leg, 0, 0, 0.0f);
+        } else if (t < (MOTOR_TEST_JOINT_MOVE_MS + MOTOR_TEST_JOINT_GAP_MS + MOTOR_TEST_JOINT_MOVE_MS)) {
+            uint32_t kt = t - MOTOR_TEST_JOINT_MOVE_MS - MOTOR_TEST_JOINT_GAP_MS;
+            float wave = sinf(MOTOR_TEST_TWO_PI * (float)kt / (float)MOTOR_TEST_JOINT_MOVE_MS);
+            s_motor_test_phase = MOTOR_TEST_PHASE_KNEE;
+            s_motor_test_joint_wave = wave;
+            bringup_motor_test_apply_joint((int)leg, 0, 1, wave);
+        } else {
+            s_motor_test_phase = MOTOR_TEST_PHASE_JOINT_GAP;
+            bringup_motor_test_apply_joint((int)leg, 0, 0, 0.0f);
+        }
+
+        motor_go_send_all();
+        motor_m3508_send_all();
+        return;
+    }
+
+    elapsed -= joint_total_ms;
+    if (elapsed < wheel_total_ms) {
+        uint32_t wheel = elapsed / wheel_slot_ms;
+        uint32_t t = elapsed % wheel_slot_ms;
+        s_motor_test_index = (uint8_t)wheel;
+
+        if (t < MOTOR_TEST_WHEEL_MOVE_MS) {
+            s_motor_test_phase = MOTOR_TEST_PHASE_WHEEL_FWD;
+            s_motor_test_wheel_target = (float)APP_BRINGUP_WHEEL_JOG_RAD_S;
+            bringup_motor_test_apply_wheel((int)wheel, s_motor_test_wheel_target);
+        } else if (t < (MOTOR_TEST_WHEEL_MOVE_MS + MOTOR_TEST_WHEEL_STOP_MS)) {
+            s_motor_test_phase = MOTOR_TEST_PHASE_WHEEL_STOP;
+            bringup_motor_test_apply_wheel((int)wheel, 0.0f);
+        } else if (t < (MOTOR_TEST_WHEEL_MOVE_MS + MOTOR_TEST_WHEEL_STOP_MS + MOTOR_TEST_WHEEL_MOVE_MS)) {
+            s_motor_test_phase = MOTOR_TEST_PHASE_WHEEL_REV;
+            s_motor_test_wheel_target = -(float)APP_BRINGUP_WHEEL_JOG_RAD_S;
+            bringup_motor_test_apply_wheel((int)wheel, s_motor_test_wheel_target);
+        } else {
+            s_motor_test_phase = MOTOR_TEST_PHASE_WHEEL_STOP;
+            bringup_motor_test_apply_wheel((int)wheel, 0.0f);
+        }
+
+        motor_go_send_all();
+        motor_m3508_send_all();
+        return;
+    }
+
+    s_motor_test_phase = MOTOR_TEST_PHASE_DONE;
+    s_motor_test_index = 0U;
+    bringup_motor_test_zero_go();
+    bringup_motor_test_zero_wheels(0);
+    motor_go_send_all();
+    motor_m3508_send_all();
 }
 
 static float controller_height_from_body(float body_height_m) {
@@ -481,6 +728,11 @@ void task_chassis_step_for_test(float dt_s, uint32_t now_ms) {
     if (APP_BRINGUP_STAGE == APP_BRINGUP_STAGE_M3508_JOG) {
         bringup_apply_wheel_jog();
         motor_m3508_send_all();
+        return;
+    }
+
+    if (APP_BRINGUP_STAGE == APP_BRINGUP_STAGE_MOTOR_FIXED_TEST) {
+        bringup_motor_fixed_test_step(now_ms);
         return;
     }
 

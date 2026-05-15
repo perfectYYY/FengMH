@@ -22,6 +22,8 @@ static const char* TAG = "GO";
 #define CLAMP(_V, _MIN, _MAX) \
     ((_V) <= (_MIN) ? (_MIN) : ((_V) >= (_MAX) ? (_MAX) : (_V)))
 
+#define GO_TX_WAIT_TIMEOUT_US 250U
+
 /* ─── CRC16-CCITT 查表 ─── */
 static const uint16_t s_crc_ccitt_table[256] = {
     0x0000, 0x1189, 0x2312, 0x329b, 0x4624, 0x57ad, 0x6536, 0x74bf,
@@ -440,9 +442,9 @@ void motor_go_uart_rx_cb(bsp_uart_bus_t bus, const uint8_t* data,
 
 app_err_t motor_go_send_all(void) {
     /* 按总线分组发送:
-     * RS485 半双工 + DMA，每发一帧后 HAL_Delay(1) 等待 DMA 完成，
-     * 否则 s_tx_busy 标志会导致同一总线上后续电机帧被丢弃。
-     * 17B @ 4Mbps 物理传输 ~42.5µs，1ms 远大于实际耗时。
+     * RS485 半双工 + DMA，每发一帧后等 DMA 完成再发同总线下一帧。
+     * 17B @ 4Mbps 物理传输约 42.5us；用短超时等待，避免 1ms tick 级
+     * delay 把 500Hz 底盘任务拖到几十 Hz。
      */
     for (int bus = BSP_UART_2; bus <= BSP_UART_3; bus++) {
         for (int i = 0; i < GO_MOTOR_COUNT; i++) {
@@ -455,10 +457,7 @@ app_err_t motor_go_send_all(void) {
                           (const uint8_t*)&frame,
                           sizeof(frame));
 
-#if !APP_TARGET_HOST
-            /* 等待 DMA 传输完成，ISR 会清除 s_tx_busy 并重启 RX */
-            HAL_Delay(1);
-#endif
+            (void)bsp_uart_wait_tx_done((bsp_uart_bus_t)bus, GO_TX_WAIT_TIMEOUT_US);
         }
     }
     return APP_OK;

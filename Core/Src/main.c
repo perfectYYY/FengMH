@@ -39,7 +39,7 @@
  *     不要再回头改 main.c。
  */
 #ifndef USE_LEGACY_MAIN
-#define USE_LEGACY_MAIN 1
+#define USE_LEGACY_MAIN 0
 #endif
 
 #if USE_LEGACY_MAIN
@@ -47,6 +47,8 @@
 #include "gait_plan.h"
 #include <string.h>
 #include "3508_motor.h"
+#else
+#include "app_init.h"
 #endif
 /* USER CODE END Includes */
 
@@ -311,6 +313,12 @@ int main(void)
   HAL_Delay(2000);
 #endif /* USE_LEGACY_MAIN */
 #if !USE_LEGACY_MAIN
+  /*
+   * app_init() touches HAL timeouts/delays (for example BMI088 bring-up), so run
+   * it before osKernelInitialize() raises BASEPRI and masks the HAL TIM1 tick.
+   */
+  (void)app_init();
+
   /* USER CODE END 2 */
 
   /* Init scheduler */
@@ -518,11 +526,13 @@ void MPU_Config(void)
 void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 {
   /* USER CODE BEGIN Callback 0 */
-	//开个定时器中断，稳定发送3508电机指令
+	// legacy 模式下用 TIM1 稳定发送 3508 电机指令；RTOS 模式只保留 HAL tick。
+#if USE_LEGACY_MAIN
 	  if (htim->Instance == TIM1)
 	  {
 		  send_current();
 	  }
+#endif
   /* USER CODE END Callback 0 */
   if (htim->Instance == TIM1)
   {

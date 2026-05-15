@@ -48,6 +48,13 @@ set(APP_BRINGUP_STAGE "100" CACHE STRING "Firmware bring-up stage; 100 means nor
 set(APP_BRINGUP_LEG_MASK "0x01" CACHE STRING "Bring-up leg bitmask: bit0 FL, bit1 FR, bit2 RL, bit3 RR")
 set(APP_BRINGUP_WHEEL_MASK "0x01" CACHE STRING "Bring-up wheel bitmask: bit0 FL, bit1 FR, bit2 RL, bit3 RR")
 set(APP_BRINGUP_WHEEL_JOG_RAD_S "0.5f" CACHE STRING "Bring-up wheel jog speed in output rad/s")
+option(USE_LEGACY_MAIN "Build the old blocking Core/Src/main.c path instead of the FreeRTOS App tasks" OFF)
+
+if(USE_LEGACY_MAIN)
+    set(_USE_LEGACY_MAIN_DEFINE 1)
+else()
+    set(_USE_LEGACY_MAIN_DEFINE 0)
+endif()
 
 #  APP_DIRS 是固件 App 层的模块清单。
 set(APP_DIRS
@@ -89,9 +96,10 @@ target_compile_definitions (${PROJECT_NAME}.elf PRIVATE
         APP_BRINGUP_LEG_MASK=${APP_BRINGUP_LEG_MASK}
         APP_BRINGUP_WHEEL_MASK=${APP_BRINGUP_WHEEL_MASK}
         APP_BRINGUP_WHEEL_JOG_RAD_S=${APP_BRINGUP_WHEEL_JOG_RAD_S}
+        USE_LEGACY_MAIN=${_USE_LEGACY_MAIN_DEFINE}
 )
 
-message(STATUS "APP_BRINGUP_STAGE=${APP_BRINGUP_STAGE}, LEG_MASK=${APP_BRINGUP_LEG_MASK}, WHEEL_MASK=${APP_BRINGUP_WHEEL_MASK}, WHEEL_JOG=${APP_BRINGUP_WHEEL_JOG_RAD_S}")
+message(STATUS "APP_BRINGUP_STAGE=${APP_BRINGUP_STAGE}, LEG_MASK=${APP_BRINGUP_LEG_MASK}, WHEEL_MASK=${APP_BRINGUP_WHEEL_MASK}, WHEEL_JOG=${APP_BRINGUP_WHEEL_JOG_RAD_S}, USE_LEGACY_MAIN=${_USE_LEGACY_MAIN_DEFINE}")
 
 # -----------------------------------------------------------------------------
 # 5. 健康自检
