@@ -60,7 +60,7 @@ app_err_t bsp_fdcan_init(void) {
         filter.FilterIndex = 0;
         filter.FilterType = FDCAN_FILTER_MASK;
         filter.FilterConfig = FDCAN_FILTER_TO_RXFIFO0;
-        /* Accept the DJI C620/M3508 control and feedback range: 0x200~0x20F. */
+        /* 接收 0x200~0x20F：(ID & 0x7F0) == 0x200，覆盖 M3508 反馈 0x201~0x208 */
         filter.FilterID1 = 0x200;
         filter.FilterID2 = 0x7F0;
 

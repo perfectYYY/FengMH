@@ -114,7 +114,7 @@ static float go_joint_tau_to_motor(const motor_cfg_t* cfg, float joint_tau) {
 /* 模式控制字段 1B */
 typedef struct {
     uint8_t id     : 4;   /* 电机 ID */
-    uint8_t status : 3;   /* 工作模式: 0=锁定 1=FOC闭环 2=校准 3=保留 */
+    uint8_t status : 3;   /* 工作模式: 1=FOC闭环（含零力矩）2=校准; 0 不建立通信 */
     uint8_t reserve: 1;
 } go_ris_mode_t;
 
@@ -278,7 +278,7 @@ static int go_set_velocity(motor_dev_t* dev, float vel_rads) {
 
 /*
  * 仅计算零位偏移，不改变电机模式。
- * 在 GO_ZERO 阶段调用 — 电机保持锁定态，但 zero_offset 已就绪。
+ * 在 GO_ZERO 阶段调用 — 电机保持零力矩（mode=1, kp/kd/tau=0），zero_offset 就绪后可切闭环。
  */
 static int go_calibrate(motor_dev_t* dev) {
     if (!dev || !dev->drv_ctx) return APP_ERR_INVALID_ARG;
@@ -315,7 +315,7 @@ static int go_enable(motor_dev_t* dev) {
 static int go_disable(motor_dev_t* dev) {
     if (!dev || !dev->drv_ctx) return APP_ERR_INVALID_ARG;
     go_drv_ctx_t* ctx = (go_drv_ctx_t*)dev->drv_ctx;
-    ctx->mode = 0;  /* 锁定 */
+    ctx->mode = 1;  /* 零力矩：FOC 使能，kp/kd/tau 全零，电机可自由转动并正常回包 */
     ctx->cmd_kp  = 0.0f;
     ctx->cmd_kd  = 0.0f;
     ctx->cmd_tau = 0.0f;
@@ -326,7 +326,7 @@ static int go_disable(motor_dev_t* dev) {
 static int go_reset_fault(motor_dev_t* dev) {
     if (!dev || !dev->drv_ctx) return APP_ERR_INVALID_ARG;
     go_drv_ctx_t* ctx = (go_drv_ctx_t*)dev->drv_ctx;
-    ctx->mode = 0;
+    ctx->mode = 1;  /* 零力矩，保持通信 */
     dev->state.err_cnt = 0;
     return APP_OK;
 }
@@ -387,7 +387,7 @@ app_err_t motor_go_init_all(void) {
         /* 初始化驱动上下文 */
         s_go_ctxs[i].bus_id      = (uint8_t)m->uart_bus;
         s_go_ctxs[i].motor_id    = m->bus_motor_id;
-        s_go_ctxs[i].mode        = 0;  /* 锁定态 */
+        s_go_ctxs[i].mode        = 1;  /* 零力矩：mode=1, kp/kd/tau=0，上电即可通信 */
         s_go_ctxs[i].cmd_kp      = 0.0f;
         s_go_ctxs[i].cmd_kd      = 0.0f;
         {
