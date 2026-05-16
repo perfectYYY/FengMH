@@ -200,6 +200,20 @@ static int go_set_position(motor_dev_t* dev, float pos, float vel,
                             float kp, float kd, float tau_ff) {
     if (!dev || !dev->drv_ctx) return APP_ERR_INVALID_ARG;
     go_drv_ctx_t* ctx = (go_drv_ctx_t*)dev->drv_ctx;
+
+    /* 尚未标定：自动尝试（收到首包后立即触发），否则保持零力矩，禁止下发位置指令 */
+    if (!ctx->calibrated) {
+        if (dev->state.rx_cnt > 0U) {
+            (void)go_enable(dev);  /* go_enable 内部完成标定 */
+        } else {
+            ctx->cmd_kp  = 0.0f;
+            ctx->cmd_kd  = 0.0f;
+            ctx->cmd_tau = 0.0f;
+            ctx->mode    = 1;  /* FOC 使能但零力矩，维持通信 */
+            return APP_OK;
+        }
+    }
+
     ctx->cmd_pos = pos + ctx->zero_offset;
     ctx->cmd_vel = vel;
     ctx->cmd_kp  = kp;
@@ -294,17 +308,20 @@ typedef struct {
     uint8_t            bus_motor_id;  /* 总线上的顺序 ID */
 } go_bus_map_t;
 
+/*
+ * 总线映射沿用老工程 MotorInstance_Init():
+ *   0/1 -> USART3, 3/4 -> USART2, 6/7 -> USART3, 9/10 -> USART2
+ * RIS 协议 ID 也沿用这些全局物理槽位。
+ */
 static const go_bus_map_t s_go_map[GO_MOTOR_COUNT] = {
-    /* UART3 (BSP_UART_3) 上的 4 个电机 */
-    { MOTOR_ID_FL_HIP,  BSP_UART_3, 0 },
-    { MOTOR_ID_FL_KNEE, BSP_UART_3, 1 },
-    { MOTOR_ID_RL_HIP,  BSP_UART_3, 2 },
-    { MOTOR_ID_RL_KNEE, BSP_UART_3, 3 },
-    /* UART2 (BSP_UART_2) 上的 4 个电机 */
-    { MOTOR_ID_FR_HIP,  BSP_UART_2, 0 },
-    { MOTOR_ID_FR_KNEE, BSP_UART_2, 1 },
-    { MOTOR_ID_RR_HIP,  BSP_UART_2, 2 },
-    { MOTOR_ID_RR_KNEE, BSP_UART_2, 3 },
+    { MOTOR_ID_FL_HIP,  BSP_UART_3, 0  },
+    { MOTOR_ID_FL_KNEE, BSP_UART_3, 1  },
+    { MOTOR_ID_RL_HIP,  BSP_UART_2, 3  },
+    { MOTOR_ID_RL_KNEE, BSP_UART_2, 4  },
+    { MOTOR_ID_RR_HIP,  BSP_UART_3, 6  },
+    { MOTOR_ID_RR_KNEE, BSP_UART_3, 7  },
+    { MOTOR_ID_FR_HIP,  BSP_UART_2, 9  },
+    { MOTOR_ID_FR_KNEE, BSP_UART_2, 10 },
 };
 
 app_err_t motor_go_init_all(void) {
@@ -317,7 +334,7 @@ app_err_t motor_go_init_all(void) {
         /* 初始化驱动上下文 */
         s_go_ctxs[i].bus_id      = (uint8_t)m->uart_bus;
         s_go_ctxs[i].motor_id    = m->bus_motor_id;
-        s_go_ctxs[i].mode        = 0;  /* 锁定态 */
+        s_go_ctxs[i].mode        = 1;  /* 零力矩：FOC 使能，kp/kd/tau=0，上电即可通信 */
         s_go_ctxs[i].cmd_kp      = 0.0f;
         s_go_ctxs[i].cmd_kd      = 0.0f;
 
@@ -367,7 +384,7 @@ void motor_go_uart_rx_cb(bsp_uart_bus_t bus, const uint8_t* data,
 /* ─── 周期性发送 ─── */
 
 app_err_t motor_go_send_all(void) {
-    /* 按总线分组发送 */
+    /* 按总线分组发送：RS485 半双工，逐帧发送并等待 TX 完成，留出接收窗口 */
     for (int bus = BSP_UART_2; bus <= BSP_UART_3; bus++) {
         for (int i = 0; i < GO_MOTOR_COUNT; i++) {
             if (s_go_ctxs[i].bus_id != (uint8_t)bus) continue;
@@ -378,7 +395,22 @@ app_err_t motor_go_send_all(void) {
             bsp_uart_send((bsp_uart_bus_t)bus,
                           (const uint8_t*)&frame,
                           sizeof(frame));
+
+            /* 等待本帧 TX 完成，给电机留出回包窗口（250us >> 17B@4Mbps≈42us + 传播） */
+            (void)bsp_uart_wait_tx_done((bsp_uart_bus_t)bus, 250U);
         }
     }
     return APP_OK;
+}
+
+app_err_t motor_go_calibrate_all(void) {
+    int ok = 0;
+    for (int i = 0; i < GO_MOTOR_COUNT; i++) {
+        go_drv_ctx_t* ctx = &s_go_ctxs[i];
+        if (ctx->calibrated) { ok++; continue; }        /* 已标定，跳过 */
+        if (s_go_devs[i].state.rx_cnt == 0U) continue;  /* 未回包，等下一次 */
+        (void)go_enable(&s_go_devs[i]);                  /* go_enable 内完成标定 */
+        ok++;
+    }
+    return (ok > 0) ? APP_OK : APP_ERR_TIMEOUT;
 }
