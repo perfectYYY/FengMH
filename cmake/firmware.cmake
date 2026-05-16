@@ -45,8 +45,8 @@ target_link_options(${PROJECT_NAME}.elf PRIVATE -specs=nano.specs -specs=nosys.s
 # 4. App/ 分层源与 include
 # -----------------------------------------------------------------------------
 set(APP_BRINGUP_STAGE "100" CACHE STRING "Firmware bring-up stage; 100 means normal firmware")
-set(APP_BRINGUP_LEG_MASK "0x01" CACHE STRING "Bring-up leg bitmask: bit0 FL, bit1 FR, bit2 RL, bit3 RR")
-set(APP_BRINGUP_WHEEL_MASK "0x01" CACHE STRING "Bring-up wheel bitmask: bit0 FL, bit1 FR, bit2 RL, bit3 RR")
+set(APP_BRINGUP_LEG_MASK "0x04" CACHE STRING "Bring-up leg bitmask: bit0 FL, bit1 FR, bit2 RL, bit3 RR")
+set(APP_BRINGUP_WHEEL_MASK "0x04" CACHE STRING "Bring-up wheel bitmask: bit0 FL, bit1 FR, bit2 RL, bit3 RR")
 set(APP_BRINGUP_WHEEL_JOG_RAD_S "0.5f" CACHE STRING "Bring-up wheel jog speed in output rad/s")
 option(USE_LEGACY_MAIN "Build the old blocking Core/Src/main.c path instead of the FreeRTOS App tasks" OFF)
 

@@ -39,11 +39,11 @@
 #endif
 
 #ifndef APP_BRINGUP_LEG_MASK
-#define APP_BRINGUP_LEG_MASK 0x01u  /* default: FL only */
+#define APP_BRINGUP_LEG_MASK 0x04u  /* default: FL only */
 #endif
 
 #ifndef APP_BRINGUP_WHEEL_MASK
-#define APP_BRINGUP_WHEEL_MASK 0x01u  /* default: FL wheel only */
+#define APP_BRINGUP_WHEEL_MASK 0x04u  /* default: FL wheel only */
 #endif
 
 #ifndef APP_BRINGUP_WHEEL_JOG_RAD_S

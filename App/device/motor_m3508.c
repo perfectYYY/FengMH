@@ -249,9 +249,6 @@ static const m3508_bus_map_t s_m3508_map[M3508_MOTOR_COUNT] = {
 /* EMA 速度滤波系数 */
 #define M3508_EMA_ALPHA     0.3f
 
-/* 功率限制 (W) */
-#define M3508_POWER_LIMIT_W 162.0f
-
 /* 位置环 PID 参数 */
 #define M3508_POS_KP        1.0f
 #define M3508_POS_KI        0.03f
