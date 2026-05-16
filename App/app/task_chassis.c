@@ -750,14 +750,14 @@ void task_chassis_step_for_test(float dt_s, uint32_t now_ms) {
 
         if (!s_pre_calib_done && APP_BRINGUP_STAGE >= APP_BRINGUP_STAGE_GO_LEG_HOLD) {
             motor_go_send_all();          /* 零力矩收发：mode=1, kp/kd/tau=0，收集编码器反馈 */
-            if (s_pre_calib_cnt < 50U) {  /* 100ms @ 500Hz */
+            (void)motor_go_calibrate_all(); /* 每周期尝试：已回包的电机立即标定，未回包的跳过 */
+            if (s_pre_calib_cnt < 500U) {  /* 1000ms @ 500Hz，给 GO 电机足够时间首包响应 */
                 s_pre_calib_cnt++;
                 return;
             }
-            (void)motor_go_calibrate_all();
             s_pre_calib_done = 1;
-            LOGI("pre-calib: motors calibrated, entering stand");
-            /* 同周期不继续：下一个周期走正常控制流程 */
+            LOGI("pre-calib done after %u cycles", (unsigned)s_pre_calib_cnt);
+            /* 超时后不再要求全部回包：只要有电机成功标定即可进入闭环 */
             return;
         }
     }

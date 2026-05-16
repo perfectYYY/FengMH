@@ -256,6 +256,16 @@ static int go_set_position(motor_dev_t* dev, float pos, float vel,
         (void)go_calibrate(dev);
     }
 
+    /* 未完成标定：保持零力矩悬浮，禁止下发位置指令
+     * 防止 zero_offset=0 时 cmd_pos 计算出负几十 rad 顶限位 */
+    if (!ctx->calibrated) {
+        ctx->cmd_kp  = 0.0f;
+        ctx->cmd_kd  = 0.0f;
+        ctx->cmd_tau = 0.0f;
+        ctx->mode    = 1;  /* FOC 使能但零力矩，维持通信以便收到首包后能标定 */
+        return APP_OK;
+    }
+
     ctx->cmd_pos = go_joint_pos_to_motor(cfg, ctx->zero_offset, pos);
     ctx->cmd_vel = go_joint_vel_to_motor(cfg, vel);
     ctx->cmd_kp  = kp;
