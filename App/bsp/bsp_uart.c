@@ -154,6 +154,10 @@ app_err_t bsp_uart_wait_tx_done(bsp_uart_bus_t bus, uint32_t timeout_us) {
             return APP_ERR_BUSY;
         }
     }
+    /* TX 物理发送完毕，但电机需要约 50-100µs 才开始回包（16B @4Mbps=40µs）。
+     * 在剩余窗口内继续等待，确保回包在下次 bsp_uart_send 拉高 DE 之前
+     * 已被 DMA 完整接收，避免 RS485 半双工总线冲突导致 CRC 校验失败。 */
+    while ((uint32_t)(DWT->CYCCNT - start) < timeout_cycles) {}
     return APP_OK;
 #endif
 }
