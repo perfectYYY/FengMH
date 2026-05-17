@@ -6,11 +6,12 @@
  *
  * 4 个 M3508 电机分属 2 条 FDCAN 总线（左右各一条）：
  *   - FDCAN1: FL_WHEEL (DJI_ID=1), RL_WHEEL (DJI_ID=2)  → 反馈 0x201, 0x202
- *   - FDCAN2: RR_WHEEL (DJI_ID=1), FR_WHEEL (DJI_ID=2)  → 反馈 0x201, 0x202
- * DJI_ID 在每条总线上独立编号（1 或 2），不跨总线连续。
+ *   - FDCAN2: RR_WHEEL (DJI_ID=3), FR_WHEEL (DJI_ID=4)  → 反馈 0x203, 0x204
+ * DJI_ID 全局连续：1-2 在 FDCAN1，3-4 在 FDCAN2；
+ * ID=3,4 的 C620 固定读取 0x200 帧的 bytes[4,5] 和 bytes[6,7]。
  *
  * 速度 PID 闭环使用 app_pid_t，默认参数 Kp=3.0, Ki=0.3, Kd=0.0
- * 减速比 187:1 自动在 vtable 中处理。
+ * 减速比 268/17 ≈ 15.76 自动在 vtable 中处理。
  */
 #ifndef APP_DEVICE_MOTOR_M3508_H_
 #define APP_DEVICE_MOTOR_M3508_H_
@@ -35,7 +36,7 @@ extern "C" {
 #define M3508_CURRENT_RAW_MAX  16384    /* 电流指令 raw 上限 */
 #define M3508_CURRENT_LIMIT_A  20.0f    /* 满量程电流 (A) */
 #define M3508_TORQUE_KT        0.01562f /* 转矩常数 N·m/A */
-#define M3508_REDUCTION_RATIO  187.0f   /* 减速比 */
+#define M3508_REDUCTION_RATIO  (268.0f / 17.0f)  /* 减速比 M3508P (268:17) ≈ 15.76 */
 #define M3508_POWER_LIMIT_W    150.0f   /* 功率保护上限 (W) */
 #define M3508_EMA_ALPHA        0.3f     /* 速度 EMA 滤波系数：0=全平滑 1=无滤波 */
 
@@ -48,7 +49,7 @@ extern "C" {
 /* M3508 驱动私有上下文 */
 typedef struct {
     uint8_t       bus_id;       /* FDCAN 总线索引 (BSP_FDCAN_1 或 BSP_FDCAN_2) */
-    uint8_t       dji_id;       /* C620 DJI ID (1 或 2，每条总线独立)，决定 0x200 帧中的字节偏移 */
+    uint8_t       dji_id;       /* C620 DJI ID（全局 1-4）：1/2 在 FDCAN1，3/4 在 FDCAN2；slot=dji_id-1 决定 0x200 帧字节偏移 */
     uint8_t       online;
     uint8_t       ctrl_mode;    /* 当前控制模式 M3508_MODE_* */
 

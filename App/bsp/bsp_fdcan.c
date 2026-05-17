@@ -39,6 +39,10 @@ static uint32_t          s_tx_tail[BSP_FDCAN_BUS_MAX];
 static FDCAN_HandleTypeDef* s_hfdcan[BSP_FDCAN_BUS_MAX] = {
     &hfdcan1, &hfdcan2
 };
+
+/* 每条总线的累计错误次数（TX 入队失败 + Bus Off + Error Passive / Warning）
+ * 非零说明 CAN 总线有问题，可通过 bsp_fdcan_get_bus_err_cnt() 读取 */
+static volatile uint32_t s_bus_err_cnt[BSP_FDCAN_BUS_MAX];
 #endif
 
 /* ─── 公共接口 ─── */
@@ -51,7 +55,9 @@ app_err_t bsp_fdcan_init(void) {
     memset(s_tx_head, 0, sizeof(s_tx_head));
     memset(s_tx_tail, 0, sizeof(s_tx_tail));
 #else
-    /* MCU: 配置滤波器 + 启动 FDCAN + 注册 RX 中断通知 */
+    memset((void*)s_bus_err_cnt, 0, sizeof(s_bus_err_cnt));
+
+    /* MCU: 配置滤波器 + 启动 FDCAN + 注册 RX/错误中断通知 */
     for (int i = 0; i < BSP_FDCAN_BUS_MAX; i++) {
         if (!s_hfdcan[i]) continue;
 
@@ -69,9 +75,20 @@ app_err_t bsp_fdcan_init(void) {
                                       FDCAN_REJECT_REMOTE,
                                       FDCAN_REJECT_REMOTE);
         HAL_FDCAN_ConfigFilter(s_hfdcan[i], &filter);
+
+        /* App 层强制覆盖：启用自动重传（CubeMX 默认 DISABLE）。
+         * C620 上电需要约 200ms 才能应答 ACK；DISABLE 时每次丢帧让 TEC +8，
+         * 约 32 帧（64ms @500Hz）就会进入 Bus Off，整条总线锁死且静默无声。
+         * 在 HAL_FDCAN_Start 之前重新 Init 即可生效（控制器仍处于 Init 模式）。 */
+        s_hfdcan[i]->Init.AutoRetransmission = ENABLE;
+        HAL_FDCAN_Init(s_hfdcan[i]);
+
         HAL_FDCAN_Start(s_hfdcan[i]);
         HAL_FDCAN_ActivateNotification(s_hfdcan[i],
-                                        FDCAN_IT_RX_FIFO0_NEW_MESSAGE,
+                                        FDCAN_IT_RX_FIFO0_NEW_MESSAGE |
+                                        FDCAN_IT_ERROR_WARNING          |
+                                        FDCAN_IT_ERROR_PASSIVE          |
+                                        FDCAN_IT_BUS_OFF,
                                         0);
     }
 #endif
@@ -120,7 +137,9 @@ app_err_t bsp_fdcan_send(bsp_fdcan_bus_t bus, const bsp_fdcan_frame_t* f) {
                                                            &tx_header,
                                                            f->data);
     if (ret != HAL_OK) {
-        LOGE("fdcan%u HAL TX error %d", (unsigned)bus, (int)ret);
+        s_bus_err_cnt[bus]++;
+        LOGE("fdcan%u TX fifo err %d (total_err=%lu)",
+             (unsigned)bus, (int)ret, (unsigned long)s_bus_err_cnt[bus]);
         return APP_ERR_IO;
     }
     return APP_OK;
@@ -165,6 +184,48 @@ void bsp_fdcan_hal_rxfifo0_cb(FDCAN_HandleTypeDef *hfdcan, uint32_t RxFifo0ITs) 
         if (s_rx[bus].cb) {
             s_rx[bus].cb(bus, &frame, s_rx[bus].user);
         }
+    }
+}
+
+/*
+ * HAL_FDCAN_ErrorStatusCallback 桥接：监控总线错误状态 + 自动 Bus Off 恢复
+ *
+ * 使用方法：在 Core/Src/main.c USER CODE BEGIN 4 中:
+ *   extern void bsp_fdcan_hal_error_cb(FDCAN_HandleTypeDef *hfdcan, uint32_t ErrorStatusITs);
+ *   void HAL_FDCAN_ErrorStatusCallback(FDCAN_HandleTypeDef *hfdcan, uint32_t ErrorStatusITs) {
+ *       bsp_fdcan_hal_error_cb(hfdcan, ErrorStatusITs);
+ *   }
+ *
+ * Bus Off 恢复原理：Bus Off 时硬件自动置 CCCR.INIT=1 锁死总线。
+ * 调用 HAL_FDCAN_Start 清 INIT 位，触发 128×11 个隐性位的恢复序列，
+ * 之后控制器自动回到 Error Active 状态，无需任何额外操作。
+ */
+void bsp_fdcan_hal_error_cb(FDCAN_HandleTypeDef *hfdcan, uint32_t ErrorStatusITs) {
+    bsp_fdcan_bus_t bus = BSP_FDCAN_BUS_MAX;
+    if      (hfdcan == &hfdcan1) bus = BSP_FDCAN_1;
+    else if (hfdcan == &hfdcan2) bus = BSP_FDCAN_2;
+    else return;
+
+    s_bus_err_cnt[bus]++;
+
+    if (ErrorStatusITs & FDCAN_IT_BUS_OFF) {
+        /* TEC 溢出超过 255，整条总线锁死，必须立即恢复 */
+        LOGE("FDCAN%u BUS_OFF (cnt=%lu), recovering...",
+             (unsigned)bus, (unsigned long)s_bus_err_cnt[bus]);
+        HAL_FDCAN_Start(hfdcan);  /* 清 CCCR.INIT，触发 bus-off recovery 序列 */
+        /* 恢复后重新注册所有通知（Start 内部会清通知状态） */
+        HAL_FDCAN_ActivateNotification(hfdcan,
+                                        FDCAN_IT_RX_FIFO0_NEW_MESSAGE |
+                                        FDCAN_IT_ERROR_WARNING          |
+                                        FDCAN_IT_ERROR_PASSIVE          |
+                                        FDCAN_IT_BUS_OFF,
+                                        0);
+    } else if (ErrorStatusITs & FDCAN_IT_ERROR_PASSIVE) {
+        LOGW("FDCAN%u error-passive (TEC/REC>=128, cnt=%lu)",
+             (unsigned)bus, (unsigned long)s_bus_err_cnt[bus]);
+    } else if (ErrorStatusITs & FDCAN_IT_ERROR_WARNING) {
+        LOGW("FDCAN%u error-warning (TEC/REC>=96, cnt=%lu)",
+             (unsigned)bus, (unsigned long)s_bus_err_cnt[bus]);
     }
 }
 #endif /* !APP_TARGET_HOST */

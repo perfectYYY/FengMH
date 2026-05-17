@@ -154,17 +154,17 @@ static void bringup_configure_leg_controller(void) {
 }
 
 static void bringup_apply_wheel_jog(void) {
+    static uint8_t s_jog_enabled[GAIT_LEG_NUM];
     for (int i = 0; i < GAIT_LEG_NUM; i++) {
         motor_dev_t* wheel = motor_get(WHEEL_ID[i]);
-        if (!wheel || !wheel->ops || !wheel->ops->set_velocity) {
-            continue;
-        }
+        if (!wheel || !wheel->ops || !wheel->ops->set_velocity) continue;
 
-        float target = (((uint8_t)(1U << i) & (uint8_t)APP_BRINGUP_WHEEL_MASK) != 0U) ?
-                       (float)APP_BRINGUP_WHEEL_JOG_RAD_S : 0.0f;
-                       // bringup_apply_wheel_jog 中，set_velocity 之前：
-        if (target != 0.0f && wheel->ops->enable) {
+        int active = (((uint8_t)(1U << i) & (uint8_t)APP_BRINGUP_WHEEL_MASK) != 0U);
+        float target = active ? (float)APP_BRINGUP_WHEEL_JOG_RAD_S : 0.0f;
+        /* 只 enable 一次，避免每帧重置 PID 积分 */
+        if (active && !s_jog_enabled[i] && wheel->ops->enable) {
             wheel->ops->enable(wheel);
+            s_jog_enabled[i] = 1U;
         }
         (void)wheel->ops->set_velocity(wheel, target);
     }
@@ -175,6 +175,8 @@ static void bringup_apply_wheel_jog(void) {
 #define MOTOR_TEST_JOINT_GAP_MS    700U
 #define MOTOR_TEST_WHEEL_MOVE_MS  2500U
 #define MOTOR_TEST_WHEEL_STOP_MS   700U
+#define MOTOR_TEST_RL_SPIN_MS     5000U   /* RL 轮匀速段时长 */
+#define MOTOR_TEST_RL_SPIN_RADS   3.0f    /* RL 轮目标速度 (输出轴 rad/s) */
 #define MOTOR_TEST_JOINT_KP          0.08f
 #define MOTOR_TEST_JOINT_KD          0.02f
 #define MOTOR_TEST_HIP_AMP_RAD       0.08f
@@ -186,6 +188,7 @@ typedef enum {
     MOTOR_TEST_PHASE_HIP,
     MOTOR_TEST_PHASE_JOINT_GAP,
     MOTOR_TEST_PHASE_KNEE,
+    MOTOR_TEST_PHASE_RL_SPIN,
     MOTOR_TEST_PHASE_WHEEL_FWD,
     MOTOR_TEST_PHASE_WHEEL_STOP,
     MOTOR_TEST_PHASE_WHEEL_REV,
@@ -301,6 +304,9 @@ static void bringup_motor_test_apply_wheel(int wheel_index, float target_rads) {
         float target = (i == wheel_index &&
                         bringup_mask_has((uint32_t)APP_BRINGUP_WHEEL_MASK, i)) ?
                        target_rads : 0.0f;
+        if (target != 0.0f && wheel->ops->enable) {
+            (void)wheel->ops->enable(wheel);  /* 清除 disable 留下的 online=0 */
+        }
         (void)wheel->ops->set_velocity(wheel, target);
     }
 }
@@ -375,6 +381,19 @@ static void bringup_motor_fixed_test_step(uint32_t now_ms) {
     }
 
     elapsed -= joint_total_ms;
+
+    /* RL 轮匀速段：关节测试结束后，左后腿轮子以 3 rad/s 匀速转动 5s */
+    if (elapsed < MOTOR_TEST_RL_SPIN_MS) {
+        s_motor_test_phase = MOTOR_TEST_PHASE_RL_SPIN;
+        s_motor_test_index = 2U;  /* WHEEL_ID[2] = MOTOR_ID_RL_WHEEL */
+        s_motor_test_wheel_target = MOTOR_TEST_RL_SPIN_RADS;
+        bringup_motor_test_apply_wheel(2, MOTOR_TEST_RL_SPIN_RADS);
+        motor_go_send_all();
+        motor_m3508_send_all();
+        return;
+    }
+    elapsed -= MOTOR_TEST_RL_SPIN_MS;
+
     if (elapsed < wheel_total_ms) {
         uint32_t wheel = elapsed / wheel_slot_ms;
         uint32_t t = elapsed % wheel_slot_ms;
@@ -779,6 +798,7 @@ void task_chassis_step_for_test(float dt_s, uint32_t now_ms) {
     if (!bringup_allow_trot()) {
         s_offline_seq_active = 0U;
         s_offline_seq_done = 0U;
+        s_offline_rl_spin = 0U;
         if (s_active != ACT_STAND) {
             if (request_gait(s_stand, &GAIT_PARAMS_STAND_DEFAULT, 0.3f) == APP_OK) {
                 s_active = ACT_STAND;

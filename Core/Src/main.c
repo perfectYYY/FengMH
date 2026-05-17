@@ -470,6 +470,12 @@ void HAL_FDCAN_RxFifo0Callback(FDCAN_HandleTypeDef *hfdcan, uint32_t RxFifo0ITs)
     bsp_fdcan_hal_rxfifo0_cb(hfdcan, RxFifo0ITs);
 }
 
+/* FDCAN 错误状态回调 → bsp_fdcan（Bus Off 自动恢复 + 错误计数） */
+extern void bsp_fdcan_hal_error_cb(FDCAN_HandleTypeDef *hfdcan, uint32_t ErrorStatusITs);
+void HAL_FDCAN_ErrorStatusCallback(FDCAN_HandleTypeDef *hfdcan, uint32_t ErrorStatusITs) {
+    bsp_fdcan_hal_error_cb(hfdcan, ErrorStatusITs);
+}
+
 /* UART RX 事件回调 → bsp_uart */
 extern void bsp_uart_hal_rx_event(UART_HandleTypeDef *huart, uint16_t size);
 void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t size) {

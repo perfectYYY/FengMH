@@ -5,7 +5,7 @@
  * 1. 4 个 M3508 轮毂电机分属 2 条 FDCAN 总线
  * 2. 每条总线发送一个 0x200 控制帧，包含最多 4 个电机的电流指令
  * 3. 反馈帧每条总线独立：0x201 (DJI_ID=1)、0x202 (DJI_ID=2)，通过 FDCAN RX 回调解码
- * 4. 减速比 187:1 自动在 vtable 中处理：对外角度/速度已除以减速比
+ * 4. 减速比 268/17 ≈ 15.76 自动在 vtable 中处理：对外角度/速度已除以减速比
  * 5. 温度保护：>80°C 限功率 50%，>85°C 调用 disable
  */
 #include "motor_m3508.h"
@@ -221,9 +221,10 @@ static motor_dev_t      s_m3508_devs[M3508_MOTOR_COUNT];
 static m3508_drv_ctx_t  s_m3508_ctxs[M3508_MOTOR_COUNT];
 
 /*
- * 总线映射沿用老工程 M3508Task:
- *   CAN1: FL_WHEEL 0x201, RL_WHEEL 0x202
- *   CAN2: RR_WHEEL 0x201, FR_WHEEL 0x202
+ * 总线映射：DJI_ID 全局连续，与 C620 拨码一致。
+ *   FDCAN1: FL_WHEEL ID=1 (反馈 0x201), RL_WHEEL ID=2 (反馈 0x202)
+ *   FDCAN2: RR_WHEEL ID=3 (反馈 0x203), FR_WHEEL ID=4 (反馈 0x204)
+ * ID=3,4 的 C620 读取 0x200 帧的 bytes[4..7]，slot = dji_id-1 自动对齐。
  */
 typedef struct {
     motor_logical_id_t logical_id;
@@ -234,8 +235,8 @@ typedef struct {
 static const m3508_bus_map_t s_m3508_map[M3508_MOTOR_COUNT] = {
     { MOTOR_ID_FL_WHEEL, BSP_FDCAN_1, 1 },
     { MOTOR_ID_RL_WHEEL, BSP_FDCAN_1, 2 },
-    { MOTOR_ID_RR_WHEEL, BSP_FDCAN_2, 1 },
-    { MOTOR_ID_FR_WHEEL, BSP_FDCAN_2, 2 },
+    { MOTOR_ID_RR_WHEEL, BSP_FDCAN_2, 3 },
+    { MOTOR_ID_FR_WHEEL, BSP_FDCAN_2, 4 },
 };
 
 /* 速度 PID 默认参数 (转子侧) */
@@ -312,7 +313,7 @@ void motor_m3508_fdcan_rx_cb(bsp_fdcan_bus_t bus,
     /* 只处理 0x201~0x208 反馈帧 */
     if (f->can_id < M3508_FB_ID_BASE || f->can_id > 0x208) return;
 
-    uint8_t dji_id = (uint8_t)(f->can_id - M3508_FB_ID_BASE + 1);  /* 每条总线实际只有 1 或 2 */
+    uint8_t dji_id = (uint8_t)(f->can_id - M3508_FB_ID_BASE + 1);  /* 全局 ID：0x201→1, 0x202→2, 0x203→3, 0x204→4 */
 
     /* 查找匹配的电机实例 */
     for (int i = 0; i < M3508_MOTOR_COUNT; i++) {
