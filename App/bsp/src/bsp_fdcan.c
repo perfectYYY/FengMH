@@ -21,6 +21,7 @@ static const char* TAG = "FDCAN";
 #define BSP_FDCAN_TX_DRAIN_TIMEOUT_US  300U
 #define BSP_FDCAN_TX_ABORT_TIMEOUT_US  100U
 #define BSP_FDCAN_WARN_INTERVAL_MS     100U
+#define BSP_FDCAN2_MSG_RAM_OFFSET_WORDS 64U
 
 typedef struct {
     bsp_fdcan_rx_cb_t cb;
@@ -107,9 +108,21 @@ app_err_t bsp_fdcan_init(void) {
     memset((void*)s_bus_err_cnt, 0, sizeof(s_bus_err_cnt));
     memset(s_last_tx_warn_ms, 0, sizeof(s_last_tx_warn_ms));
 
-    /* MCU: 配置滤波器 + 启动 FDCAN + 注册 RX/错误中断通知 */
+    /* MCU: 初始化 FDCAN + 配置滤波器 + 启动 + 注册 RX/错误中断通知 */
     for (int i = 0; i < BSP_FDCAN_BUS_MAX; i++) {
         if (!s_hfdcan[i]) continue;
+
+        /* HAL_FDCAN_Init() 会清空该实例占用的 message RAM，所以必须先 Init，
+         * 再写 filter。FDCAN1/2 共用 SRAMCAN，给 FDCAN2 单独偏移避免互相覆盖。 */
+        s_hfdcan[i]->Init.AutoRetransmission = ENABLE;
+        if (i == BSP_FDCAN_2 && s_hfdcan[i]->Init.MessageRAMOffset == 0U) {
+            s_hfdcan[i]->Init.MessageRAMOffset = BSP_FDCAN2_MSG_RAM_OFFSET_WORDS;
+        }
+        if (HAL_FDCAN_Init(s_hfdcan[i]) != HAL_OK) {
+            s_bus_err_cnt[i]++;
+            LOGE("fdcan%u re-init failed", (unsigned)i);
+            return APP_ERR_IO;
+        }
 
         FDCAN_FilterTypeDef filter;
         filter.IdType = FDCAN_STANDARD_ID;
@@ -120,26 +133,27 @@ app_err_t bsp_fdcan_init(void) {
         filter.FilterID1 = 0x200;
         filter.FilterID2 = 0x7F0;
 
-        HAL_FDCAN_ConfigGlobalFilter(s_hfdcan[i],
-                                      FDCAN_REJECT, FDCAN_REJECT,
-                                      FDCAN_REJECT_REMOTE,
-                                      FDCAN_REJECT_REMOTE);
-        HAL_FDCAN_ConfigFilter(s_hfdcan[i], &filter);
+        if (HAL_FDCAN_ConfigGlobalFilter(s_hfdcan[i],
+                                          FDCAN_REJECT, FDCAN_REJECT,
+                                          FDCAN_REJECT_REMOTE,
+                                          FDCAN_REJECT_REMOTE) != HAL_OK ||
+            HAL_FDCAN_ConfigFilter(s_hfdcan[i], &filter) != HAL_OK) {
+            s_bus_err_cnt[i]++;
+            LOGE("fdcan%u filter config failed", (unsigned)i);
+            return APP_ERR_IO;
+        }
 
-        /* App 层强制覆盖：启用自动重传（CubeMX 默认 DISABLE）。
-         * C620 上电需要约 200ms 才能应答 ACK；DISABLE 时每次丢帧让 TEC +8，
-         * 约 32 帧（64ms @500Hz）就会进入 Bus Off，整条总线锁死且静默无声。
-         * 在 HAL_FDCAN_Start 之前重新 Init 即可生效（控制器仍处于 Init 模式）。 */
-        s_hfdcan[i]->Init.AutoRetransmission = ENABLE;
-        HAL_FDCAN_Init(s_hfdcan[i]);
-
-        HAL_FDCAN_Start(s_hfdcan[i]);
-        HAL_FDCAN_ActivateNotification(s_hfdcan[i],
-                                        FDCAN_IT_RX_FIFO0_NEW_MESSAGE |
-                                        FDCAN_IT_ERROR_WARNING          |
-                                        FDCAN_IT_ERROR_PASSIVE          |
-                                        FDCAN_IT_BUS_OFF,
-                                        0);
+        if (HAL_FDCAN_Start(s_hfdcan[i]) != HAL_OK ||
+            HAL_FDCAN_ActivateNotification(s_hfdcan[i],
+                                           FDCAN_IT_RX_FIFO0_NEW_MESSAGE |
+                                           FDCAN_IT_ERROR_WARNING          |
+                                           FDCAN_IT_ERROR_PASSIVE          |
+                                           FDCAN_IT_BUS_OFF,
+                                           0) != HAL_OK) {
+            s_bus_err_cnt[i]++;
+            LOGE("fdcan%u start/notification failed", (unsigned)i);
+            return APP_ERR_IO;
+        }
     }
 #endif
 

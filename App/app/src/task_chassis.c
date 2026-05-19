@@ -145,7 +145,7 @@ void task_chassis_init(void) {
 #if APP_DEBUG_RL_WHEEL_ONLY
     leg_controller_set_output_options((uint8_t)(1U << GAIT_LEG_RL), 1U, 1U, 1.5f, 0.1f);
     apply_controller_height(&GAIT_PARAMS_STAND_DEFAULT);
-    LOGW("debug mode: RL leg hold + RL wheel only; use vx/wz frame to test wheel, zero cmd locks speed");
+    LOGW("debug mode: RL single-leg closed loop; stand locks wheel, vx/wz drives RL trot + wheel");
 #else
     leg_controller_set_output_options(0x0Fu, 1U, 1U, 1.5f, 0.1f);
 #endif
@@ -295,16 +295,23 @@ static void apply_plan_wheel_speed(gait_output_t* out, const chassis_plan_t* pla
 }
 
 #if APP_DEBUG_RL_WHEEL_ONLY
-static void apply_rl_wheel_debug(uint8_t online, const chassis_plan_t* plan) {
-    gait_output_t out;
-    memset(&out, 0, sizeof(out));
-    for (int i = 0; i < GAIT_LEG_NUM; i++) {
-        out.leg[i].in_stance = 1U;
-    }
+static void apply_rl_single_leg_debug(uint8_t online, const chassis_plan_t* plan, float dt_s) {
     if (online && plan) {
-        out.leg[GAIT_LEG_RL].wheel_rads = plan->wheel_rads[GAIT_LEG_RL];
+        s_manual_gait_hold = 0U;
+        online_decide(plan);
+    } else if (!s_manual_gait_hold) {
+        if (s_active != ACT_STAND) {
+            if (request_gait(s_stand, &GAIT_PARAMS_STAND_DEFAULT, 0.3f) == APP_OK) {
+                s_active = ACT_STAND;
+            }
+        }
     }
-    s_active = ACT_STAND;
+
+    gait_output_t out;
+    gait_machine_update(&s_gm, dt_s, &out);
+
+    /* 只输出 RL：轮速来自 planner；无在线速度命令时给 0，用 M3508 速度环锁住。 */
+    out.leg[GAIT_LEG_RL].wheel_rads = (online && plan) ? plan->wheel_rads[GAIT_LEG_RL] : 0.0f;
     leg_controller_apply(&s_lc, &out);
 }
 #endif
@@ -429,7 +436,7 @@ void task_chassis_step_for_test(float dt_s, uint32_t now_ms) {
     online = (uint8_t)!is_offline(now_ms);
 
 #if APP_DEBUG_RL_WHEEL_ONLY
-    apply_rl_wheel_debug(online, &s_chassis_plan);
+    apply_rl_single_leg_debug(online, &s_chassis_plan, dt_s);
 #if !APP_TARGET_HOST
     motor_go_send_all();
     motor_m3508_send_all();

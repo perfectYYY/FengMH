@@ -33,12 +33,18 @@
 #endif
 
 /*
- * 当前上板调试阶段：只保持 RL 腿站立，并只允许 RL_WHEEL 响应 vx/wz
- * 规划出的轮速；vx=wz=0 时用于测试 3508 零速锁定。
- * 正常四轮底盘联调时把它改为 0，或在编译参数里覆盖。
+ * 当前上板调试阶段：只输出 RL 单腿闭环。
+ * - 无上位机或 vx/wz=0：RL stand + RL_WHEEL 零速锁定
+ * - vx/wz 非零：RL trot 轨迹 + RL_WHEEL 速度闭环
+ * 正常四腿联调时把它改为 0，或在编译参数里覆盖。
  */
+#ifndef APP_DEBUG_RL_SINGLE_LEG_ONLY
+#define APP_DEBUG_RL_SINGLE_LEG_ONLY 1
+#endif
+
+/* 兼容旧开关名：历史上只测 RL wheel，现在语义升级为 RL 单腿闭环。 */
 #ifndef APP_DEBUG_RL_WHEEL_ONLY
-#define APP_DEBUG_RL_WHEEL_ONLY 1
+#define APP_DEBUG_RL_WHEEL_ONLY APP_DEBUG_RL_SINGLE_LEG_ONLY
 #endif
 
 #endif /* APP_COMMON_CONFIG_H_ */
