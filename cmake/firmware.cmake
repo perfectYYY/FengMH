@@ -44,10 +44,6 @@ target_link_options(${PROJECT_NAME}.elf PRIVATE -specs=nano.specs -specs=nosys.s
 # -----------------------------------------------------------------------------
 # 4. App/ 分层源与 include
 # -----------------------------------------------------------------------------
-set(APP_BRINGUP_STAGE "100" CACHE STRING "Firmware bring-up stage; 100 means normal firmware")
-set(APP_BRINGUP_LEG_MASK "0x04" CACHE STRING "Bring-up leg bitmask: bit0 FL, bit1 FR, bit2 RL, bit3 RR")
-set(APP_BRINGUP_WHEEL_MASK "0x04" CACHE STRING "Bring-up wheel bitmask: bit0 FL, bit1 FR, bit2 RL, bit3 RR")
-set(APP_BRINGUP_WHEEL_JOG_RAD_S "0.5f" CACHE STRING "Bring-up wheel jog speed in output rad/s")
 option(USE_LEGACY_MAIN "Build the old blocking Core/Src/main.c path instead of the FreeRTOS App tasks" OFF)
 
 if(USE_LEGACY_MAIN)
@@ -56,33 +52,54 @@ else()
     set(_USE_LEGACY_MAIN_DEFINE 0)
 endif()
 
-#  APP_DIRS 是固件 App 层的模块清单。
-set(APP_DIRS
-        common
-        bsp
-        device
-        service/pid
-        service/protocol
-        service/gait
-        service/chassis
-        service/leg
-        service/kinematics
-        service/script
-        service/attitude
-        app
+# APP_INCLUDE_DIRS / APP_SOURCE_DIRS 是固件 App 层的模块清单：
+#   app      - RTOS task wrappers and app lifecycle
+#   control  - locomotion/control pipeline
+#   service  - reusable protocol/PID utilities
+#   device/bsp - hardware-facing drivers and bus adapters
+set(APP_INCLUDE_DIRS
+        common/include
+        bsp/include
+        device/include
+        control/include
+        control/include/attitude
+        control/include/chassis
+        control/include/gait
+        control/include/kinematics
+        control/include/leg
+        control/include/script
+        service/include
+        service/include/pid
+        service/include/protocol
+        app/include
 )
 
-foreach(_d IN LISTS APP_DIRS)
+set(APP_SOURCE_DIRS
+        common/src
+        bsp/src
+        device/src
+        control/src/attitude
+        control/src/chassis
+        control/src/gait
+        control/src/kinematics
+        control/src/leg
+        control/src/script
+        service/src/pid
+        service/src/protocol
+        app/src
+)
+
+foreach(_d IN LISTS APP_INCLUDE_DIRS)
     target_include_directories(${PROJECT_NAME}.elf PRIVATE
             ${CMAKE_SOURCE_DIR}/App/${_d})
 endforeach()
 
-# App/ 根目录 (支持 #include "service/pid/pid.h" 带路径引用)
+# App/ 根目录 (支持未来使用 #include "control/.../x.h" 的模块路径引用)
 target_include_directories(${PROJECT_NAME}.elf PRIVATE
         ${CMAKE_SOURCE_DIR}/App)
 
 set(_app_globs "")
-foreach(_d IN LISTS APP_DIRS)
+foreach(_d IN LISTS APP_SOURCE_DIRS)
     list(APPEND _app_globs ${CMAKE_SOURCE_DIR}/App/${_d}/*.c)
 endforeach()
 
@@ -92,22 +109,18 @@ file(GLOB APP_SOURCES CONFIGURE_DEPENDS ${_app_globs})
 target_sources             (${PROJECT_NAME}.elf PRIVATE ${APP_SOURCES})
 target_compile_definitions (${PROJECT_NAME}.elf PRIVATE
         APP_TARGET_HOST=0
-        APP_BRINGUP_STAGE=${APP_BRINGUP_STAGE}
-        APP_BRINGUP_LEG_MASK=${APP_BRINGUP_LEG_MASK}
-        APP_BRINGUP_WHEEL_MASK=${APP_BRINGUP_WHEEL_MASK}
-        APP_BRINGUP_WHEEL_JOG_RAD_S=${APP_BRINGUP_WHEEL_JOG_RAD_S}
         USE_LEGACY_MAIN=${_USE_LEGACY_MAIN_DEFINE}
 )
 
-message(STATUS "APP_BRINGUP_STAGE=${APP_BRINGUP_STAGE}, LEG_MASK=${APP_BRINGUP_LEG_MASK}, WHEEL_MASK=${APP_BRINGUP_WHEEL_MASK}, WHEEL_JOG=${APP_BRINGUP_WHEEL_JOG_RAD_S}, USE_LEGACY_MAIN=${_USE_LEGACY_MAIN_DEFINE}")
+message(STATUS "USE_LEGACY_MAIN=${_USE_LEGACY_MAIN_DEFINE}")
 
 # -----------------------------------------------------------------------------
 # 5. 健康自检
 # -----------------------------------------------------------------------------
-# 如果 APP_DIRS 指示要存在某个模块但实际目录缺失, 在 configure 时就报警,
+# 如果清单指示要存在某个模块但实际目录缺失, 在 configure 时就报警,
 # 避免到链接阶段才发现。
-foreach(_d IN LISTS APP_DIRS)
+foreach(_d IN LISTS APP_INCLUDE_DIRS APP_SOURCE_DIRS)
     if(NOT IS_DIRECTORY ${CMAKE_SOURCE_DIR}/App/${_d})
-        message(WARNING "firmware.cmake: expected App/${_d} is missing; update APP_DIRS")
+        message(WARNING "firmware.cmake: expected App/${_d} is missing; update APP include/source dirs")
     endif()
 endforeach()

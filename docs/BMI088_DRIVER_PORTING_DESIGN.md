@@ -10,10 +10,10 @@
 
 | 来源文件 | 作用 | FengMH 中的落点 |
 |---|---|---|
-| `Wheel-legged/Core/Src/BMI088driver.c` | BMI088 初始化、寄存器读写、数据读取 | `App/device/imu_bmi088.c` |
-| `Wheel-legged/Core/Inc/BMI088driver.h` | 对外接口、错误码、灵敏度系数 | `App/device/imu_bmi088.h` |
-| `Wheel-legged/Core/Inc/BMI088reg.h` | BMI088 寄存器宏 | `App/device/imu_bmi088.c` 内部宏，或独立私有头 |
-| `Wheel-legged/Core/Src/BMI088Middleware.c` | SPI、CS、delay 平台适配 | `App/bsp/bsp_spi.*` + `bsp_time.*` |
+| `Wheel-legged/Core/Src/BMI088driver.c` | BMI088 初始化、寄存器读写、数据读取 | `App/device/src/imu_bmi088.c` |
+| `Wheel-legged/Core/Inc/BMI088driver.h` | 对外接口、错误码、灵敏度系数 | `App/device/include/imu_bmi088.h` |
+| `Wheel-legged/Core/Inc/BMI088reg.h` | BMI088 寄存器宏 | `App/device/src/imu_bmi088.c` 内部宏，或独立私有头 |
+| `Wheel-legged/Core/Src/BMI088Middleware.c` | SPI、CS、delay 平台适配 | `App/bsp/include/bsp_spi.h` + `App/bsp/src/bsp_spi.c` + `bsp_time.*` |
 | `Wheel-legged/Core/Src/ImuTask.c` | 5 ms 周期读取 BMI088 并更新姿态 | `task_chassis` 或后续独立 `task_imu` |
 
 保留 Wheel-legged 的核心点：
@@ -115,7 +115,7 @@ task_chassis
 
 ## 5. 对外接口
 
-目标头文件：`App/device/imu_bmi088.h`
+目标头文件：`App/device/include/imu_bmi088.h`
 
 ```c
 #ifndef APP_DEVICE_IMU_BMI088_H_

@@ -127,7 +127,7 @@ App/
 
 ### 步骤 2: BSP SPI 抽象层
 
-新增 `App/bsp/bsp_spi.h` 和 `App/bsp/bsp_spi.c`，遵循现有 BSP 层模式。
+新增 `App/bsp/include/bsp_spi.h` 和 `App/bsp/src/bsp_spi.c`，遵循现有 BSP 层模式。
 
 **设计要点:**
 - 与 `bsp_uart` / `bsp_fdcan` 风格一致
@@ -153,7 +153,7 @@ app_err_t bsp_spi_cs_high(bsp_spi_id_t id, uint8_t cs_pin);
 
 ### 步骤 3: BMI088 设备驱动
 
-新增 `App/device/imu_bmi088.h` 和 `App/device/imu_bmi088.c`，基于参考项目移植，适配 FengMH 代码风格。
+新增 `App/device/include/imu_bmi088.h` 和 `App/device/src/imu_bmi088.c`，基于参考项目移植，适配 FengMH 代码风格。
 
 **改编对照:**
 
@@ -209,7 +209,8 @@ app_err_t imu_bmi088_set_gyro_range(imu_gyro_range_t range);
 
 ### 步骤 4: 姿态估计器
 
-新增 `App/service/attitude/attitude_if.h` 和 `App/service/attitude/attitude_estimator.h/.c`。
+新增 `App/control/include/attitude/attitude_if.h`、`App/control/include/attitude/attitude_estimator.h`
+和 `App/control/src/attitude/attitude_estimator.c`。
 
 **设计思路:**
 - 转向控制只需要偏航角 (yaw)，暂不引入完整 AHRS
@@ -245,7 +246,8 @@ yaw += gyro_z * dt_s  (先不引入 accel 融合，仅陀螺仪积分)
 
 ### 步骤 5: 转向控制器
 
-新增 `App/service/attitude/steer_controller.h/.c`。
+新增 `App/control/include/attitude/steer_controller.h` 和
+`App/control/src/attitude/steer_controller.c`。
 
 ```c
 // steer_controller.h
@@ -291,7 +293,7 @@ static inline float wrap_pi(float angle) {
 
 ### 步骤 6: 协议扩展
 
-**文件变更:** `App/service/protocol/proto_defs.h`
+**文件变更:** `App/service/include/protocol/proto_defs.h`
 
 **方案:** 在 `payload_chassis_cmd_t` 中新增字段：
 
@@ -314,7 +316,7 @@ typedef struct __attribute__((packed)) {
 
 ### 步骤 7: 集成到 task_chassis
 
-**文件变更:** `App/app/task_chassis.h/.c`
+**文件变更:** `App/app/include/task_chassis.h/.c`
 
 **修改点:**
 
@@ -355,7 +357,7 @@ typedef struct __attribute__((packed)) {
 
 ### 步骤 8: 初始化流程集成
 
-**文件变更:** `App/app/app_init.h/.c`
+**文件变更:** `App/app/include/app_init.h/.c`
 
 在 `app_init()` 的 BSP 初始化阶段后，设备初始化阶段前：
 
@@ -390,21 +392,21 @@ if (err != APP_OK) {
 | 6 | `Core/Src/main.c` | 修改 | 调用 MX_SPI2_Init() |
 | 7 | `Core/Src/stm32h7xx_it.c` | 修改 | 添加 EXTI 中断处理 (可选) |
 | 8 | `cmake/firmware.cmake` | 修改 | 添加新源文件到构建 |
-| 9 | `App/bsp/bsp_spi.h` | **新增** | SPI BSP 抽象层头文件 |
-| 10 | `App/bsp/bsp_spi.c` | **新增** | SPI BSP 抽象层实现 |
-| 11 | `App/device/imu_bmi088.h` | **新增** | BMI088 驱动头文件 |
-| 12 | `App/device/imu_bmi088.c` | **新增** | BMI088 驱动实现 |
-| 13 | `App/service/attitude/attitude_if.h` | **新增** | 姿态接口定义 |
-| 14 | `App/service/attitude/attitude_estimator.h` | **新增** | 姿态估计器头文件 |
-| 15 | `App/service/attitude/attitude_estimator.c` | **新增** | 姿态估计器实现 (陀螺仪积分) |
-| 16 | `App/service/attitude/steer_controller.h` | **新增** | 转向控制器头文件 |
-| 17 | `App/service/attitude/steer_controller.c` | **新增** | 转向 PID 控制器实现 |
-| 18 | `App/service/protocol/proto_defs.h` | 修改 | 扩展 chassis_cmd payload |
-| 19 | `App/service/protocol/proto_dispatch.c` | 修改 | 适配新的 payload 长度检查 |
-| 20 | `App/app/task_chassis.h` | 修改 | 导出 yaw_reset/steer 接口 |
-| 21 | `App/app/task_chassis.c` | 修改 | 集成 IMU + 转向控制 |
-| 22 | `App/app/app_init.c` | 修改 | 添加 SPI + IMU 初始化 |
-| 23 | `App/common/err.h` | 修改 | 添加 IMU 相关错误码 |
+| 9 | `App/bsp/include/bsp_spi.h` | **新增** | SPI BSP 抽象层头文件 |
+| 10 | `App/bsp/src/bsp_spi.c` | **新增** | SPI BSP 抽象层实现 |
+| 11 | `App/device/include/imu_bmi088.h` | **新增** | BMI088 驱动头文件 |
+| 12 | `App/device/src/imu_bmi088.c` | **新增** | BMI088 驱动实现 |
+| 13 | `App/control/include/attitude/attitude_if.h` | **新增** | 姿态接口定义 |
+| 14 | `App/control/include/attitude/attitude_estimator.h` | **新增** | 姿态估计器头文件 |
+| 15 | `App/control/src/attitude/attitude_estimator.c` | **新增** | 姿态估计器实现 (陀螺仪积分) |
+| 16 | `App/control/include/attitude/steer_controller.h` | **新增** | 转向控制器头文件 |
+| 17 | `App/control/src/attitude/steer_controller.c` | **新增** | 转向 PID 控制器实现 |
+| 18 | `App/service/include/protocol/proto_defs.h` | 修改 | 扩展 chassis_cmd payload |
+| 19 | `App/service/src/protocol/proto_dispatch.c` | 修改 | 适配新的 payload 长度检查 |
+| 20 | `App/app/include/task_chassis.h` | 修改 | 导出 yaw_reset/steer 接口 |
+| 21 | `App/app/src/task_chassis.c` | 修改 | 集成 IMU + 转向控制 |
+| 22 | `App/app/src/app_init.c` | 修改 | 添加 SPI + IMU 初始化 |
+| 23 | `App/common/include/err.h` | 修改 | 添加 IMU 相关错误码 |
 
 **总计: 8 个修改文件 + 9 个新增文件 = 17 个文件变更**
 

@@ -314,7 +314,7 @@ int main(void)
 #endif /* USE_LEGACY_MAIN */
 #if !USE_LEGACY_MAIN
   /*
-   * app_init() touches HAL timeouts/delays (for example BMI088 bring-up), so run
+   * app_init() touches HAL timeouts/delays (for example BMI088 init), so run
    * it before osKernelInitialize() raises BASEPRI and masks the HAL TIM1 tick.
    */
   (void)app_init();

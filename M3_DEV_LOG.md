@@ -26,7 +26,8 @@ Target: STM32H723VGTX / FreeRTOS(CMSIS v2) / host-PC 单测
 ## 2. 新增目录
 
 ```
-App/service/script/        （全新，脚本化步态 3 文件对 + 内置脚本表）
+App/control/include/script/   （脚本化步态对外接口）
+App/control/src/script/       （脚本化步态实现）
 ```
 
 ## 3. 新增文件清单
@@ -34,10 +35,10 @@ App/service/script/        （全新，脚本化步态 3 文件对 + 内置脚�
 ### 3.1 服务层 — 脚本步态
 | 文件 | 作用 |
 |---|---|
-| `App/service/script/script_if.h` | 关键帧结构：`script_keyframe_t { t_s, leg[4] }`；脚本描述 `script_t { name, frames, n_frames, loop }`。 |
-| `App/service/script/script_player.{c,h}` | 关键帧线性插值播放器。纯函数 `script_sample(s, t, out)` host 可测；状态机 `SP_STATE_IDLE/RUNNING/DONE`；loop 脚本自动回放。 |
-| `App/service/script/gait_script.{c,h}` | 把 `script_player` 包装成 `gait_if_t`；`gait_script_set_script()` / `gait_script_rewind()` 暴露出来；`init` 时自动 reset。 |
-| `App/service/script/script_builtin.{c,h}` | 三份内置脚本：`STAND_HOLD` / `WAVE_UP_DOWN`（等价旧 main.c up_down[9]）/ `TROT_STEP`（4 帧对角 trot loop）；`script_builtin_find(name)` 查表。**用户自己增补死程序步态只需要在这个文件里加 keyframe 表。** |
+| `App/control/include/script/script_if.h` | 关键帧结构：`script_keyframe_t { t_s, leg[4] }`；脚本描述 `script_t { name, frames, n_frames, loop }`。 |
+| `App/control/include/script/script_player.h` / `App/control/src/script/script_player.c` | 关键帧线性插值播放器。纯函数 `script_sample(s, t, out)` host 可测；状态机 `SP_STATE_IDLE/RUNNING/DONE`；loop 脚本自动回放。 |
+| `App/control/include/script/gait_script.h` / `App/control/src/script/gait_script.c` | 把 `script_player` 包装成 `gait_if_t`；`gait_script_set_script()` / `gait_script_rewind()` 暴露出来；`init` 时自动 reset。 |
+| `App/control/include/script/script_builtin.h` / `App/control/src/script/script_builtin.c` | 三份内置脚本：`STAND_HOLD` / `WAVE_UP_DOWN`（等价旧 main.c up_down[9]）/ `TROT_STEP`（4 帧对角 trot loop）；`script_builtin_find(name)` 查表。**用户自己增补死程序步态只需要在这个文件里加 keyframe 表。** |
 
 ### 3.2 测试
 | 文件 | 覆盖 |
@@ -55,11 +56,11 @@ App/service/script/        （全新，脚本化步态 3 文件对 + 内置脚�
 | 文件 | 改动 |
 |---|---|
 | `Core/Src/main.c` | 全部旧业务代码（含 `extract_data` UART 回调、up_down[9] 初始化、PID_M3508_CAN_Init、所有 `MotorController_Set/Send` 初始化序列、`while(1)` 抬腿 + `set_motor_current_can*` 循环）包进 `#if USE_LEGACY_MAIN ... #endif`。默认宏值 0，旧代码不参与链接，避免与 App 层 RTOS 任务对同一电机并发写。 |
-| `App/app/task_chassis.{c,h}` | 重写：引入 `chassis_mode_t{AUTO/ONLINE/STANDALONE}`；新增 `task_chassis_play_script / stop_script / set_mode / set_online_timeout_ms / active_gait_name / step_for_test`；内部三状态 `ACT_STAND / ACT_TROT / ACT_SCRIPT`；`is_offline()` 以 `task_comm_dispatch_hit()==0` 作"从没收过帧"的判据（避开 `bsp_time_now_ms` 起点为 0 的误判）；host 单测 entry 点 `task_chassis_step_for_test(dt, now_ms)`。`task_chassis_init` 中重置 `s_mode` 和 `s_online_timeout_ms`，允许 host 单测反复 init。 |
-| `App/app/task_comm.{c,h}` | 新增 `s_last_rx_ms`（成功 dispatch 一帧时更新）+ `task_comm_last_rx_ms()`；`task_comm_init` 里额外清零 `s_last_rx_ms`。 |
-| `App/test/CMakeLists.txt` | include 追加 `service/script`；`APP_SRCS` 加 3 个 script 源 + `task_safety.c`/`task_chassis.c`；新增 `test_script`/`test_task_chassis` 两个 target。 |
-| `CMakeLists.txt` | `include_directories` 追加 `App/service/script`。 |
-| `cmake/firmware.cmake` | `APP_DIRS` 追加 `service/script`，保证 CubeMX 重新生成顶层 `CMakeLists.txt` 也能自动把新模块挂上。 |
+| `App/app/include/task_chassis.h` / `App/app/src/task_chassis.c` | 重写：引入 `chassis_mode_t{AUTO/ONLINE/STANDALONE}`；新增 `task_chassis_play_script / stop_script / set_mode / set_online_timeout_ms / active_gait_name / step_for_test`；内部三状态 `ACT_STAND / ACT_TROT / ACT_SCRIPT`；`is_offline()` 以 `task_comm_dispatch_hit()==0` 作"从没收过帧"的判据（避开 `bsp_time_now_ms` 起点为 0 的误判）；host 单测 entry 点 `task_chassis_step_for_test(dt, now_ms)`。`task_chassis_init` 中重置 `s_mode` 和 `s_online_timeout_ms`，允许 host 单测反复 init。 |
+| `App/app/include/task_comm.h` / `App/app/src/task_comm.c` | 新增 `s_last_rx_ms`（成功 dispatch 一帧时更新）+ `task_comm_last_rx_ms()`；`task_comm_init` 里额外清零 `s_last_rx_ms`。 |
+| `App/test/CMakeLists.txt` | include 追加 `App/control/include/script`；源码清单加 `App/control/src/script` + `task_safety.c`/`task_chassis.c`；新增 `test_script`/`test_task_chassis` 两个 target。 |
+| `CMakeLists.txt` | `include_directories` 追加 `App/control/include/script`。 |
+| `cmake/firmware.cmake` | `APP_INCLUDE_DIRS`/`APP_SOURCE_DIRS` 追加 script include/src，保证 CubeMX 重新生成顶层 `CMakeLists.txt` 也能自动把新模块挂上。 |
 
 ---
 

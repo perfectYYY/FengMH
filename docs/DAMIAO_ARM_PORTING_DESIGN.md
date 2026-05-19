@@ -30,11 +30,11 @@
 
 | 源文件 | 作用 | 移植策略 |
 |---|---|---|
-| `Core/Inc/dm4310_posvel.h` | 达妙电机 ID、范围、反馈结构和控制 API | 拆到 `App/device/motor_damiao.h` |
+| `Core/Inc/dm4310_posvel.h` | 达妙电机 ID、范围、反馈结构和控制 API | 拆到 `App/device/include/motor_damiao.h` |
 | `Core/Src/dm4310_posvel.c` | CAN 发送、MIT 打包、PV 打包、反馈解析、FDCAN 过滤器 | 保留协议打包/解析，去掉 HAL 直接依赖 |
-| `Core/Inc/arm_kinematics.h` | 机械臂参数、位姿、关节角、偏移定义 | 改名并放入 `App/service/arm/arm_types.h` 与 `arm_kinematics.h` |
+| `Core/Inc/arm_kinematics.h` | 机械臂参数、位姿、关节角、偏移定义 | 改名并放入 `App/control/include/arm/arm_types.h` 与 `arm_kinematics.h` |
 | `Core/Src/arm_kinematics.c` | FK/IK，包含背越姿态和限位 | 基本保留数学逻辑，统一命名和错误码 |
-| `Core/Inc/gravity_comp.h` | 连杆质量、质心、重力补偿接口 | 移到 `App/service/arm/arm_gravity.h` |
+| `Core/Inc/gravity_comp.h` | 连杆质量、质心、重力补偿接口 | 移到 `App/control/include/arm/arm_gravity.h` |
 | `Core/Src/gravity_comp.c` | J2/J3/J4 重力补偿力矩计算 | 基本保留，参数改成可配置结构 |
 | `Core/Src/main.c` | 初始化、保存零点、使能、分阶段安全移动、保持、反馈上报 | 只迁移算法思路，不迁移主循环 |
 | `Core/Inc/protocol_handler.h` | 源工程私有协议定义 | 不直接移植，改为扩展 FengMH `proto_defs/task_comm` |
@@ -50,10 +50,12 @@
 
 ```text
 App/
-├── bsp/       # HAL 适配和 mock 能力
-├── device/    # 电机、IMU 等设备驱动
-├── service/   # 算法、协议、步态、底盘、姿态
-└── app/       # FreeRTOS 任务和系统初始化
+├── app/{include,src}/       # FreeRTOS 任务和系统初始化
+├── control/{include,src}/   # 步态、底盘、运动学、姿态、机械臂控制
+├── service/{include,src}/   # 协议、PID 等通用服务
+├── device/{include,src}/    # 电机、IMU 等设备驱动
+├── bsp/{include,src}/       # HAL 适配和 mock 能力
+└── common/{include,src}/    # 公共类型、错误码、日志、配置
 ```
 
 已经存在的相关能力：
@@ -66,7 +68,7 @@ App/
 | `task_comm` | 已解析底盘和步态命令 | 需要新增机械臂命令缓存和 handler |
 | `proto_defs` | 已有 `PROTO_FUNC_ARM_CMD = 0x11` | 应使用 0x11，不使用源工程的 0x12 |
 | `task_safety` | 会遍历 registry，急停时调用 `disable` | 达妙驱动要实现 disable 或明确返回 unsupported |
-| `cmake/firmware.cmake` | `APP_DIRS` 显式列出 App 模块 | 新增 `service/arm` 后必须加入 `APP_DIRS` |
+| `cmake/firmware.cmake` | `APP_INCLUDE_DIRS` / `APP_SOURCE_DIRS` 显式列出 App 模块 | 新增机械臂后必须加入 `control/include/arm` 和 `control/src/arm` |
 
 关键注意点：
 
@@ -80,19 +82,19 @@ App/
 
 ```mermaid
 flowchart TD
-    PC["上位机 USB CDC"] --> COMM["App/app/task_comm.c"]
-    COMM --> ARM_TASK["App/app/task_arm.c"]
-    ARM_TASK --> ARM_CTRL["App/service/arm/arm_controller.c"]
-    ARM_CTRL --> ARM_MOTION["App/service/arm/arm_motion.c"]
-    ARM_MOTION --> ARM_KIN["App/service/arm/arm_kinematics.c"]
-    ARM_CTRL --> ARM_GRAV["App/service/arm/arm_gravity.c"]
-    ARM_CTRL --> DAMIAO["App/device/motor_damiao.c"]
-    DAMIAO --> FDCAN["App/bsp/bsp_fdcan.c"]
+    PC["上位机 USB CDC"] --> COMM["App/app/src/task_comm.c"]
+    COMM --> ARM_TASK["App/app/src/task_arm.c"]
+    ARM_TASK --> ARM_CTRL["App/control/src/arm/arm_controller.c"]
+    ARM_CTRL --> ARM_MOTION["App/control/src/arm/arm_motion.c"]
+    ARM_MOTION --> ARM_KIN["App/control/src/arm/arm_kinematics.c"]
+    ARM_CTRL --> ARM_GRAV["App/control/src/arm/arm_gravity.c"]
+    ARM_CTRL --> DAMIAO["App/device/src/motor_damiao.c"]
+    DAMIAO --> FDCAN["App/bsp/src/bsp_fdcan.c"]
     FDCAN --> HAL["CubeMX HAL FDCAN1/FDCAN2"]
     FDCAN --> DAMIAO_RX["达妙反馈 0x01..0x04"]
     FDCAN --> M3508_RX["M3508 反馈 0x201..0x208"]
-    ARM_CTRL --> REG["App/device/motor_registry.c"]
-    SAFETY["App/app/task_safety.c"] --> REG
+    ARM_CTRL --> REG["App/device/src/motor_registry.c"]
+    SAFETY["App/app/src/task_safety.c"] --> REG
 ```
 
 依赖原则：
@@ -134,17 +136,17 @@ App/
 需要修改的文件：
 
 ```text
-App/bsp/bsp_fdcan.h
-App/bsp/bsp_fdcan.c
-App/common/config.h
-App/device/motor_registry.c
-App/service/protocol/proto_defs.h
-App/app/task_comm.h
-App/app/task_comm.c
-App/app/app_init.c
-App/app/app_tasks.c
+App/bsp/include/bsp_fdcan.h
+App/bsp/src/bsp_fdcan.c
+App/common/include/config.h
+App/device/src/motor_registry.c
+App/service/include/protocol/proto_defs.h
+App/app/include/task_comm.h
+App/app/src/task_comm.c
+App/app/src/app_init.c
+App/app/src/app_tasks.c
 cmake/firmware.cmake
-CMakeLists.txt                  # 如果继续维护根 CMake 的 include_directories 列表，也要加 service/arm
+CMakeLists.txt                  # 如果继续维护根 CMake 的 include_directories 列表，也要加 control/arm
 ```
 
 ## 6. 达妙电机驱动设计
@@ -183,7 +185,7 @@ CMakeLists.txt                  # 如果继续维护根 CMake 的 include_direct
 
 ### 6.2 协议常量
 
-目标文件：`App/device/motor_damiao.h`
+目标文件：`App/device/include/motor_damiao.h`
 
 ```c
 #define DAMIAO_MOTOR_COUNT          4u
@@ -497,7 +499,7 @@ HAL_FDCAN_ConfigGlobalFilter(hfdcan,
 
 ## 8. 机械臂通用类型
 
-目标文件：`App/service/arm/arm_types.h`
+目标文件：`App/control/include/arm/arm_types.h`
 
 ```c
 #ifndef APP_SERVICE_ARM_TYPES_H_
@@ -608,8 +610,8 @@ static const arm_offset_config_t k_arm_offset_default = {
 目标文件：
 
 ```text
-App/service/arm/arm_kinematics.h
-App/service/arm/arm_kinematics.c
+App/control/include/arm/arm_kinematics.h
+App/control/src/arm/arm_kinematics.c
 ```
 
 ### 9.1 对外 API
@@ -677,8 +679,8 @@ pose->pitch_rad = 0.0f;
 目标文件：
 
 ```text
-App/service/arm/arm_gravity.h
-App/service/arm/arm_gravity.c
+App/control/include/arm/arm_gravity.h
+App/control/src/arm/arm_gravity.c
 ```
 
 ### 10.1 参数结构
@@ -783,8 +785,8 @@ FengMH 中必须改成非阻塞状态机，由 `task_arm` 每 5ms 调一次。
 目标文件：
 
 ```text
-App/service/arm/arm_motion.h
-App/service/arm/arm_motion.c
+App/control/include/arm/arm_motion.h
+App/control/src/arm/arm_motion.c
 ```
 
 ### 11.1 参数
@@ -925,8 +927,8 @@ static uint8_t arm_joint_close_enough(const arm_joint_angles_t* a,
 目标文件：
 
 ```text
-App/service/arm/arm_controller.h
-App/service/arm/arm_controller.c
+App/control/include/arm/arm_controller.h
+App/control/src/arm/arm_controller.c
 ```
 
 ### 12.1 配置
@@ -1078,8 +1080,8 @@ static app_err_t arm_controller_send_setpoint_safe_order(const arm_joint_angles_
 目标文件：
 
 ```text
-App/app/task_arm.h
-App/app/task_arm.c
+App/app/include/task_arm.h
+App/app/src/task_arm.c
 ```
 
 ### 13.1 对外 API
@@ -1095,7 +1097,7 @@ void task_arm_get_status(arm_status_t* out);
 
 ### 13.2 app_init 修改
 
-`App/app/app_init.c`：
+`App/app/src/app_init.c`：
 
 ```c
 #include "motor_damiao.h"
@@ -1110,21 +1112,13 @@ motor_damiao_init_all();
 arm_controller_init(NULL);
 ```
 
-建议先按 bring-up stage 控制是否初始化/使能机械臂：
-
-```c
-if (APP_BRINGUP_STAGE >= APP_BRINGUP_STAGE_ARM_BUS_TEST) {
-    motor_damiao_init_all();
-}
-
-if (APP_BRINGUP_STAGE >= APP_BRINGUP_STAGE_ARM_HOLD_TEST) {
-    arm_controller_init(NULL);
-}
-```
+当前固件不再保留按编译期 stage 宏切换的板级验证路径。
+机械臂接入时应进入正常 `app_init()` 初始化链路，调试限制放在上位机命令、
+`task_arm` 状态机或安全层里做运行期 gating。
 
 ### 13.3 app_tasks 修改
 
-`App/app/app_tasks.c`：
+`App/app/src/app_tasks.c`：
 
 ```c
 #include "task_arm.h"
@@ -1161,7 +1155,7 @@ Checksum = Byte0..Byte(4+Len-1) 累加低 8 位
 
 不要使用源工程的 `FUNC_ARM_CONTROL = 0x12`，因为 `0x12` 在 FengMH 已经是步态命令。
 
-需要在 `App/service/protocol/proto_defs.h` 添加：
+需要在 `App/service/include/protocol/proto_defs.h` 添加：
 
 ```c
 #define PROTO_FUNC_ARM_STATE 0x86
@@ -1224,7 +1218,7 @@ bit3 = J4
 
 ### 14.3 task_comm 修改
 
-`App/app/task_comm.h` 添加：
+`App/app/include/task_comm.h` 添加：
 
 ```c
 typedef struct {
@@ -1243,7 +1237,7 @@ typedef struct {
 void task_comm_get_arm(task_comm_arm_cmd_t* out);
 ```
 
-`App/app/task_comm.c` 添加 handler：
+`App/app/src/task_comm.c` 添加 handler：
 
 ```c
 static task_comm_arm_cmd_t s_arm;
@@ -1313,8 +1307,8 @@ typedef struct __attribute__((packed)) {
 后续如果上位机发送的是相机坐标目标，可新增：
 
 ```text
-App/service/arm/arm_vision_transform.h
-App/service/arm/arm_vision_transform.c
+App/control/include/arm/arm_vision_transform.h
+App/control/src/arm/arm_vision_transform.c
 ```
 
 API：
@@ -1422,30 +1416,25 @@ Core/Inc/fdcan.h             # hfdcan1/hfdcan2 是否仍存在
 Core/Src/stm32h7xx_it.c      # FDCAN1_IT0/FDCAN2_IT0 IRQ handler 是否仍调用 HAL_FDCAN_IRQHandler
 Core/Src/freertos.c          # app_tasks_create 是否仍在 FreeRTOS 初始化流程中
 CMakeLists.txt               # CubeMX 是否重置 include/source 列表
-cmake/firmware.cmake         # APP_DIRS 是否保留 service/arm
+cmake/firmware.cmake         # APP_INCLUDE_DIRS / APP_SOURCE_DIRS 是否保留 control arm 和 damiao
 ```
 
 ## 17. 工程配置修改
 
-`App/common/config.h` 建议新增 bring-up stage：
+当前固件只维护正常运行路径，不再新增编译期 stage 宏。
+机械臂验证阶段需要的限制应作为运行期状态机或上位机命令权限实现。
 
-```c
-#define APP_BRINGUP_STAGE_ARM_BUS_TEST       10
-#define APP_BRINGUP_STAGE_ARM_ENABLE_TEST    11
-#define APP_BRINGUP_STAGE_ARM_HOLD_TEST      12
-#define APP_BRINGUP_STAGE_ARM_POSE_TEST      13
-```
-
-`cmake/firmware.cmake` 中 `APP_DIRS` 添加：
+`cmake/firmware.cmake` 中 `APP_INCLUDE_DIRS` / `APP_SOURCE_DIRS` 添加：
 
 ```cmake
-service/arm
+control/include/arm
+control/src/arm
 ```
 
 如果继续维护根 `CMakeLists.txt` 的 `include_directories(...)` 长列表，也把下面路径加进去：
 
 ```text
-App/service/arm
+App/control/include/arm
 ```
 
 ## 18. 上板验证计划
@@ -1465,28 +1454,28 @@ App/service/arm
 | motion 状态机 | 多次 step 后阶段按预期推进，不阻塞 |
 | 协议解析 | `0x11 len=24` 能更新 arm cmd seq，`0x12` 仍是 gait |
 
-### 18.2 板上 bring-up
+### 18.2 板上验证
 
-阶段 1：`APP_BRINGUP_STAGE_ARM_BUS_TEST`
+阶段 1：总线与反馈
 
 - 初始化 FDCAN 和达妙驱动。
 - 不使能电机，不发位置命令。
 - 上位机读取 `PROTO_FUNC_ARM_STATE` 和 `PROTO_FUNC_MOTOR_STATE`。
 - 手动转动关节，确认 J1-J4 反馈角、速度、温度在变化。
 
-阶段 2：`APP_BRINGUP_STAGE_ARM_ENABLE_TEST`
+阶段 2：使能/失能
 
 - 只允许 `ENABLE/DISABLE`。
 - 建议先 `joint_mask=0x01` 单独 J1，再逐个验证。
 - 不执行 `SAVE_ZERO`。
 
-阶段 3：`APP_BRINGUP_STAGE_ARM_HOLD_TEST`
+阶段 3：当前位置保持
 
 - 读取当前反馈作为 hold command。
 - 低 KP/KD 或零力矩模式保持。
 - 检查电机不乱跳、错误码为 0。
 
-阶段 4：`APP_BRINGUP_STAGE_ARM_POSE_TEST`
+阶段 4：小位移 POSE
 
 - 发送一个离当前姿态很近的 `POSE_MM`。
 - 观察状态机阶段、关节方向、J3 过渡姿态。
@@ -1502,14 +1491,14 @@ App/service/arm
 
 1. 改 `bsp_fdcan` 多订阅和过滤器。
 2. 新增 `motor_damiao`，完成帧打包、反馈解析、registry 绑定。
-3. 新增 `service/arm` 的 types、kinematics、gravity。
+3. 新增 `control/arm` 的 types、kinematics、gravity。
 4. 新增 `arm_motion` 非阻塞状态机。
 5. 新增 `arm_controller`，先支持 hold 和 joint target，再支持 pose target。
 6. 扩展 `proto_defs/task_comm`，实现 `0x11` 机械臂命令缓存。
 7. 新增 `task_arm`，接入 `app_init/app_tasks`。
-8. 修改 CMake `APP_DIRS`。
+8. 修改 CMake `APP_INCLUDE_DIRS` / `APP_SOURCE_DIRS`。
 9. 做 host/mock 单测。
-10. 按 bring-up stage 上板测试。
+10. 按运行期安全状态机逐步上板验证。
 
 ## 20. 风险与决策记录
 
@@ -1521,5 +1510,5 @@ App/service/arm
 | 源工程大量 `HAL_Delay` 阻塞 | 改成 `task_arm` 5ms 周期状态机 |
 | 源工程机械臂协议 ID 与 FengMH 步态冲突 | 机械臂使用 `0x11`，步态保留 `0x12` |
 | 视觉坐标转换单位不清晰 | 先不接入主链路，独立成可选模块 |
-| J1-J4 安装方向和偏移可能与实机不完全一致 | 保留源工程偏移作为默认，bring-up 中通过反馈和小步命令校验 |
+| J1-J4 安装方向和偏移可能与实机不完全一致 | 保留源工程偏移作为默认，上板验证时通过反馈和小步命令校验 |
 | 吸盘没有明确硬件引脚 | 文档单独列 CubeMX GPIO 要求，等硬件引脚确认再实现 |
