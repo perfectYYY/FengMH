@@ -29,7 +29,8 @@ extern "C" {
 #define M3508_MOTOR_COUNT  4
 
 /* C620 协议常量 */
-#define M3508_TX_ID            0x200    /* 控制帧 CAN ID */
+#define M3508_TX_ID            0x200    /* 控制帧 CAN ID: DJI ID 1~4 */
+#define M3508_TX_ID_HIGH       0x1FF    /* 控制帧 CAN ID: DJI ID 5~8 */
 #define M3508_FB_ID_BASE       0x201    /* 反馈帧起始 CAN ID */
 #define M3508_ENCODER_COUNTS   8192     /* 单圈编码器计数 */
 #define M3508_HALF_ENCODER     4096     /* 半圈编码器 */

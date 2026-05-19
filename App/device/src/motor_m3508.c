@@ -189,6 +189,7 @@ static int m3508_feed_rx(motor_dev_t* dev, const uint8_t* data, uint8_t dlc) {
     dev->state.online        = 1;
     dev->state.last_rx_tick  = bsp_time_now_ms();
     dev->state.rx_cnt++;
+    ctx->online              = 1;
 
     /* 温度保护 */
     if (temp > 85) {
@@ -268,9 +269,23 @@ static const m3508_bus_map_t s_m3508_map[M3508_MOTOR_COUNT] = {
 static uint32_t s_m3508_tx_err_cnt;
 static uint32_t s_m3508_last_tx_warn_ms;
 
+typedef struct {
+    uint32_t rx_cnt;
+    uint32_t last_rx_tick;
+    int16_t  speed_rpm;
+    int16_t  current_raw;
+    uint16_t ecd;
+    uint8_t  temperature_c;
+} m3508_probe_seen_t;
+
+static volatile m3508_probe_seen_t s_m3508_probe_seen[BSP_FDCAN_BUS_MAX][8];
+
 app_err_t motor_m3508_init_all(void) {
     memset(s_m3508_devs, 0, sizeof(s_m3508_devs));
     memset(s_m3508_ctxs, 0, sizeof(s_m3508_ctxs));
+    memset((void*)s_m3508_probe_seen, 0, sizeof(s_m3508_probe_seen));
+    s_m3508_tx_err_cnt = 0;
+    s_m3508_last_tx_warn_ms = 0;
 
     for (int i = 0; i < M3508_MOTOR_COUNT; i++) {
         const m3508_bus_map_t* m = &s_m3508_map[i];
@@ -318,6 +333,15 @@ void motor_m3508_fdcan_rx_cb(bsp_fdcan_bus_t bus,
     if (f->can_id < M3508_FB_ID_BASE || f->can_id > 0x208) return;
 
     uint8_t dji_id = (uint8_t)(f->can_id - M3508_FB_ID_BASE + 1);  /* 全局 ID：0x201→1, 0x202→2, 0x203→3, 0x204→4 */
+    if (bus < BSP_FDCAN_BUS_MAX && dji_id >= 1U && dji_id <= 8U && f->dlc >= 8U) {
+        volatile m3508_probe_seen_t* seen = &s_m3508_probe_seen[bus][dji_id - 1U];
+        seen->ecd = (uint16_t)((f->data[0] << 8) | f->data[1]);
+        seen->speed_rpm = (int16_t)((f->data[2] << 8) | f->data[3]);
+        seen->current_raw = (int16_t)((f->data[4] << 8) | f->data[5]);
+        seen->temperature_c = f->data[6];
+        seen->last_rx_tick = (uint32_t)bsp_time_now_ms();
+        seen->rx_cnt++;
+    }
 
     /* 查找匹配的电机实例 */
     for (int i = 0; i < M3508_MOTOR_COUNT; i++) {
@@ -343,14 +367,17 @@ app_err_t motor_m3508_send_all(void) {
     /* 按总线分组 */
     for (int bus = BSP_FDCAN_1; bus <= BSP_FDCAN_2; bus++) {
         uint8_t tx_data[8];
+        uint8_t probe_data[8];
         memset(tx_data, 0, 8);
+        memset(probe_data, 0, 8);
 
         for (int i = 0; i < M3508_MOTOR_COUNT; i++) {
             if (s_m3508_ctxs[i].bus_id != (uint8_t)bus) continue;
 
             /* 按控制模式运行 PID */
+            motor_dev_t* dev = &s_m3508_devs[i];
             m3508_drv_ctx_t* ctx = &s_m3508_ctxs[i];
-            if (ctx->online) {
+            if (ctx->online && dev->state.online) {
                 float output = 0.0f;
                 switch (ctx->ctrl_mode) {
 
@@ -413,6 +440,8 @@ app_err_t motor_m3508_send_all(void) {
                     break;
                 }
                 }
+            } else {
+                ctx->cmd_current_raw = 0;
             }
 
             /* 将电流指令填入 0x200 帧 */
@@ -447,6 +476,26 @@ app_err_t motor_m3508_send_all(void) {
                      (int16_t)((tx_data[2] << 8) | tx_data[3]),
                      (int16_t)((tx_data[4] << 8) | tx_data[5]),
                      (int16_t)((tx_data[6] << 8) | tx_data[7]));
+            }
+        }
+
+        /* DJI ID 5~8 使用 0x1FF 控制帧。这里周期性发零电流探测帧，
+         * 这样即使电调 ID 不在当前映射表内，也能触发/维持反馈并被
+         * s_m3508_probe_seen 记录出来。 */
+        frame.can_id = M3508_TX_ID_HIGH;
+        memcpy(frame.data, probe_data, 8);
+        ret = bsp_fdcan_send((bsp_fdcan_bus_t)bus, &frame);
+        if (ret != APP_OK) {
+            ret_all = ret;
+            s_m3508_tx_err_cnt++;
+
+            uint32_t now = (uint32_t)bsp_time_now_ms();
+            if ((now - s_m3508_last_tx_warn_ms) >= M3508_TX_WARN_INTERVAL_MS) {
+                s_m3508_last_tx_warn_ms = now;
+                LOGW("M3508 probe tx bus%u failed ret=%d cnt=%lu",
+                     (unsigned)bus,
+                     (int)ret,
+                     (unsigned long)s_m3508_tx_err_cnt);
             }
         }
     }

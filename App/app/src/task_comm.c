@@ -177,7 +177,7 @@ static void send_state_frame(void) {
     payload_state_t p;
     memset(&p, 0, sizeof(p));
     p.mode        = (uint8_t)task_chassis_get_mode();
-    p.gait_active = 0;  /* TODO: 从 task_chassis 获取 */
+    p.gait_active = (uint8_t)task_chassis_get_gait_active();
     p.estop       = task_safety_estop_active() ? 1 : 0;
     p.vx_cmd      = s_chassis.vx;
     p.vy_cmd      = s_chassis.vy;

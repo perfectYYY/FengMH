@@ -31,11 +31,18 @@ typedef enum {
     CHASSIS_MODE_STANDALONE,
 } chassis_mode_t;
 
+typedef enum {
+    CHASSIS_GAIT_STAND = 0,
+    CHASSIS_GAIT_TROT = 1,
+    CHASSIS_GAIT_SCRIPT = 2,
+} chassis_gait_active_t;
+
 void  task_chassis_entry(void* arg);
 void  task_chassis_init(void);
 
 void           task_chassis_set_mode(chassis_mode_t m);
 chassis_mode_t task_chassis_get_mode(void);
+chassis_gait_active_t task_chassis_get_gait_active(void);
 
 /* 切到 SCRIPT 子状态并播放指定脚本（仅在 STANDALONE / AUTO 离线分支生效）。 */
 int   task_chassis_play_script(const script_t* s, float blend_dur_s);

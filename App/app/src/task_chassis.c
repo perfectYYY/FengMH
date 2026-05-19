@@ -39,6 +39,7 @@
 #endif
 
 #include <math.h>
+#include <string.h>
 
 static const char* TAG = "CHASSIS";
 
@@ -141,7 +142,13 @@ void task_chassis_init(void) {
     s_trot_params = GAIT_PARAMS_TROT_DEFAULT;
     leg_controller_init(&s_lc);
     leg_controller_bind_from_registry(&s_lc);
+#if APP_DEBUG_RL_WHEEL_ONLY
+    leg_controller_set_output_options((uint8_t)(1U << GAIT_LEG_RL), 1U, 1U, 1.5f, 0.1f);
+    apply_controller_height(&GAIT_PARAMS_STAND_DEFAULT);
+    LOGW("debug mode: RL leg hold + RL wheel only; use vx/wz frame to test wheel, zero cmd locks speed");
+#else
     leg_controller_set_output_options(0x0Fu, 1U, 1U, 1.5f, 0.1f);
+#endif
     s_active = ACT_STAND;
     s_mode   = CHASSIS_MODE_AUTO;          /* host 单测可重复 init 时需复位 */
     s_online_timeout_ms = 500;
@@ -167,6 +174,15 @@ void task_chassis_set_mode(chassis_mode_t m) {
     LOGI("mode -> %d", (int)m);
 }
 chassis_mode_t task_chassis_get_mode(void) { return s_mode; }
+
+chassis_gait_active_t task_chassis_get_gait_active(void) {
+    switch (s_active) {
+        case ACT_TROT:   return CHASSIS_GAIT_TROT;
+        case ACT_SCRIPT: return CHASSIS_GAIT_SCRIPT;
+        case ACT_STAND:
+        default:         return CHASSIS_GAIT_STAND;
+    }
+}
 
 void     task_chassis_set_online_timeout_ms(uint32_t ms) { s_online_timeout_ms = ms; }
 uint32_t task_chassis_get_online_timeout_ms(void)        { return s_online_timeout_ms; }
@@ -277,6 +293,21 @@ static void apply_plan_wheel_speed(gait_output_t* out, const chassis_plan_t* pla
         out->leg[i].wheel_rads = plan->wheel_rads[i];
     }
 }
+
+#if APP_DEBUG_RL_WHEEL_ONLY
+static void apply_rl_wheel_debug(uint8_t online, const chassis_plan_t* plan) {
+    gait_output_t out;
+    memset(&out, 0, sizeof(out));
+    for (int i = 0; i < GAIT_LEG_NUM; i++) {
+        out.leg[i].in_stance = 1U;
+    }
+    if (online && plan) {
+        out.leg[GAIT_LEG_RL].wheel_rads = plan->wheel_rads[GAIT_LEG_RL];
+    }
+    s_active = ACT_STAND;
+    leg_controller_apply(&s_lc, &out);
+}
+#endif
 
 static void update_steering(float dt_s, const task_comm_chassis_cmd_t* cmd, float* wz_out) {
     if (!cmd || !wz_out) return;
@@ -396,6 +427,15 @@ void task_chassis_step_for_test(float dt_s, uint32_t now_ms) {
     (void)chassis_planner_update(&plan_cmd, &s_trot_params, &s_chassis_plan);
 
     online = (uint8_t)!is_offline(now_ms);
+
+#if APP_DEBUG_RL_WHEEL_ONLY
+    apply_rl_wheel_debug(online, &s_chassis_plan);
+#if !APP_TARGET_HOST
+    motor_go_send_all();
+    motor_m3508_send_all();
+#endif
+    return;
+#endif
 
     if (!online) {
         offline_decide(now_ms);

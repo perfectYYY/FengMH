@@ -32,4 +32,13 @@
 #define PROTO_MAX_PAYLOAD 64
 #endif
 
+/*
+ * 当前上板调试阶段：只保持 RL 腿站立，并只允许 RL_WHEEL 响应 vx/wz
+ * 规划出的轮速；vx=wz=0 时用于测试 3508 零速锁定。
+ * 正常四轮底盘联调时把它改为 0，或在编译参数里覆盖。
+ */
+#ifndef APP_DEBUG_RL_WHEEL_ONLY
+#define APP_DEBUG_RL_WHEEL_ONLY 1
+#endif
+
 #endif /* APP_COMMON_CONFIG_H_ */
