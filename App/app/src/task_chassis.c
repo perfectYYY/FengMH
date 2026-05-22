@@ -148,6 +148,7 @@ void task_chassis_init(void) {
     LOGW("debug mode: RL single-leg closed loop; stand locks wheel, vx/wz drives RL trot + wheel");
 #else
     leg_controller_set_output_options(0x0Fu, 1U, 1U, 1.5f, 0.1f);
+    apply_controller_height(&GAIT_PARAMS_STAND_DEFAULT);
 #endif
     s_active = ACT_STAND;
     s_mode   = CHASSIS_MODE_AUTO;          /* host 单测可重复 init 时需复位 */
@@ -340,6 +341,25 @@ static void update_steering(float dt_s, const task_comm_chassis_cmd_t* cmd, floa
 
 /* 离线分支：保留当前 SCRIPT；否则确保是 stand */
 static void offline_decide(uint32_t now_ms) {
+#if !APP_OFFLINE_AUTO_MARCH
+    (void)now_ms;
+    if (s_manual_gait_hold && (s_active == ACT_STAND || s_active == ACT_TROT)) {
+        return;
+    }
+    if (!s_offline_seq_active) {
+        s_offline_seq_active = 1U;
+        s_offline_seq_done = 1U;
+        if (request_gait(s_stand, &GAIT_PARAMS_STAND_DEFAULT, 0.0f) == APP_OK) {
+            s_active = ACT_STAND;
+        }
+        LOGI("offline stand hold");
+    } else if (s_active != ACT_STAND && !s_manual_gait_hold) {
+        if (request_gait(s_stand, &GAIT_PARAMS_STAND_DEFAULT, 0.3f) == APP_OK) {
+            s_active = ACT_STAND;
+        }
+    }
+    return;
+#else
     if (s_manual_gait_hold && (s_active == ACT_STAND || s_active == ACT_TROT)) {
         return;
     }
@@ -395,6 +415,7 @@ static void offline_decide(uint32_t now_ms) {
     if (s_active != ACT_STAND) {
         if (request_gait(s_stand, &GAIT_PARAMS_STAND_DEFAULT, 0.3f) == APP_OK) s_active = ACT_STAND;
     }
+#endif
 }
 
 void task_chassis_step_for_test(float dt_s, uint32_t now_ms) {
@@ -409,11 +430,11 @@ void task_chassis_step_for_test(float dt_s, uint32_t now_ms) {
 
         if (!s_pre_calib_done) {
             motor_go_send_all();          /* 零力矩收发：mode=1, kp/kd/tau=0，收集编码器反馈 */
-            (void)motor_go_calibrate_all(); /* 每周期尝试：已回包的电机立即标定，未回包的跳过 */
             if (s_pre_calib_cnt < 500U) {  /* 1000ms @ 500Hz，给 GO 电机足够时间首包响应 */
                 s_pre_calib_cnt++;
                 return;
             }
+            (void)motor_go_calibrate_all(); /* 用等待窗口末尾的最新 raw 统一锁存 zero_offset */
             s_pre_calib_done = 1;
             LOGI("pre-calib done after %u cycles", (unsigned)s_pre_calib_cnt);
             /* 超时后不再要求全部回包：只要有电机成功标定即可进入闭环 */

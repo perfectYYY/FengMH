@@ -39,7 +39,7 @@
  *     不要再回头改 main.c。
  */
 #ifndef USE_LEGACY_MAIN
-#define USE_LEGACY_MAIN 1
+#define USE_LEGACY_MAIN 0
 #endif
 
 #if USE_LEGACY_MAIN

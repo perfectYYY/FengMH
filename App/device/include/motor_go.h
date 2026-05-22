@@ -43,10 +43,30 @@ typedef struct {
     float           cmd_tau;     /* 期望前馈力矩 (Nm) */
     float           cmd_kp;      /* 位置刚度 */
     float           cmd_kd;      /* 速度阻尼 */
+    float           raw_pos_rad; /* 最近一次反馈的电机侧原始位置 (rad) */
+    float           raw_vel_rads;/* 最近一次反馈的电机侧原始速度 (rad/s) */
+    float           raw_tau_nm;  /* 最近一次反馈的电机侧原始力矩 (Nm) */
 
     /* 足底力传感器 */
     uint16_t        foot_force;  /* 原始力传感器数据 */
 } go_drv_ctx_t;
+
+typedef struct {
+    uint8_t logical_id;
+    uint8_t online;
+    uint8_t calibrated;
+    uint8_t bus_id;
+    uint8_t motor_id;
+    uint8_t mode;
+    float raw_pos_rad;
+    float zero_offset_rad;
+    float joint_angle_rad;
+    float cmd_pos_rad;
+    float cmd_vel_rads;
+    float cmd_tau_nm;
+    float cmd_kp;
+    float cmd_kd;
+} go_debug_state_t;
 
 /*
  * 初始化所有 GO-8010 电机驱动实例并绑定到 motor_registry
@@ -68,6 +88,8 @@ app_err_t motor_go_send_all(void);
  * 返回值：至少一个电机成功标定返回 APP_OK；全部离线返回 APP_ERR_TIMEOUT。
  */
 app_err_t motor_go_calibrate_all(void);
+
+app_err_t motor_go_debug_get_state(uint16_t logical_id, go_debug_state_t* out);
 
 /*
  * 获取指定总线上 GO 电机共享的 RX 回调

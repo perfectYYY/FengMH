@@ -39,12 +39,19 @@
  * 正常四腿联调时把它改为 0，或在编译参数里覆盖。
  */
 #ifndef APP_DEBUG_RL_SINGLE_LEG_ONLY
-#define APP_DEBUG_RL_SINGLE_LEG_ONLY 1
+#define APP_DEBUG_RL_SINGLE_LEG_ONLY 0
 #endif
 
 /* 兼容旧开关名：历史上只测 RL wheel，现在语义升级为 RL 单腿闭环。 */
 #ifndef APP_DEBUG_RL_WHEEL_ONLY
 #define APP_DEBUG_RL_WHEEL_ONLY APP_DEBUG_RL_SINGLE_LEG_ONLY
+#endif
+
+/*
+ * 上电无上位机时默认保持 stand；需要自动 stand/march/stand 演示时再打开。
+ */
+#ifndef APP_OFFLINE_AUTO_MARCH
+#define APP_OFFLINE_AUTO_MARCH 0
 #endif
 
 #endif /* APP_COMMON_CONFIG_H_ */

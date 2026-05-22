@@ -206,6 +206,10 @@ static int go_decode_fbk(const uint8_t* raw, uint16_t len,
 
     const motor_cfg_t* cfg = motor_get_cfg((motor_logical_id_t)state->id);
 
+    ctx->raw_pos_rad  = pos_rad;
+    ctx->raw_vel_rads = vel_rads;
+    ctx->raw_tau_nm   = tau_nm;
+
     state->angle_rad     = go_motor_pos_to_joint(cfg, ctx->zero_offset, pos_rad);
     state->velocity_rads = go_motor_vel_to_joint(cfg, vel_rads);
     state->torque_nm     = go_motor_tau_to_joint(cfg, tau_nm);
@@ -299,15 +303,15 @@ static int go_calibrate(motor_dev_t* dev) {
     if (dev->state.rx_cnt == 0U) return APP_ERR_TIMEOUT; /* 还没收到过反馈 */
 
     float boot_angle = cfg ? cfg->boot_angle : 0.0f;
-    float raw_pos = go_joint_pos_to_motor(cfg, ctx->zero_offset, dev->state.angle_rad);
+    float raw_pos = ctx->raw_pos_rad;
 
     ctx->zero_offset = raw_pos - (go_cfg_sign(cfg) * boot_angle * go_cfg_gear(cfg));
     ctx->calibrated  = 1;
     dev->state.angle_rad = boot_angle;
 
-    LOGI("GO%u bus%u calib: zero=%.3f rad boot=%.3f",
+    LOGI("GO%u bus%u calib: raw=%.5f zero=%.5f boot=%.5f",
          (unsigned)ctx->motor_id, (unsigned)ctx->bus_id,
-         (double)ctx->zero_offset, (double)boot_angle);
+         (double)raw_pos, (double)ctx->zero_offset, (double)boot_angle);
     return APP_OK;
 }
 
@@ -364,6 +368,15 @@ static const motor_ops_t s_go_ops = {
 /* 8 个 GO 电机驱动实例 */
 static motor_dev_t   s_go_devs[GO_MOTOR_COUNT];
 static go_drv_ctx_t s_go_ctxs[GO_MOTOR_COUNT];
+
+static int go_find_index_by_logical_id(motor_logical_id_t id) {
+    for (int i = 0; i < GO_MOTOR_COUNT; i++) {
+        if ((motor_logical_id_t)s_go_devs[i].state.id == id) {
+            return i;
+        }
+    }
+    return -1;
+}
 
 /*
  * 总线映射沿用老工程 MotorInstance_Init():
@@ -481,4 +494,31 @@ app_err_t motor_go_calibrate_all(void) {
         }
     }
     return (ok > 0) ? APP_OK : APP_ERR_TIMEOUT;
+}
+
+app_err_t motor_go_debug_get_state(uint16_t logical_id, go_debug_state_t* out) {
+    if (!out) return APP_ERR_INVALID_ARG;
+
+    int idx = go_find_index_by_logical_id((motor_logical_id_t)logical_id);
+    if (idx < 0) return APP_ERR_NOT_FOUND;
+
+    motor_dev_t* dev = &s_go_devs[idx];
+    go_drv_ctx_t* ctx = &s_go_ctxs[idx];
+
+    memset(out, 0, sizeof(*out));
+    out->logical_id = (uint8_t)logical_id;
+    out->online = dev->state.online;
+    out->calibrated = ctx->calibrated;
+    out->bus_id = ctx->bus_id;
+    out->motor_id = ctx->motor_id;
+    out->mode = ctx->mode;
+    out->raw_pos_rad = ctx->raw_pos_rad;
+    out->zero_offset_rad = ctx->zero_offset;
+    out->joint_angle_rad = dev->state.angle_rad;
+    out->cmd_pos_rad = ctx->cmd_pos;
+    out->cmd_vel_rads = ctx->cmd_vel;
+    out->cmd_tau_nm = ctx->cmd_tau;
+    out->cmd_kp = ctx->cmd_kp;
+    out->cmd_kd = ctx->cmd_kd;
+    return APP_OK;
 }

@@ -5,7 +5,7 @@
  * 单腿相位 leg_phase = wrap(phase + offset_i)。
  * 在每条腿的 leg_phase 内：
  *   leg_phase < duty   → 支撑相：足端 x 从 +step/2 线性扫到 -step/2，z 维持 0
- *   leg_phase >= duty  → 摆动相：足端 x 从 -step/2 抬到 +step/2，z 走半个椭圆
+ *   leg_phase >= duty  → 摆动相：足端按摆线从 -step/2 抬到 +step/2
  *
  * 该层不做 IK。把 (dx, dz) 写到 leg_target 的 hip/knee 字段供上层调试观察；
  * leg_controller 后续接 IK 转换为关节角。
@@ -53,11 +53,16 @@ void gait_trot_foot_traj(float leg_phase, float duty,
         if (dz_m) *dz_m = 0.0f;
         if (in_stance) *in_stance = 1u;
     } else {
-        /* 摆动相：x 从 -half 升到 +half；z 走 sin(πt)*step_height */
+        /* 摆动相摆线：起落足处 x/z 速度都为 0。 */
         float swing_dur = 1.0f - duty;
         float t = (swing_dur > 0.0f) ? ((lp - duty) / swing_dur) : 0.0f;
-        if (dx_m) *dx_m = step_len_m * (t - 0.5f);
-        if (dz_m) *dz_m = step_height_m * sinf((float)M_PI * t);
+        float theta = 2.0f * (float)M_PI * t;
+        if (dx_m) {
+            *dx_m = step_len_m * (t - (sinf(theta) / (2.0f * (float)M_PI)) - 0.5f);
+        }
+        if (dz_m) {
+            *dz_m = 0.5f * step_height_m * (1.0f - cosf(theta));
+        }
         if (in_stance) *in_stance = 0u;
     }
 }
