@@ -96,7 +96,7 @@ static int validate_trot_params(const gait_params_t* p) {
         fabsf(p->body_height_m) > 0.40f) {
         return 0;
     }
-    if (!isfinite(p->step_length_m) || p->step_length_m < 0.0f || p->step_length_m > 0.20f) {
+    if (!isfinite(p->step_length_m) || fabsf(p->step_length_m) > 0.20f) {
         return 0;
     }
     if (!isfinite(p->step_height_m) || p->step_height_m < 0.0f || p->step_height_m > 0.12f) {

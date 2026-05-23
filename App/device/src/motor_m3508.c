@@ -61,6 +61,15 @@ static int16_t m3508_ampere_to_raw(float a) {
     return m3508_limit_current(raw);
 }
 
+static const motor_cfg_t* m3508_cfg(const motor_dev_t* dev) {
+    if (!dev) return NULL;
+    return motor_get_cfg((motor_logical_id_t)dev->state.id);
+}
+
+static float m3508_cfg_sign(const motor_cfg_t* cfg) {
+    return cfg ? (float)cfg->dir : 1.0f;
+}
+
 /*
  * 编码器多圈解算
  * 在 feed_rx 中调用，更新 total_angle (累计编码器计数)
@@ -98,7 +107,7 @@ static void m3508_update_angle(m3508_drv_ctx_t* ctx, uint16_t ecd) {
 static int m3508_set_current(motor_dev_t* dev, float iq_a) {
     if (!dev || !dev->drv_ctx) return APP_ERR_INVALID_ARG;
     m3508_drv_ctx_t* ctx = (m3508_drv_ctx_t*)dev->drv_ctx;
-    ctx->cmd_current_raw = m3508_ampere_to_raw(iq_a);
+    ctx->cmd_current_raw = m3508_ampere_to_raw(m3508_cfg_sign(m3508_cfg(dev)) * iq_a);
     ctx->ctrl_mode = M3508_MODE_CURRENT;
     return APP_OK;
 }
@@ -106,7 +115,7 @@ static int m3508_set_current(motor_dev_t* dev, float iq_a) {
 static int m3508_set_torque(motor_dev_t* dev, float tau_nm) {
     if (!dev || !dev->drv_ctx) return APP_ERR_INVALID_ARG;
     m3508_drv_ctx_t* ctx = (m3508_drv_ctx_t*)dev->drv_ctx;
-    ctx->target_torque_nm = tau_nm;
+    ctx->target_torque_nm = m3508_cfg_sign(m3508_cfg(dev)) * tau_nm;
     ctx->ctrl_mode = M3508_MODE_TORQUE;
     return APP_OK;
 }
@@ -117,7 +126,7 @@ static int m3508_set_position(motor_dev_t* dev, float pos, float vel,
     m3508_drv_ctx_t* ctx = (m3508_drv_ctx_t*)dev->drv_ctx;
     (void)vel; (void)kp; (void)kd; (void)tau_ff;
     /* 输出轴 rad → 转子侧累计编码器计数，与 ctx->total_angle 单位一致 */
-    ctx->target_position = (int32_t)(pos * M3508_REDUCTION_RATIO
+    ctx->target_position = (int32_t)(m3508_cfg_sign(m3508_cfg(dev)) * pos * M3508_REDUCTION_RATIO
                            / (2.0f * 3.14159265f) * (float)M3508_ENCODER_COUNTS);
     ctx->ctrl_mode = M3508_MODE_POSITION;
     return APP_OK;
@@ -126,7 +135,7 @@ static int m3508_set_position(motor_dev_t* dev, float pos, float vel,
 static int m3508_set_velocity(motor_dev_t* dev, float vel_rads) {
     if (!dev || !dev->drv_ctx) return APP_ERR_INVALID_ARG;
     m3508_drv_ctx_t* ctx = (m3508_drv_ctx_t*)dev->drv_ctx;
-    ctx->target_vel_rads = vel_rads;
+    ctx->target_vel_rads = m3508_cfg_sign(m3508_cfg(dev)) * vel_rads;
     ctx->ctrl_mode = M3508_MODE_VELOCITY;
     return APP_OK;
 }
@@ -182,9 +191,10 @@ static int m3508_feed_rx(motor_dev_t* dev, const uint8_t* data, uint8_t dlc) {
     }
 
     /* 更新 motor_state_t (输出轴物理量) */
-    dev->state.angle_rad     = m3508_encoder_to_rad(ctx->total_angle) / M3508_REDUCTION_RATIO;
-    dev->state.velocity_rads = m3508_rpm_to_rads((float)speed_rpm) / M3508_REDUCTION_RATIO;
-    dev->state.torque_nm     = m3508_raw_to_ampere(current_raw) * M3508_TORQUE_KT * M3508_REDUCTION_RATIO;
+    float sign = m3508_cfg_sign(m3508_cfg(dev));
+    dev->state.angle_rad     = sign * m3508_encoder_to_rad(ctx->total_angle) / M3508_REDUCTION_RATIO;
+    dev->state.velocity_rads = sign * m3508_rpm_to_rads((float)speed_rpm) / M3508_REDUCTION_RATIO;
+    dev->state.torque_nm     = sign * m3508_raw_to_ampere(current_raw) * M3508_TORQUE_KT * M3508_REDUCTION_RATIO;
     dev->state.temperature_c = (float)temp;
     dev->state.online        = 1;
     dev->state.last_rx_tick  = bsp_time_now_ms();
@@ -247,6 +257,8 @@ static const m3508_bus_map_t s_m3508_map[M3508_MOTOR_COUNT] = {
 #define M3508_PID_MAX_OUT   16000.0f
 #define M3508_PID_MAX_SUM   10000.0f
 #define M3508_PID_DT_S      0.002f   /* 500Hz = 2ms */
+#define M3508_STATIC_FF_RAW       2500.0f  /* 低速启动/静摩擦补偿电流 raw */
+#define M3508_STATIC_FF_ERR_RPM   30.0f    /* 速度误差超过该转子侧 rpm 后启用补偿 */
 
 /* EMA 速度滤波系数 */
 #define M3508_EMA_ALPHA     0.3f
@@ -268,6 +280,18 @@ static const m3508_bus_map_t s_m3508_map[M3508_MOTOR_COUNT] = {
 
 static uint32_t s_m3508_tx_err_cnt;
 static uint32_t s_m3508_last_tx_warn_ms;
+
+static float m3508_apply_static_ff(float output, float target_rpm, float err_rpm) {
+    if (fabsf(target_rpm) < M3508_STATIC_FF_ERR_RPM) {
+        return output;
+    }
+    if (err_rpm > M3508_STATIC_FF_ERR_RPM) {
+        output += M3508_STATIC_FF_RAW;
+    } else if (err_rpm < -M3508_STATIC_FF_ERR_RPM) {
+        output -= M3508_STATIC_FF_RAW;
+    }
+    return output;
+}
 
 typedef struct {
     uint32_t rx_cnt;
@@ -435,6 +459,7 @@ app_err_t motor_m3508_send_all(void) {
                                      * 60.0f / (2.0f * 3.14159265f);
                     output = app_pid_update_dt(&ctx->speed_pid, target_rpm,
                                                ctx->filter_speed, M3508_PID_DT_S);
+                    output = m3508_apply_static_ff(output, target_rpm, target_rpm - ctx->filter_speed);
                     if (ctx->temp_limit_phase == 1) output *= 0.5f;
                     ctx->cmd_current_raw = m3508_power_limit(output, ctx->filter_speed);
                     break;
