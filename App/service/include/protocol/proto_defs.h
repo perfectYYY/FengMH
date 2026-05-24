@@ -21,6 +21,7 @@ extern "C" {
 #define PROTO_FUNC_CHASSIS_CMD  0x10
 #define PROTO_FUNC_ARM_CMD      0x11
 #define PROTO_FUNC_GAIT_CMD     0x12
+#define PROTO_FUNC_MIT_CMD      0x13   /* MIT 阻抗控制单个电机 (调试用) */
 #define PROTO_FUNC_STATUS_REQ   0x20
 #define PROTO_FUNC_USB_CDC_PING 0x21
 
@@ -60,6 +61,15 @@ typedef struct __attribute__((packed)) {
     float touchdown_thresh;
     float blend_dur_s;
 } payload_gait_cmd_t;  /* FuncID 0x12, len=48 */
+
+typedef struct __attribute__((packed)) {
+    uint8_t motor_id;    /* motor_logical_id_t: FL_WHEEL=2, RL_WHEEL=5, RR_WHEEL=8, FR_WHEEL=11 */
+    float   pos_rad;     /* 目标位置 (输出轴 rad) */
+    float   vel_rads;    /* 目标速度 (输出轴 rad/s) */
+    float   kp;          /* 刚度增益 (N·m/rad)，= 0 时退化为纯速度/力矩模式 */
+    float   kd;          /* 阻尼增益 (N·m·s/rad) */
+    float   tau_ff_nm;   /* 力矩前馈 (输出轴 N·m) */
+} payload_mit_cmd_t;   /* FuncID 0x13, len=21 */
 
 typedef struct __attribute__((packed)) {
     uint8_t req_kind;  /* 0=state, 1=motor, 2=stats */
