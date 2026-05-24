@@ -291,7 +291,7 @@ static void online_decide(const chassis_plan_t* plan) {
 static void apply_plan_wheel_speed(gait_output_t* out, const chassis_plan_t* plan) {
     if (!out || !plan) return;
     for (int i = 0; i < GAIT_LEG_NUM; i++) {
-        out->leg[i].wheel_rads = plan->wheel_rads[i];
+        out->leg[i].wheel_rads = out->leg[i].in_stance ? plan->wheel_rads[i] : 0.0f;
     }
 }
 
