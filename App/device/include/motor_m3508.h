@@ -46,6 +46,7 @@ extern "C" {
 #define M3508_MODE_POSITION  1u   /* 位置环 (级联速度环) */
 #define M3508_MODE_TORQUE    2u   /* 力矩环 (前馈 + 电流 PI) */
 #define M3508_MODE_CURRENT   3u   /* 直接电流控制 */
+#define M3508_MODE_MIT       4u   /* MIT 阻抗控制: τ = kp·Δpos + kd·Δvel + τ_ff */
 
 /* M3508 驱动私有上下文 */
 typedef struct {
@@ -80,6 +81,13 @@ typedef struct {
     /* 力矩环状态 */
     float         target_torque_nm;     /* 目标力矩 (Nm, 输出轴) */
     float         trq_err_sum;          /* 力矩环积分 */
+
+    /* MIT 阻抗控制参数 (输出轴单位) */
+    float         mit_pos_des_rad;   /* 目标位置 (输出轴 rad) */
+    float         mit_vel_des_rads;  /* 目标速度 (输出轴 rad/s) */
+    float         mit_kp;            /* 刚度增益 (N·m/rad) */
+    float         mit_kd;            /* 阻尼增益 (N·m·s/rad) */
+    float         mit_tau_ff_nm;     /* 力矩前馈 (输出轴 N·m) */
 
     /* 温度保护 */
     uint8_t       temp_limit_phase; /* 0=正常 1=限功率 2=停机 */

@@ -113,9 +113,29 @@ static int handle_gait(const uint8_t* p, uint8_t len) {
     return ret;
 }
 
+static int handle_mit_cmd(const uint8_t* p, uint8_t len) {
+    if (len != sizeof(payload_mit_cmd_t)) return -1;
+
+    payload_mit_cmd_t cmd;
+    memcpy(&cmd, p, sizeof(cmd));
+
+    motor_dev_t* dev = motor_get((motor_logical_id_t)cmd.motor_id);
+    if (!dev || !dev->ops || !dev->ops->set_position) return -1;
+
+    int ret = dev->ops->set_position(dev,
+                                     cmd.pos_rad, cmd.vel_rads,
+                                     cmd.kp, cmd.kd, cmd.tau_ff_nm);
+    if (ret == APP_OK) {
+        s_last_rx_ms = (uint32_t)bsp_time_now_ms();
+        return 0;
+    }
+    return ret;
+}
+
 static const proto_entry_t s_tbl[] = {
     { PROTO_FUNC_CHASSIS_CMD, 0, handle_chassis, "chassis" },  /* expect_len=0: 由 handler 内自行校验 */
     { PROTO_FUNC_GAIT_CMD, sizeof(payload_gait_cmd_t), handle_gait, "gait" },
+    { PROTO_FUNC_MIT_CMD, sizeof(payload_mit_cmd_t), handle_mit_cmd, "mit" },
 };
 
 static void on_usb_rx(const uint8_t* d, uint32_t n, void* user) {
