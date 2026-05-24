@@ -124,11 +124,23 @@ static int m3508_set_position(motor_dev_t* dev, float pos, float vel,
                                float kp, float kd, float tau_ff) {
     if (!dev || !dev->drv_ctx) return APP_ERR_INVALID_ARG;
     m3508_drv_ctx_t* ctx = (m3508_drv_ctx_t*)dev->drv_ctx;
-    (void)vel; (void)kp; (void)kd; (void)tau_ff;
-    /* 输出轴 rad → 转子侧累计编码器计数，与 ctx->total_angle 单位一致 */
-    ctx->target_position = (int32_t)(m3508_cfg_sign(m3508_cfg(dev)) * pos * M3508_REDUCTION_RATIO
-                           / (2.0f * 3.14159265f) * (float)M3508_ENCODER_COUNTS);
-    ctx->ctrl_mode = M3508_MODE_POSITION;
+    float sign = m3508_cfg_sign(m3508_cfg(dev));
+
+    if (kp != 0.0f || kd != 0.0f || tau_ff != 0.0f) {
+        /* MIT 阻抗控制：τ_out = kp·(P_des-P) + kd·(V_des-V) + τ_ff */
+        if (ctx->ctrl_mode != M3508_MODE_MIT) ctx->trq_err_sum = 0.0f;
+        ctx->mit_pos_des_rad  = sign * pos;
+        ctx->mit_vel_des_rads = sign * vel;
+        ctx->mit_kp           = kp;
+        ctx->mit_kd           = kd;
+        ctx->mit_tau_ff_nm    = sign * tau_ff;
+        ctx->ctrl_mode        = M3508_MODE_MIT;
+    } else {
+        /* 传统位置 PID (输出轴 rad → 转子侧累计编码器计数) */
+        ctx->target_position = (int32_t)(sign * pos * M3508_REDUCTION_RATIO
+                               / (2.0f * 3.14159265f) * (float)M3508_ENCODER_COUNTS);
+        ctx->ctrl_mode = M3508_MODE_POSITION;
+    }
     return APP_OK;
 }
 
@@ -432,6 +444,32 @@ app_err_t motor_m3508_send_all(void) {
                     /* 前馈：目标力矩 → 目标电流 raw；PID 做闭环补偿 */
                     float int_curr   = (float)M3508_CURRENT_RAW_MAX / M3508_CURRENT_LIMIT_A;
                     float tgt_curr   = (ctx->target_torque_nm / M3508_TORQUE_KT) * int_curr;
+                    float err        = tgt_curr - (float)ctx->actual_current_raw;
+                    ctx->trq_err_sum += err;
+                    if (ctx->trq_err_sum >  M3508_TRQ_MAX_SUM) ctx->trq_err_sum =  M3508_TRQ_MAX_SUM;
+                    if (ctx->trq_err_sum < -M3508_TRQ_MAX_SUM) ctx->trq_err_sum = -M3508_TRQ_MAX_SUM;
+                    output = tgt_curr
+                           + M3508_TRQ_KP * err
+                           + M3508_TRQ_KI * ctx->trq_err_sum * M3508_PID_DT_S;
+                    if (output >  M3508_TRQ_MAX_OUT) output =  M3508_TRQ_MAX_OUT;
+                    if (output < -M3508_TRQ_MAX_OUT) output = -M3508_TRQ_MAX_OUT;
+                    if (ctx->temp_limit_phase == 1) output *= 0.5f;
+                    ctx->cmd_current_raw = m3508_power_limit(output, ctx->filter_speed);
+                    break;
+                }
+
+                case M3508_MODE_MIT: {
+                    /* MIT 阻抗控制：在输出轴计算阻抗力矩，转换到电机侧走力矩闭环 */
+                    float sign = m3508_cfg_sign(m3508_cfg(dev));
+                    float P = sign * m3508_encoder_to_rad(ctx->total_angle) / M3508_REDUCTION_RATIO;
+                    float V = sign * m3508_rpm_to_rads(ctx->filter_speed) / M3508_REDUCTION_RATIO;
+                    float tau_out = ctx->mit_kp * (ctx->mit_pos_des_rad - P)
+                                  + ctx->mit_kd * (ctx->mit_vel_des_rads - V)
+                                  + ctx->mit_tau_ff_nm;
+                    /* 输出轴力矩 → 电机侧力矩 → 电流 raw */
+                    float tau_motor  = tau_out / M3508_REDUCTION_RATIO;
+                    float int_curr   = (float)M3508_CURRENT_RAW_MAX / M3508_CURRENT_LIMIT_A;
+                    float tgt_curr   = (tau_motor / M3508_TORQUE_KT) * int_curr;
                     float err        = tgt_curr - (float)ctx->actual_current_raw;
                     ctx->trq_err_sum += err;
                     if (ctx->trq_err_sum >  M3508_TRQ_MAX_SUM) ctx->trq_err_sum =  M3508_TRQ_MAX_SUM;
