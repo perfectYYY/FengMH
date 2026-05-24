@@ -10,7 +10,7 @@
  * DJI_ID 全局连续：1-2 在 FDCAN1，3-4 在 FDCAN2；
  * ID=3,4 的 C620 固定读取 0x200 帧的 bytes[4,5] 和 bytes[6,7]。
  *
- * 速度 PID 闭环使用 app_pid_t，默认参数 Kp=3.0, Ki=0.3, Kd=0.0
+ * 速度 PI 闭环使用 app_pid_t，默认参数见 motor_m3508.c。
  * 减速比 268/17 ≈ 15.76 自动在 vtable 中处理。
  */
 #ifndef APP_DEVICE_MOTOR_M3508_H_
@@ -70,6 +70,8 @@ typedef struct {
     app_pid_t     speed_pid;
     float         target_vel_rads;      /* 目标速度 (输出轴 rad/s) */
     int16_t       cmd_current_raw;      /* 当前下发的电流 raw 指令 */
+    int32_t       velocity_hold_position; /* 速度目标为 0 时锁存的转子侧编码器位置 */
+    uint8_t       velocity_hold_active;   /* 0 速位置保持是否已锁存 */
 
     /* 位置环状态 */
     int32_t       target_position;      /* 目标位置 (转子侧累计编码器计数) */

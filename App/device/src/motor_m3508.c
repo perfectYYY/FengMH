@@ -70,6 +70,12 @@ static float m3508_cfg_sign(const motor_cfg_t* cfg) {
     return cfg ? (float)cfg->dir : 1.0f;
 }
 
+static float m3508_clampf(float v, float min_v, float max_v) {
+    if (v < min_v) return min_v;
+    if (v > max_v) return max_v;
+    return v;
+}
+
 /*
  * 编码器多圈解算
  * 在 feed_rx 中调用，更新 total_angle (累计编码器计数)
@@ -108,6 +114,7 @@ static int m3508_set_current(motor_dev_t* dev, float iq_a) {
     if (!dev || !dev->drv_ctx) return APP_ERR_INVALID_ARG;
     m3508_drv_ctx_t* ctx = (m3508_drv_ctx_t*)dev->drv_ctx;
     ctx->cmd_current_raw = m3508_ampere_to_raw(m3508_cfg_sign(m3508_cfg(dev)) * iq_a);
+    ctx->velocity_hold_active = 0U;
     ctx->ctrl_mode = M3508_MODE_CURRENT;
     return APP_OK;
 }
@@ -116,6 +123,7 @@ static int m3508_set_torque(motor_dev_t* dev, float tau_nm) {
     if (!dev || !dev->drv_ctx) return APP_ERR_INVALID_ARG;
     m3508_drv_ctx_t* ctx = (m3508_drv_ctx_t*)dev->drv_ctx;
     ctx->target_torque_nm = m3508_cfg_sign(m3508_cfg(dev)) * tau_nm;
+    ctx->velocity_hold_active = 0U;
     ctx->ctrl_mode = M3508_MODE_TORQUE;
     return APP_OK;
 }
@@ -128,6 +136,7 @@ static int m3508_set_position(motor_dev_t* dev, float pos, float vel,
     /* 输出轴 rad → 转子侧累计编码器计数，与 ctx->total_angle 单位一致 */
     ctx->target_position = (int32_t)(m3508_cfg_sign(m3508_cfg(dev)) * pos * M3508_REDUCTION_RATIO
                            / (2.0f * 3.14159265f) * (float)M3508_ENCODER_COUNTS);
+    ctx->velocity_hold_active = 0U;
     ctx->ctrl_mode = M3508_MODE_POSITION;
     return APP_OK;
 }
@@ -144,6 +153,7 @@ static int m3508_enable(motor_dev_t* dev) {
     if (!dev || !dev->drv_ctx) return APP_ERR_INVALID_ARG;
     m3508_drv_ctx_t* ctx = (m3508_drv_ctx_t*)dev->drv_ctx;
     ctx->online = 1;
+    ctx->velocity_hold_active = 0U;
     ctx->pos_err_sum = 0.0f;
     ctx->trq_err_sum = 0.0f;
     app_pid_reset(&ctx->speed_pid);
@@ -156,6 +166,7 @@ static int m3508_disable(motor_dev_t* dev) {
     ctx->online = 0;
     ctx->cmd_current_raw = 0;
     ctx->target_vel_rads = 0.0f;
+    ctx->velocity_hold_active = 0U;
     ctx->pos_err_sum = 0.0f;
     ctx->trq_err_sum = 0.0f;
     app_pid_reset(&ctx->speed_pid);
@@ -251,14 +262,31 @@ static const m3508_bus_map_t s_m3508_map[M3508_MOTOR_COUNT] = {
 };
 
 /* 速度 PID 默认参数 (转子侧) */
-#define M3508_PID_KP        3.0f
-#define M3508_PID_KI        0.3f
+#define M3508_PID_MOVE_KP   4.0f
+#define M3508_PID_MOVE_KI   8.0f
+#define M3508_PID_HOLD_KP   3.0f
+#define M3508_PID_HOLD_KI   0.3f
 #define M3508_PID_KD        0.0f
 #define M3508_PID_MAX_OUT   16000.0f
-#define M3508_PID_MAX_SUM   10000.0f
 #define M3508_PID_DT_S      0.002f   /* 500Hz = 2ms */
-#define M3508_STATIC_FF_RAW       2500.0f  /* 低速启动/静摩擦补偿电流 raw */
-#define M3508_STATIC_FF_ERR_RPM   30.0f    /* 速度误差超过该转子侧 rpm 后启用补偿 */
+#define M3508_PID_MOVE_I_OUT_LIMIT 6500.0f /* 非零速度：允许 I 项补足持续摩擦负载 */
+#define M3508_PID_HOLD_I_OUT_LIMIT 1200.0f /* 0 速锁轮：限制积分，避免静止颤动 */
+#define M3508_PID_I_STATE_LIMIT   (M3508_PID_MOVE_I_OUT_LIMIT / M3508_PID_MOVE_KI)
+#define M3508_PID_TARGET_ZERO_RPM 8.0f     /* 目标接近 0 时不积分，避免静止颤动 */
+#define M3508_PID_ERR_DEADBAND_RPM 3.0f    /* 误差小于该值时泄放积分 */
+#define M3508_PID_I_FREEZE_ERR_RPM 35.0f   /* 已运动时，小于该误差不再继续积分 */
+#define M3508_PID_I_FREEZE_ERR_RATIO 0.20f /* 已运动时，误差小于目标比例则冻结 I */
+#define M3508_PID_I_FREEZE_MEAS_RATIO 0.50f /* 反馈速度达到目标比例后认为已破静摩擦 */
+#define M3508_PID_I_FREEZE_MIN_RPM 20.0f
+#define M3508_PID_I_DECAY_ZERO    0.0f     /* 零速目标：清积分 */
+#define M3508_PID_I_DECAY_NEAR    0.98f    /* 接近目标：慢慢泄放积分 */
+#define M3508_PID_I_DECAY_TRACKING 0.9995f /* 已经跟上目标时，极慢泄放 I 防止堆积 */
+#define M3508_PID_SLEW_RAW_STEP   60.0f    /* 500Hz 下每拍最大电流 raw 变化量 */
+#define M3508_STATIC_FF_RAW       0.0f     /* 不依赖地面摩擦前馈，先让 PI 自己补偿 */
+#define M3508_STATIC_FF_ERR_RPM   30.0f
+#define M3508_HOLD_KP_RPM_PER_CNT 0.5f     /* 0 速锁轮：编码器误差 -> 转子侧 rpm */
+#define M3508_HOLD_MAX_RPM        500.0f
+#define M3508_HOLD_DEADBAND_CNT   2.0f
 
 /* EMA 速度滤波系数 */
 #define M3508_EMA_ALPHA     0.3f
@@ -281,7 +309,132 @@ static const m3508_bus_map_t s_m3508_map[M3508_MOTOR_COUNT] = {
 static uint32_t s_m3508_tx_err_cnt;
 static uint32_t s_m3508_last_tx_warn_ms;
 
+static void m3508_speed_pid_set_tunings(m3508_drv_ctx_t* ctx,
+                                        float kp,
+                                        float ki,
+                                        float i_out_limit,
+                                        uint8_t reset) {
+    if (!ctx) return;
+    app_pid_set_tunings(&ctx->speed_pid, kp, ki, M3508_PID_KD);
+    if (ki > 1e-6f) {
+        float i_state_limit = i_out_limit / ki;
+        app_pid_set_integral_limits(&ctx->speed_pid, i_state_limit, -i_state_limit);
+    } else {
+        app_pid_set_integral_limits(&ctx->speed_pid, 0.0f, 0.0f);
+    }
+    if (reset) {
+        app_pid_reset(&ctx->speed_pid);
+    }
+}
+
+static void m3508_speed_pid_decay_integral(app_pid_t* pid, float decay) {
+    if (!pid) return;
+    pid->integral *= m3508_clampf(decay, 0.0f, 1.0f);
+    if (fabsf(pid->integral) < 1e-6f) {
+        pid->integral = 0.0f;
+    }
+}
+
+static uint8_t m3508_speed_pid_should_integrate(float target_rpm,
+                                                float measurement_rpm,
+                                                float err_rpm) {
+    const float abs_target = fabsf(target_rpm);
+    const float abs_measure = fabsf(measurement_rpm);
+    const float abs_err = fabsf(err_rpm);
+    const uint8_t same_dir = (target_rpm * measurement_rpm) > 0.0f ? 1U : 0U;
+    const float freeze_err = fmaxf(M3508_PID_I_FREEZE_ERR_RPM,
+                                   M3508_PID_I_FREEZE_ERR_RATIO * abs_target);
+    const float moving_rpm = fmaxf(M3508_PID_I_FREEZE_MIN_RPM,
+                                   M3508_PID_I_FREEZE_MEAS_RATIO * abs_target);
+
+    if (same_dir && abs_measure >= moving_rpm && abs_err <= freeze_err) {
+        return 0U;
+    }
+    return 1U;
+}
+
+static float m3508_speed_pid_update(m3508_drv_ctx_t* ctx,
+                                    float target_rpm,
+                                    float measurement_rpm,
+                                    uint8_t clear_integral,
+                                    float i_out_limit) {
+    if (!ctx) return 0.0f;
+    app_pid_t* pid = &ctx->speed_pid;
+    const float dt_s = M3508_PID_DT_S;
+    const float err = target_rpm - measurement_rpm;
+    const float prev_target = pid->prev_error + pid->prev_measurement;
+
+    if (!pid->initialized) {
+        pid->prev_measurement = measurement_rpm;
+        pid->prev_error = err;
+        pid->prev_prev_error = err;
+        pid->initialized = 1U;
+    }
+
+    const uint8_t target_reversed = (!clear_integral &&
+                                     fabsf(prev_target) >= M3508_PID_TARGET_ZERO_RPM &&
+                                     (target_rpm * prev_target < 0.0f)) ? 1U : 0U;
+
+    if (clear_integral || target_reversed) {
+        m3508_speed_pid_decay_integral(pid, M3508_PID_I_DECAY_ZERO);
+    } else if (fabsf(err) <= M3508_PID_ERR_DEADBAND_RPM) {
+        m3508_speed_pid_decay_integral(pid, M3508_PID_I_DECAY_NEAR);
+    } else if (m3508_speed_pid_should_integrate(target_rpm, measurement_rpm, err)) {
+        const float ki_abs = fabsf(pid->Ki);
+        if (ki_abs > 1e-6f) {
+            const float i_limit = i_out_limit / ki_abs;
+            pid->integral += err * dt_s;
+            pid->integral = m3508_clampf(pid->integral, -i_limit, i_limit);
+        }
+    } else {
+        m3508_speed_pid_decay_integral(pid, M3508_PID_I_DECAY_TRACKING);
+    }
+
+    const float prop = pid->Kp * err;
+    const float inte = pid->Ki * pid->integral;
+    const float deri = pid->Kd * (measurement_rpm - pid->prev_measurement) / dt_s;
+    pid->output = prop + inte - deri;
+    pid->output = m3508_clampf(pid->output, pid->output_min, pid->output_max);
+    pid->prev_prev_error = pid->prev_error;
+    pid->prev_error = err;
+    pid->prev_measurement = measurement_rpm;
+    return pid->output;
+}
+
+static float m3508_slew_current(float target_raw, float last_raw) {
+    float delta = target_raw - last_raw;
+    if (delta > M3508_PID_SLEW_RAW_STEP) {
+        return last_raw + M3508_PID_SLEW_RAW_STEP;
+    }
+    if (delta < -M3508_PID_SLEW_RAW_STEP) {
+        return last_raw - M3508_PID_SLEW_RAW_STEP;
+    }
+    return target_raw;
+}
+
+static float m3508_velocity_hold_target_rpm(m3508_drv_ctx_t* ctx) {
+    if (!ctx) return 0.0f;
+    if (!ctx->velocity_hold_active) {
+        ctx->velocity_hold_position = ctx->total_angle;
+        ctx->velocity_hold_active = 1U;
+        app_pid_reset(&ctx->speed_pid);
+    }
+
+    float err_cnt = (float)(ctx->velocity_hold_position - ctx->total_angle);
+    if (fabsf(err_cnt) < M3508_HOLD_DEADBAND_CNT) {
+        err_cnt = 0.0f;
+    }
+    return m3508_clampf(M3508_HOLD_KP_RPM_PER_CNT * err_cnt,
+                        -M3508_HOLD_MAX_RPM,
+                        M3508_HOLD_MAX_RPM);
+}
+
 static float m3508_apply_static_ff(float output, float target_rpm, float err_rpm) {
+    if (M3508_STATIC_FF_RAW <= 0.0f) {
+        (void)target_rpm;
+        (void)err_rpm;
+        return output;
+    }
     if (fabsf(target_rpm) < M3508_STATIC_FF_ERR_RPM) {
         return output;
     }
@@ -321,10 +474,10 @@ app_err_t motor_m3508_init_all(void) {
 
         /* 初始化速度 PID (转子侧) */
         app_pid_init(&s_m3508_ctxs[i].speed_pid,
-                     M3508_PID_KP, M3508_PID_KI, M3508_PID_KD,
+                     M3508_PID_MOVE_KP, M3508_PID_MOVE_KI, M3508_PID_KD,
                      M3508_PID_MAX_OUT, -M3508_PID_MAX_OUT,
-                     M3508_PID_MAX_SUM * M3508_PID_DT_S,
-                     -M3508_PID_MAX_SUM * M3508_PID_DT_S);
+                     M3508_PID_I_STATE_LIMIT,
+                     -M3508_PID_I_STATE_LIMIT);
 
         /* 初始化 motor_dev_t */
         s_m3508_devs[i].ops     = &s_m3508_ops;
@@ -457,10 +610,44 @@ app_err_t motor_m3508_send_all(void) {
                 default: {
                     float target_rpm = ctx->target_vel_rads * M3508_REDUCTION_RATIO
                                      * 60.0f / (2.0f * 3.14159265f);
-                    output = app_pid_update_dt(&ctx->speed_pid, target_rpm,
-                                               ctx->filter_speed, M3508_PID_DT_S);
+                    uint8_t clear_integral = 0U;
+                    uint8_t reset_pid = 0U;
+                    float i_out_limit = M3508_PID_MOVE_I_OUT_LIMIT;
+                    if (fabsf(target_rpm) < M3508_PID_TARGET_ZERO_RPM) {
+                        i_out_limit = M3508_PID_HOLD_I_OUT_LIMIT;
+                        if (fabsf(ctx->speed_pid.Kp - M3508_PID_HOLD_KP) > 1e-6f ||
+                            fabsf(ctx->speed_pid.Ki - M3508_PID_HOLD_KI) > 1e-6f) {
+                            reset_pid = 1U;
+                        }
+                        m3508_speed_pid_set_tunings(ctx,
+                                                    M3508_PID_HOLD_KP,
+                                                    M3508_PID_HOLD_KI,
+                                                    i_out_limit,
+                                                    reset_pid);
+                        target_rpm = m3508_velocity_hold_target_rpm(ctx);
+                        if (fabsf(target_rpm) < M3508_PID_ERR_DEADBAND_RPM) {
+                            clear_integral = 1U;
+                        }
+                    } else {
+                        if (ctx->velocity_hold_active) {
+                            ctx->velocity_hold_active = 0U;
+                            reset_pid = 1U;
+                        }
+                        if (fabsf(ctx->speed_pid.Kp - M3508_PID_MOVE_KP) > 1e-6f ||
+                            fabsf(ctx->speed_pid.Ki - M3508_PID_MOVE_KI) > 1e-6f) {
+                            reset_pid = 1U;
+                        }
+                        m3508_speed_pid_set_tunings(ctx,
+                                                    M3508_PID_MOVE_KP,
+                                                    M3508_PID_MOVE_KI,
+                                                    i_out_limit,
+                                                    reset_pid);
+                    }
+                    output = m3508_speed_pid_update(ctx, target_rpm, ctx->filter_speed,
+                                                    clear_integral, i_out_limit);
                     output = m3508_apply_static_ff(output, target_rpm, target_rpm - ctx->filter_speed);
                     if (ctx->temp_limit_phase == 1) output *= 0.5f;
+                    output = m3508_slew_current(output, (float)ctx->cmd_current_raw);
                     ctx->cmd_current_raw = m3508_power_limit(output, ctx->filter_speed);
                     break;
                 }

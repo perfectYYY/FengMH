@@ -34,8 +34,8 @@ static volatile uint32_t     s_last_rx_ms = 0;
 static uint32_t s_last_state_tx_ms  = 0;  /* 0x80 上次发送时间 */
 static uint32_t s_last_motor_tx_ms  = 0;  /* 0x81 上次发送时间 */
 #if APP_TARGET_MCU
-static const uint32_t STATE_TX_INTERVAL_MS  = 10;  /* 100Hz */
-static const uint32_t MOTOR_TX_INTERVAL_MS  = 50;  /* 20Hz */
+static const uint32_t STATE_TX_INTERVAL_MS  = 100;  /* 10Hz */
+static const uint32_t MOTOR_TX_INTERVAL_MS  = 200;  /* 5Hz, motor states are round-robin */
 #endif
 
 static int handle_chassis(const uint8_t* p, uint8_t len) {
@@ -226,13 +226,13 @@ void task_comm_entry(void* arg) {
     for (;;) {
         uint32_t now = (uint32_t)bsp_time_now_ms();
 
-        /* 100Hz 发送整机状态 */
+        /* 低频发送整机状态，避免串口调试助手被上行帧刷满 */
         if ((now - s_last_state_tx_ms) >= STATE_TX_INTERVAL_MS) {
             send_state_frame();
             s_last_state_tx_ms = now;
         }
 
-        /* 20Hz 发送电机状态 (轮流) */
+        /* 低频发送电机状态 (轮流) */
         if ((now - s_last_motor_tx_ms) >= MOTOR_TX_INTERVAL_MS) {
             send_motor_frame();
             s_last_motor_tx_ms = now;
