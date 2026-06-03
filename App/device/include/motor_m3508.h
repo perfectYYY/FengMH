@@ -40,6 +40,12 @@ extern "C" {
 #define M3508_REDUCTION_RATIO  (268.0f / 17.0f)  /* 减速比 M3508P (268:17) ≈ 15.76 */
 #define M3508_POWER_LIMIT_W    150.0f   /* 功率保护上限 (W) */
 #define M3508_EMA_ALPHA        0.3f     /* 速度 EMA 滤波系数：0=全平滑 1=无滤波 */
+#define M3508_TRACE_CAPACITY   2048u    /* 运行态环形记录容量，供 OpenOCD 停机后 dump */
+#define M3508_MIT_TAU_MAX_NM   2.0f     /* MIT 输出轴力矩保护上限，先保守验证 */
+#define M3508_MIT_TAU_HARD_MAX_NM 4.0f  /* 调试 ramp 允许提高到的输出轴力矩硬上限 */
+#define M3508_MIT_POS_ERR_MAX_RAD 0.5f  /* MIT 位置误差限幅，避免调试指令突跳 */
+#define M3508_MIT_KP_MAX       40.0f    /* 输出轴 N·m/rad */
+#define M3508_MIT_KD_MAX       8.0f     /* 输出轴 N·m·s/rad */
 
 /* 控制模式 */
 #define M3508_MODE_VELOCITY  0u   /* 速度环 */
@@ -88,10 +94,71 @@ typedef struct {
     float         mit_kp;            /* 刚度增益 (N·m/rad) */
     float         mit_kd;            /* 阻尼增益 (N·m·s/rad) */
     float         mit_tau_ff_nm;     /* 力矩前馈 (输出轴 N·m) */
+    float         mit_tau_limit_nm;  /* 力矩限幅 (输出轴 N·m)，<=0 时使用默认上限 */
+    float         mit_pos_err_limit_rad; /* 位置误差限幅，<=0 时使用默认上限 */
+    float         mit_pos_err_rad;   /* 最近一次 MIT 位置误差，供 trace/GDB 调试 */
+    float         mit_tau_cmd_nm;    /* 最近一次 MIT 输出力矩，供 trace/GDB 调试 */
 
     /* 温度保护 */
     uint8_t       temp_limit_phase; /* 0=正常 1=限功率 2=停机 */
 } m3508_drv_ctx_t;
+
+typedef struct {
+    uint32_t tick_ms;
+    int32_t  total_angle[M3508_MOTOR_COUNT];
+    int16_t  cmd_current_raw[M3508_MOTOR_COUNT];
+    int16_t  actual_current_raw[M3508_MOTOR_COUNT];
+    int16_t  filter_speed_rpm[M3508_MOTOR_COUNT];
+    int16_t  target_vel_mrad_s[M3508_MOTOR_COUNT];
+    int16_t  mit_pos_des_mrad[M3508_MOTOR_COUNT];
+    int16_t  mit_pos_err_mrad[M3508_MOTOR_COUNT];
+    int16_t  mit_tau_cmd_mNm[M3508_MOTOR_COUNT];
+    uint8_t  ctrl_mode[M3508_MOTOR_COUNT];
+    uint8_t  online_mask;
+} m3508_trace_sample_t;
+
+typedef struct {
+    uint32_t write_idx;
+    uint32_t sample_count;
+    uint32_t decim;
+    uint8_t  enabled;
+    uint8_t  reserved[3];
+    m3508_trace_sample_t samples[M3508_TRACE_CAPACITY];
+} m3508_trace_buffer_t;
+
+extern volatile m3508_trace_buffer_t g_m3508_trace;
+
+typedef struct {
+    uint8_t  enable;        /* GDB 写 1 启动；完成/异常时固件自动清 0 */
+    uint8_t  wheel_index;   /* 0=FL, 1=RL, 2=RR, 3=FR */
+    uint8_t  active;        /* 固件内部状态 */
+    uint8_t  done;          /* 完成后置 1，下一次启动前可由 GDB 清 0 */
+    uint8_t  hold_after_done; /* 1=结束后保持 MIT 锁轮，0=结束后零电流 */
+    uint8_t  reserved[3];
+    uint32_t duration_ms;   /* 运行时长；0 表示不启动，防止误触发 */
+    uint32_t elapsed_ms;    /* 已运行时间 */
+    uint32_t last_tick_ms;  /* 固件内部真实时间戳 */
+    float    omega_des_rads; /* 输出轴目标速度 rad/s */
+    float    theta_ref_rad; /* ramp 内部积分位置参考 */
+    float    kp;            /* 输出轴 N·m/rad */
+    float    kd;            /* 输出轴 N·m·s/rad */
+    float    tau_ff_nm;     /* 输出轴 N·m */
+    float    tau_limit_nm;  /* 输出轴 N·m，<=0 使用默认 2Nm，最大 4Nm */
+    float    pos_err_limit_rad; /* <=0 使用默认 0.5rad */
+    float    start_angle_rad;
+    float    final_angle_rad;
+    int16_t  last_cmd_current_raw;
+    int16_t  last_actual_current_raw;
+    int16_t  last_speed_rpm;
+} m3508_mit_ramp_debug_t;
+
+extern volatile m3508_mit_ramp_debug_t g_m3508_mit_ramp;
+
+void motor_m3508_trace_reset(uint32_t decim);
+void motor_m3508_trace_enable(uint8_t enable);
+app_err_t motor_m3508_set_mit_limits(motor_dev_t* dev,
+                                     float tau_limit_nm,
+                                     float pos_err_limit_rad);
 
 /*
  * 初始化所有 M3508 电机驱动实例并绑定到 motor_registry

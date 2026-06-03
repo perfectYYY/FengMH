@@ -61,6 +61,10 @@ static int16_t m3508_ampere_to_raw(float a) {
     return m3508_limit_current(raw);
 }
 
+static float m3508_ampere_to_raw_f(float a) {
+    return (a / M3508_CURRENT_LIMIT_A) * M3508_CURRENT_RAW_MAX;
+}
+
 static const motor_cfg_t* m3508_cfg(const motor_dev_t* dev) {
     if (!dev) return NULL;
     return motor_get_cfg((motor_logical_id_t)dev->state.id);
@@ -74,6 +78,12 @@ static float m3508_clampf(float v, float min_v, float max_v) {
     if (v < min_v) return min_v;
     if (v > max_v) return max_v;
     return v;
+}
+
+static float m3508_output_torque_to_raw(const motor_dev_t* dev, float tau_nm) {
+    float motor_current_a = m3508_cfg_sign(m3508_cfg(dev)) * tau_nm
+                          / (M3508_TORQUE_KT * M3508_REDUCTION_RATIO);
+    return m3508_ampere_to_raw_f(motor_current_a);
 }
 
 /*
@@ -122,7 +132,7 @@ static int m3508_set_current(motor_dev_t* dev, float iq_a) {
 static int m3508_set_torque(motor_dev_t* dev, float tau_nm) {
     if (!dev || !dev->drv_ctx) return APP_ERR_INVALID_ARG;
     m3508_drv_ctx_t* ctx = (m3508_drv_ctx_t*)dev->drv_ctx;
-    ctx->target_torque_nm = m3508_cfg_sign(m3508_cfg(dev)) * tau_nm;
+    ctx->target_torque_nm = tau_nm;
     ctx->velocity_hold_active = 0U;
     ctx->ctrl_mode = M3508_MODE_TORQUE;
     return APP_OK;
@@ -132,7 +142,28 @@ static int m3508_set_position(motor_dev_t* dev, float pos, float vel,
                                float kp, float kd, float tau_ff) {
     if (!dev || !dev->drv_ctx) return APP_ERR_INVALID_ARG;
     m3508_drv_ctx_t* ctx = (m3508_drv_ctx_t*)dev->drv_ctx;
-    (void)vel; (void)kp; (void)kd; (void)tau_ff;
+    const uint8_t mit_request = (fabsf(vel) > 1e-6f ||
+                                 fabsf(kp) > 1e-6f ||
+                                 fabsf(kd) > 1e-6f ||
+                                 fabsf(tau_ff) > 1e-6f) ? 1U : 0U;
+    if (mit_request) {
+        ctx->mit_pos_des_rad = pos;
+        ctx->mit_vel_des_rads = vel;
+        ctx->mit_kp = m3508_clampf(kp, 0.0f, M3508_MIT_KP_MAX);
+        ctx->mit_kd = m3508_clampf(kd, 0.0f, M3508_MIT_KD_MAX);
+        ctx->mit_tau_ff_nm = m3508_clampf(tau_ff,
+                                          -M3508_MIT_TAU_MAX_NM,
+                                          M3508_MIT_TAU_MAX_NM);
+        ctx->mit_tau_limit_nm = M3508_MIT_TAU_MAX_NM;
+        ctx->mit_pos_err_limit_rad = M3508_MIT_POS_ERR_MAX_RAD;
+        ctx->target_vel_rads = m3508_cfg_sign(m3508_cfg(dev)) * vel;
+        ctx->velocity_hold_active = 0U;
+        ctx->pos_err_sum = 0.0f;
+        ctx->trq_err_sum = 0.0f;
+        ctx->ctrl_mode = M3508_MODE_MIT;
+        return APP_OK;
+    }
+
     /* 输出轴 rad → 转子侧累计编码器计数，与 ctx->total_angle 单位一致 */
     ctx->target_position = (int32_t)(m3508_cfg_sign(m3508_cfg(dev)) * pos * M3508_REDUCTION_RATIO
                            / (2.0f * 3.14159265f) * (float)M3508_ENCODER_COUNTS);
@@ -241,6 +272,8 @@ static const motor_ops_t s_m3508_ops = {
 
 static motor_dev_t      s_m3508_devs[M3508_MOTOR_COUNT];
 static m3508_drv_ctx_t  s_m3508_ctxs[M3508_MOTOR_COUNT];
+volatile m3508_trace_buffer_t g_m3508_trace;
+volatile m3508_mit_ramp_debug_t g_m3508_mit_ramp;
 
 /*
  * 总线映射：DJI_ID 全局连续，与 C620 拨码一致。
@@ -308,6 +341,77 @@ static const m3508_bus_map_t s_m3508_map[M3508_MOTOR_COUNT] = {
 
 static uint32_t s_m3508_tx_err_cnt;
 static uint32_t s_m3508_last_tx_warn_ms;
+
+static float m3508_mit_limit_tau(float requested_nm) {
+    float limit = (requested_nm > 0.0f) ? requested_nm : M3508_MIT_TAU_MAX_NM;
+    return m3508_clampf(limit, 0.0f, M3508_MIT_TAU_HARD_MAX_NM);
+}
+
+static float m3508_mit_limit_pos_err(float requested_rad) {
+    float limit = (requested_rad > 0.0f) ? requested_rad : M3508_MIT_POS_ERR_MAX_RAD;
+    return m3508_clampf(limit, 0.0f, M3508_MIT_POS_ERR_MAX_RAD);
+}
+
+void motor_m3508_trace_reset(uint32_t decim) {
+    memset((void*)&g_m3508_trace, 0, sizeof(g_m3508_trace));
+    g_m3508_trace.decim = (decim == 0U) ? 1U : decim;
+}
+
+void motor_m3508_trace_enable(uint8_t enable) {
+    g_m3508_trace.enabled = enable ? 1U : 0U;
+}
+
+app_err_t motor_m3508_set_mit_limits(motor_dev_t* dev,
+                                     float tau_limit_nm,
+                                     float pos_err_limit_rad) {
+    if (!dev || !dev->drv_ctx || dev->state.type != MOTOR_M3508) {
+        return APP_ERR_INVALID_ARG;
+    }
+    m3508_drv_ctx_t* ctx = (m3508_drv_ctx_t*)dev->drv_ctx;
+    ctx->mit_tau_limit_nm = m3508_mit_limit_tau(tau_limit_nm);
+    ctx->mit_pos_err_limit_rad = m3508_mit_limit_pos_err(pos_err_limit_rad);
+    return APP_OK;
+}
+
+static int16_t m3508_trace_float_to_i16(float v) {
+    if (v > 32767.0f) return 32767;
+    if (v < -32768.0f) return -32768;
+    return (int16_t)v;
+}
+
+static void m3508_trace_record(void) {
+    static uint32_t s_trace_div;
+
+    if (!g_m3508_trace.enabled) return;
+    uint32_t decim = g_m3508_trace.decim;
+    if (decim == 0U) decim = 1U;
+    if (++s_trace_div < decim) return;
+    s_trace_div = 0U;
+
+    uint32_t idx = g_m3508_trace.write_idx % M3508_TRACE_CAPACITY;
+    volatile m3508_trace_sample_t* sample = &g_m3508_trace.samples[idx];
+    sample->tick_ms = (uint32_t)bsp_time_now_ms();
+    sample->online_mask = 0U;
+    for (int i = 0; i < M3508_MOTOR_COUNT; i++) {
+        const m3508_drv_ctx_t* ctx = &s_m3508_ctxs[i];
+        sample->total_angle[i] = ctx->total_angle;
+        sample->cmd_current_raw[i] = ctx->cmd_current_raw;
+        sample->actual_current_raw[i] = ctx->actual_current_raw;
+        sample->filter_speed_rpm[i] = m3508_trace_float_to_i16(ctx->filter_speed);
+        sample->target_vel_mrad_s[i] = m3508_trace_float_to_i16(ctx->target_vel_rads * 1000.0f);
+        sample->mit_pos_des_mrad[i] = m3508_trace_float_to_i16(ctx->mit_pos_des_rad * 1000.0f);
+        sample->mit_pos_err_mrad[i] = m3508_trace_float_to_i16(ctx->mit_pos_err_rad * 1000.0f);
+        sample->mit_tau_cmd_mNm[i] = m3508_trace_float_to_i16(ctx->mit_tau_cmd_nm * 1000.0f);
+        sample->ctrl_mode[i] = ctx->ctrl_mode;
+        if (ctx->online) {
+            sample->online_mask |= (uint8_t)(1U << i);
+        }
+    }
+    g_m3508_trace.write_idx++;
+    if (g_m3508_trace.sample_count < M3508_TRACE_CAPACITY) {
+        g_m3508_trace.sample_count++;
+    }
+}
 
 static void m3508_speed_pid_set_tunings(m3508_drv_ctx_t* ctx,
                                         float kp,
@@ -446,6 +550,113 @@ static float m3508_apply_static_ff(float output, float target_rpm, float err_rpm
     return output;
 }
 
+static void m3508_stop_ctx(m3508_drv_ctx_t* ctx) {
+    if (!ctx) return;
+    ctx->cmd_current_raw = 0;
+    ctx->target_vel_rads = 0.0f;
+    ctx->mit_vel_des_rads = 0.0f;
+    ctx->mit_tau_ff_nm = 0.0f;
+    ctx->mit_tau_cmd_nm = 0.0f;
+    ctx->velocity_hold_active = 0U;
+    ctx->ctrl_mode = M3508_MODE_CURRENT;
+}
+
+static void m3508_hold_ctx_mit(m3508_drv_ctx_t* ctx) {
+    if (!ctx) return;
+    ctx->mit_vel_des_rads = 0.0f;
+    ctx->target_vel_rads = 0.0f;
+    ctx->velocity_hold_active = 0U;
+    ctx->ctrl_mode = M3508_MODE_MIT;
+}
+
+static void m3508_mit_ramp_update(void) {
+    volatile m3508_mit_ramp_debug_t* ramp = &g_m3508_mit_ramp;
+
+    if (!ramp->enable) {
+        ramp->active = 0U;
+        return;
+    }
+    if (ramp->wheel_index >= M3508_MOTOR_COUNT || ramp->duration_ms == 0U) {
+        ramp->enable = 0U;
+        ramp->active = 0U;
+        ramp->done = 1U;
+        return;
+    }
+
+    m3508_drv_ctx_t* ctx = &s_m3508_ctxs[ramp->wheel_index];
+    motor_dev_t* dev = &s_m3508_devs[ramp->wheel_index];
+    if (!ctx->online || !dev->state.online) {
+        ramp->enable = 0U;
+        ramp->active = 0U;
+        ramp->done = 1U;
+        return;
+    }
+
+    if (!ramp->active) {
+        ramp->active = 1U;
+        ramp->done = 0U;
+        ramp->elapsed_ms = 0U;
+        ramp->start_angle_rad = dev->state.angle_rad;
+        ramp->final_angle_rad = dev->state.angle_rad;
+        ramp->theta_ref_rad = dev->state.angle_rad;
+        ramp->last_tick_ms = (uint32_t)bsp_time_now_ms();
+        ctx->velocity_hold_active = 0U;
+        ctx->pos_err_sum = 0.0f;
+        ctx->trq_err_sum = 0.0f;
+        ctx->mit_pos_err_rad = 0.0f;
+        ctx->mit_tau_cmd_nm = 0.0f;
+    }
+
+    uint32_t now_ms = (uint32_t)bsp_time_now_ms();
+    uint32_t dt_ms = now_ms - ramp->last_tick_ms;
+    if (dt_ms == 0U) {
+        dt_ms = (uint32_t)(M3508_PID_DT_S * 1000.0f + 0.5f);
+    }
+    if (dt_ms > 20U) {
+        dt_ms = 20U;
+    }
+    if ((ramp->elapsed_ms + dt_ms) > ramp->duration_ms) {
+        dt_ms = ramp->duration_ms - ramp->elapsed_ms;
+    }
+    ramp->last_tick_ms = now_ms;
+    const float dt_s = (float)dt_ms * 0.001f;
+
+    ramp->theta_ref_rad += ramp->omega_des_rads * dt_s;
+    ramp->elapsed_ms += dt_ms;
+
+    ctx->mit_pos_des_rad = ramp->theta_ref_rad;
+    ctx->mit_vel_des_rads = ramp->omega_des_rads;
+    ctx->mit_kp = m3508_clampf(ramp->kp, 0.0f, M3508_MIT_KP_MAX);
+    ctx->mit_kd = m3508_clampf(ramp->kd, 0.0f, M3508_MIT_KD_MAX);
+    ctx->mit_tau_ff_nm = m3508_clampf(ramp->tau_ff_nm,
+                                      -M3508_MIT_TAU_HARD_MAX_NM,
+                                      M3508_MIT_TAU_HARD_MAX_NM);
+    ctx->mit_tau_limit_nm = m3508_mit_limit_tau(ramp->tau_limit_nm);
+    ctx->mit_pos_err_limit_rad = m3508_mit_limit_pos_err(ramp->pos_err_limit_rad);
+    ctx->target_vel_rads = m3508_cfg_sign(m3508_cfg(dev)) * ramp->omega_des_rads;
+    ctx->ctrl_mode = M3508_MODE_MIT;
+
+    ramp->final_angle_rad = dev->state.angle_rad;
+    ramp->last_cmd_current_raw = ctx->cmd_current_raw;
+    ramp->last_actual_current_raw = ctx->actual_current_raw;
+    ramp->last_speed_rpm = m3508_trace_float_to_i16(ctx->filter_speed);
+
+    if (ramp->elapsed_ms >= ramp->duration_ms) {
+        ramp->enable = 0U;
+        ramp->active = 0U;
+        ramp->done = 1U;
+        ramp->final_angle_rad = dev->state.angle_rad;
+        ramp->last_cmd_current_raw = ctx->cmd_current_raw;
+        ramp->last_actual_current_raw = ctx->actual_current_raw;
+        ramp->last_speed_rpm = m3508_trace_float_to_i16(ctx->filter_speed);
+        if (ramp->hold_after_done) {
+            m3508_hold_ctx_mit(ctx);
+        } else {
+            m3508_stop_ctx(ctx);
+        }
+    }
+}
+
 typedef struct {
     uint32_t rx_cnt;
     uint32_t last_rx_tick;
@@ -461,6 +672,8 @@ app_err_t motor_m3508_init_all(void) {
     memset(s_m3508_devs, 0, sizeof(s_m3508_devs));
     memset(s_m3508_ctxs, 0, sizeof(s_m3508_ctxs));
     memset((void*)s_m3508_probe_seen, 0, sizeof(s_m3508_probe_seen));
+    memset((void*)&g_m3508_mit_ramp, 0, sizeof(g_m3508_mit_ramp));
+    motor_m3508_trace_reset(1U);
     s_m3508_tx_err_cnt = 0;
     s_m3508_last_tx_warn_ms = 0;
 
@@ -541,6 +754,8 @@ void motor_m3508_fdcan_rx_cb(bsp_fdcan_bus_t bus,
 app_err_t motor_m3508_send_all(void) {
     app_err_t ret_all = APP_OK;
 
+    m3508_mit_ramp_update();
+
     /* 按总线分组 */
     for (int bus = BSP_FDCAN_1; bus <= BSP_FDCAN_2; bus++) {
         uint8_t tx_data[8];
@@ -583,8 +798,7 @@ app_err_t motor_m3508_send_all(void) {
 
                 case M3508_MODE_TORQUE: {
                     /* 前馈：目标力矩 → 目标电流 raw；PID 做闭环补偿 */
-                    float int_curr   = (float)M3508_CURRENT_RAW_MAX / M3508_CURRENT_LIMIT_A;
-                    float tgt_curr   = (ctx->target_torque_nm / M3508_TORQUE_KT) * int_curr;
+                    float tgt_curr   = m3508_output_torque_to_raw(dev, ctx->target_torque_nm);
                     float err        = tgt_curr - (float)ctx->actual_current_raw;
                     ctx->trq_err_sum += err;
                     if (ctx->trq_err_sum >  M3508_TRQ_MAX_SUM) ctx->trq_err_sum =  M3508_TRQ_MAX_SUM;
@@ -594,6 +808,24 @@ app_err_t motor_m3508_send_all(void) {
                            + M3508_TRQ_KI * ctx->trq_err_sum * M3508_PID_DT_S;
                     if (output >  M3508_TRQ_MAX_OUT) output =  M3508_TRQ_MAX_OUT;
                     if (output < -M3508_TRQ_MAX_OUT) output = -M3508_TRQ_MAX_OUT;
+                    if (ctx->temp_limit_phase == 1) output *= 0.5f;
+                    ctx->cmd_current_raw = m3508_power_limit(output, ctx->filter_speed);
+                    break;
+                }
+
+                case M3508_MODE_MIT: {
+                    float pos_err = ctx->mit_pos_des_rad - dev->state.angle_rad;
+                    float vel_err = ctx->mit_vel_des_rads - dev->state.velocity_rads;
+                    const float pos_err_limit = m3508_mit_limit_pos_err(ctx->mit_pos_err_limit_rad);
+                    const float tau_limit = m3508_mit_limit_tau(ctx->mit_tau_limit_nm);
+                    pos_err = m3508_clampf(pos_err, -pos_err_limit, pos_err_limit);
+                    float tau_out = ctx->mit_kp * pos_err
+                                  + ctx->mit_kd * vel_err
+                                  + ctx->mit_tau_ff_nm;
+                    tau_out = m3508_clampf(tau_out, -tau_limit, tau_limit);
+                    ctx->mit_pos_err_rad = pos_err;
+                    ctx->mit_tau_cmd_nm = tau_out;
+                    output = m3508_output_torque_to_raw(dev, tau_out);
                     if (ctx->temp_limit_phase == 1) output *= 0.5f;
                     ctx->cmd_current_raw = m3508_power_limit(output, ctx->filter_speed);
                     break;
@@ -711,5 +943,6 @@ app_err_t motor_m3508_send_all(void) {
             }
         }
     }
+    m3508_trace_record();
     return ret_all;
 }

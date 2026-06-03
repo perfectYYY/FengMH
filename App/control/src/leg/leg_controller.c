@@ -4,8 +4,10 @@
 #include "leg_controller.h"
 #include "leg_ik.h"
 #include "leg_params.h"
+#include "motor_m3508.h"
 #include "log.h"
 #include <string.h>
+#include <math.h>
 
 static const char* TAG = "LEG";
 
@@ -20,6 +22,7 @@ static uint8_t s_enable_joints = 1U;
 static uint8_t s_enable_wheels = 1U;
 static float s_joint_kp = 1.5f;
 static float s_joint_kd = 0.1f;
+volatile leg_wheel_mit_debug_t g_leg_wheel_mit;
 
 void leg_controller_init(leg_controller_t* lc) {
     if (!lc) return;
@@ -72,7 +75,87 @@ static int try_set_vel(motor_dev_t* d, float v) {
     return d->ops->set_velocity(d, v);
 }
 
-app_err_t leg_controller_apply(leg_controller_t* lc, const gait_output_t* o) {
+static int try_set_wheel_mit(motor_dev_t* d,
+                             float pos,
+                             float vel,
+                             float kp,
+                             float kd,
+                             float tau_limit,
+                             float pos_err_limit) {
+    if (!d || !d->ops || !d->ops->set_position) return APP_ERR_UNSUPPORTED;
+    int ret = d->ops->set_position(d, pos, vel, kp, kd, 0.0f);
+    if (ret == APP_OK) {
+        (void)motor_m3508_set_mit_limits(d, tau_limit, pos_err_limit);
+    }
+    return ret;
+}
+
+static void wheel_mit_reset_refs(void) {
+    for (int i = 0; i < GAIT_LEG_NUM; i++) {
+        g_leg_wheel_mit.theta_ref_rad[i] = 0.0f;
+        g_leg_wheel_mit.ref_valid[i] = 0U;
+    }
+    g_leg_wheel_mit.active_mask = 0U;
+}
+
+static int try_set_wheel(motor_dev_t* wheel,
+                         const gait_leg_target_t* t,
+                         int leg_idx,
+                         float dt_s) {
+    if (!wheel || !t) return APP_ERR_UNSUPPORTED;
+    volatile leg_wheel_mit_debug_t* dbg = &g_leg_wheel_mit;
+
+    if (dbg->reset) {
+        wheel_mit_reset_refs();
+        dbg->reset = 0U;
+    }
+
+    if (!dbg->enable) {
+        dbg->active_mask = 0U;
+        return try_set_vel(wheel, t->wheel_rads);
+    }
+
+    float kp = isfinite(dbg->kp) && dbg->kp > 0.0f ? dbg->kp : 20.0f;
+    float kd = isfinite(dbg->kd) && dbg->kd >= 0.0f ? dbg->kd : 0.6f;
+    float tau_limit = isfinite(dbg->tau_limit_nm) && dbg->tau_limit_nm > 0.0f
+                    ? dbg->tau_limit_nm : M3508_MIT_TAU_MAX_NM;
+    float pos_err_limit = isfinite(dbg->pos_err_limit_rad) && dbg->pos_err_limit_rad > 0.0f
+                        ? dbg->pos_err_limit_rad : M3508_MIT_POS_ERR_MAX_RAD;
+    if (!isfinite(dt_s) || dt_s < 0.0f) dt_s = 0.0f;
+    if (dt_s > 0.02f) dt_s = 0.02f;
+
+    if (!dbg->ref_valid[leg_idx]) {
+        dbg->theta_ref_rad[leg_idx] = wheel->state.angle_rad;
+        dbg->ref_valid[leg_idx] = 1U;
+    }
+
+    if (t->in_stance) {
+        dbg->theta_ref_rad[leg_idx] += t->wheel_rads * dt_s;
+        dbg->active_mask |= (uint8_t)(1U << leg_idx);
+        return try_set_wheel_mit(wheel,
+                                 dbg->theta_ref_rad[leg_idx],
+                                 t->wheel_rads,
+                                 kp,
+                                 kd,
+                                 tau_limit,
+                                 pos_err_limit);
+    }
+
+    dbg->theta_ref_rad[leg_idx] = wheel->state.angle_rad;
+    dbg->active_mask &= (uint8_t)~(1U << leg_idx);
+    if (dbg->hold_swing) {
+        return try_set_wheel_mit(wheel,
+                                 dbg->theta_ref_rad[leg_idx],
+                                 0.0f,
+                                 kp,
+                                 kd,
+                                 tau_limit,
+                                 pos_err_limit);
+    }
+    return try_set_vel(wheel, 0.0f);
+}
+
+app_err_t leg_controller_apply_dt(leg_controller_t* lc, const gait_output_t* o, float dt_s) {
     if (!lc || !o) return APP_ERR_INVALID_ARG;
 
     /* IK 解算：将步态输出的足端位移 (dx, dz) 转换为关节角度 (theta1, theta2) */
@@ -94,9 +177,13 @@ app_err_t leg_controller_apply(leg_controller_t* lc, const gait_output_t* o) {
             try_set_pos(lc->leg[i].knee, t->knee_rad);
         }
         if (s_enable_wheels) {
-            try_set_vel(lc->leg[i].wheel, t->wheel_rads);
+            try_set_wheel(lc->leg[i].wheel, t, i, dt_s);
         }
         lc->send_cnt++;
     }
     return APP_OK;
+}
+
+app_err_t leg_controller_apply(leg_controller_t* lc, const gait_output_t* o) {
+    return leg_controller_apply_dt(lc, o, 0.002f);
 }

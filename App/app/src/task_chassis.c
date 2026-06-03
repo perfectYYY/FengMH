@@ -313,7 +313,7 @@ static void apply_rl_single_leg_debug(uint8_t online, const chassis_plan_t* plan
 
     /* 只输出 RL：轮速来自 planner；无在线速度命令时给 0，用 M3508 速度环锁住。 */
     out.leg[GAIT_LEG_RL].wheel_rads = (online && plan) ? plan->wheel_rads[GAIT_LEG_RL] : 0.0f;
-    leg_controller_apply(&s_lc, &out);
+    leg_controller_apply_dt(&s_lc, &out, dt_s);
 }
 #endif
 
@@ -478,7 +478,7 @@ void task_chassis_step_for_test(float dt_s, uint32_t now_ms) {
     if (online) {
         apply_plan_wheel_speed(&out, &s_chassis_plan);
     }
-    leg_controller_apply(&s_lc, &out);
+    leg_controller_apply_dt(&s_lc, &out, dt_s);
 
 #if !APP_TARGET_HOST
     /* MCU 端：将电机指令推送到物理总线 */

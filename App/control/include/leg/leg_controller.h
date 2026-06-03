@@ -29,6 +29,21 @@ typedef struct {
     uint32_t        miss_cnt;  /* 某条腿电机为空时累加 */
 } leg_controller_t;
 
+typedef struct {
+    uint8_t  enable;       /* 1=wheel 使用支撑相 MIT 位置积分，0=原速度环 */
+    uint8_t  reset;        /* GDB 写 1 重新锁存各轮参考位置 */
+    uint8_t  active_mask;  /* bit0..3: 当前处于 MIT 管理的腿 */
+    uint8_t  hold_swing;   /* 1=摆动相也保持当前轮角，0=摆动相零电流 */
+    float    kp;           /* 输出轴 N·m/rad */
+    float    kd;           /* 输出轴 N·m·s/rad */
+    float    tau_limit_nm;
+    float    pos_err_limit_rad;
+    float    theta_ref_rad[GAIT_LEG_NUM];
+    uint8_t  ref_valid[GAIT_LEG_NUM];
+} leg_wheel_mit_debug_t;
+
+extern volatile leg_wheel_mit_debug_t g_leg_wheel_mit;
+
 void      leg_controller_init(leg_controller_t* lc);
 /* 从 motor_registry 中按约定 logical id 装配 */
 app_err_t leg_controller_bind_from_registry(leg_controller_t* lc);
@@ -41,6 +56,7 @@ void      leg_controller_set_output_options(uint8_t leg_mask,
                                             float joint_kd);
 /* 应用步态输出：先做 IK 解算，再推送给电机 */
 app_err_t leg_controller_apply(leg_controller_t* lc, const gait_output_t* o);
+app_err_t leg_controller_apply_dt(leg_controller_t* lc, const gait_output_t* o, float dt_s);
 
 #ifdef __cplusplus
 }
