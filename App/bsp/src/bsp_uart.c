@@ -4,7 +4,7 @@
  * MCU 端：
  *   - init: 启动 HAL_UARTEx_ReceiveToIdle_DMA 持续接收
  *   - send: RS485 DE 拉高 → HAL_UART_Transmit_DMA → TX完成回调 DE 拉低
- *           注意：USART2/3 已配置为 RS485 模式 (HAL_RS485Ex_Init)，
+ *           注意：USART2/3/UART4/UART7 已配置为 RS485 模式 (HAL_RS485Ex_Init)，
  *           DE 引脚由硬件自动控制，无需手动 GPIO 操作
  *   - RX:  HAL_UARTEx_RxEventCallback → bsp_uart_on_rx → 用户回调
  *
@@ -46,16 +46,27 @@ static uint32_t       s_tx_tail[BSP_UART_BUS_MAX];
 /* ─── MCU 端 HAL 句柄 ─── */
 #if !APP_TARGET_HOST
 #include "stm32h7xx_hal.h"
-#include "usart.h"   /* huart1/2/3 */
+#include "usart.h"   /* huart1/2/3/4/7 */
 
 static UART_HandleTypeDef* s_huart[BSP_UART_BUS_MAX] = {
-    &huart1, &huart2, &huart3
+    &huart1, &huart2, &huart3, &huart4, &huart7
 };
 
 /* DMA 接收缓冲区：每条总线一个 16 字节缓冲 (GO-8010 反馈帧 16B) */
 #define BSP_UART_RX_BUF_SIZE  32
 static uint8_t s_rx_buf[BSP_UART_BUS_MAX][BSP_UART_RX_BUF_SIZE];
 static volatile uint8_t s_tx_busy[BSP_UART_BUS_MAX];  /* DMA 发送中标志 */
+
+volatile uint32_t g_bsp_uart_tx_start_count[BSP_UART_BUS_MAX];
+volatile uint32_t g_bsp_uart_tx_done_count[BSP_UART_BUS_MAX];
+volatile uint32_t g_bsp_uart_tx_error_count[BSP_UART_BUS_MAX];
+volatile uint32_t g_bsp_uart_rx_start_error_count[BSP_UART_BUS_MAX];
+volatile uint32_t g_bsp_uart_rx_event_count[BSP_UART_BUS_MAX];
+volatile uint32_t g_bsp_uart_rx_byte_count[BSP_UART_BUS_MAX];
+volatile uint32_t g_bsp_uart_rx_last_size[BSP_UART_BUS_MAX];
+volatile uint32_t g_bsp_uart_rx_restart_busy_count[BSP_UART_BUS_MAX];
+volatile uint32_t g_bsp_uart_rx_restart_error_count[BSP_UART_BUS_MAX];
+volatile uint32_t g_bsp_uart_last_error_code[BSP_UART_BUS_MAX];
 
 static void uart_dwt_enable(void) {
     CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
@@ -85,9 +96,14 @@ app_err_t bsp_uart_init(bsp_uart_bus_t bus) {
     s_tx_busy[bus] = 0;
     /* 启动 DMA 接收 (IDLE 线检测 + DMA 半满/全满) */
     if (s_huart[bus]) {
-        HAL_UARTEx_ReceiveToIdle_DMA(s_huart[bus],
-                                      s_rx_buf[bus],
-                                      BSP_UART_RX_BUF_SIZE);
+        HAL_StatusTypeDef ret = HAL_UARTEx_ReceiveToIdle_DMA(s_huart[bus],
+                                                              s_rx_buf[bus],
+                                                              BSP_UART_RX_BUF_SIZE);
+        if (ret != HAL_OK) {
+            g_bsp_uart_rx_start_error_count[bus]++;
+            g_bsp_uart_last_error_code[bus] = s_huart[bus]->ErrorCode;
+            LOGE("uart%u RX start error %d", (unsigned)bus, (int)ret);
+        }
         /* 关闭 DMA 半传输中断，只留全传输和 IDLE 中断 */
         __HAL_DMA_DISABLE_IT(s_huart[bus]->hdmarx, DMA_IT_HT);
     }
@@ -128,9 +144,12 @@ app_err_t bsp_uart_send(bsp_uart_bus_t bus, const uint8_t* data, uint32_t len) {
         return APP_ERR_BUSY;
     }
     s_tx_busy[bus] = 1;
+    g_bsp_uart_tx_start_count[bus]++;
     HAL_StatusTypeDef ret = HAL_UART_Transmit_DMA(s_huart[bus], (uint8_t*)data, len);
     if (ret != HAL_OK) {
         s_tx_busy[bus] = 0;
+        g_bsp_uart_tx_error_count[bus]++;
+        g_bsp_uart_last_error_code[bus] = s_huart[bus]->ErrorCode;
         LOGE("uart%u HAL TX error %d", (unsigned)bus, (int)ret);
         return APP_ERR_IO;
     }
@@ -173,11 +192,18 @@ void bsp_uart_on_tx_done(bsp_uart_bus_t bus) {
     if (bus >= BSP_UART_BUS_MAX) return;
 #if !APP_TARGET_HOST
     s_tx_busy[bus] = 0;
+    g_bsp_uart_tx_done_count[bus]++;
     /* 重新启动 DMA 接收 */
     if (s_huart[bus]) {
-        HAL_UARTEx_ReceiveToIdle_DMA(s_huart[bus],
-                                      s_rx_buf[bus],
-                                      BSP_UART_RX_BUF_SIZE);
+        HAL_StatusTypeDef ret = HAL_UARTEx_ReceiveToIdle_DMA(s_huart[bus],
+                                                              s_rx_buf[bus],
+                                                              BSP_UART_RX_BUF_SIZE);
+        if (ret == HAL_BUSY) {
+            g_bsp_uart_rx_restart_busy_count[bus]++;
+        } else if (ret != HAL_OK) {
+            g_bsp_uart_rx_restart_error_count[bus]++;
+            g_bsp_uart_last_error_code[bus] = s_huart[bus]->ErrorCode;
+        }
         __HAL_DMA_DISABLE_IT(s_huart[bus]->hdmarx, DMA_IT_HT);
     }
 #endif
@@ -241,12 +267,24 @@ void bsp_uart_hal_rx_event(UART_HandleTypeDef *huart, uint16_t size) {
     if      (huart == &huart1) bus = BSP_UART_1;
     else if (huart == &huart2) bus = BSP_UART_2;
     else if (huart == &huart3) bus = BSP_UART_3;
+    else if (huart == &huart4) bus = BSP_UART_4;
+    else if (huart == &huart7) bus = BSP_UART_7;
     else return;
+
+    g_bsp_uart_rx_event_count[bus]++;
+    g_bsp_uart_rx_byte_count[bus] += size;
+    g_bsp_uart_rx_last_size[bus] = size;
 
     bsp_uart_on_rx(bus, s_rx_buf[bus], (uint32_t)size);
 
     /* 重新启动 DMA 接收 */
-    HAL_UARTEx_ReceiveToIdle_DMA(huart, s_rx_buf[bus], BSP_UART_RX_BUF_SIZE);
+    HAL_StatusTypeDef ret = HAL_UARTEx_ReceiveToIdle_DMA(huart, s_rx_buf[bus], BSP_UART_RX_BUF_SIZE);
+    if (ret == HAL_BUSY) {
+        g_bsp_uart_rx_restart_busy_count[bus]++;
+    } else if (ret != HAL_OK) {
+        g_bsp_uart_rx_restart_error_count[bus]++;
+        g_bsp_uart_last_error_code[bus] = huart->ErrorCode;
+    }
     __HAL_DMA_DISABLE_IT(huart->hdmarx, DMA_IT_HT);
 }
 
@@ -259,6 +297,8 @@ void bsp_uart_hal_tx_done(UART_HandleTypeDef *huart) {
     if      (huart == &huart1) bus = BSP_UART_1;
     else if (huart == &huart2) bus = BSP_UART_2;
     else if (huart == &huart3) bus = BSP_UART_3;
+    else if (huart == &huart4) bus = BSP_UART_4;
+    else if (huart == &huart7) bus = BSP_UART_7;
     else return;
 
     bsp_uart_on_tx_done(bus);

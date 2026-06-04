@@ -22,6 +22,7 @@ static const char* TAG = "FDCAN";
 #define BSP_FDCAN_TX_ABORT_TIMEOUT_US  100U
 #define BSP_FDCAN_WARN_INTERVAL_MS     100U
 #define BSP_FDCAN2_MSG_RAM_OFFSET_WORDS 64U
+#define BSP_FDCAN3_MSG_RAM_OFFSET_WORDS 128U
 
 typedef struct {
     bsp_fdcan_rx_cb_t cb;
@@ -39,10 +40,10 @@ static uint32_t          s_tx_tail[BSP_FDCAN_BUS_MAX];
 /* ─── MCU 端 HAL 句柄 ─── */
 #if !APP_TARGET_HOST
 #include "stm32h7xx_hal.h"
-#include "fdcan.h"  /* hfdcan1 / hfdcan2 */
+#include "fdcan.h"  /* hfdcan1 / hfdcan2 / hfdcan3 */
 
 static FDCAN_HandleTypeDef* s_hfdcan[BSP_FDCAN_BUS_MAX] = {
-    &hfdcan1, &hfdcan2
+    &hfdcan1, &hfdcan2, &hfdcan3
 };
 
 /* 每条总线的累计错误次数（TX 入队失败 + Bus Off + Error Passive / Warning）
@@ -113,10 +114,14 @@ app_err_t bsp_fdcan_init(void) {
         if (!s_hfdcan[i]) continue;
 
         /* HAL_FDCAN_Init() 会清空该实例占用的 message RAM，所以必须先 Init，
-         * 再写 filter。FDCAN1/2 共用 SRAMCAN，给 FDCAN2 单独偏移避免互相覆盖。 */
+         * 再写 filter。三路 FDCAN 共用 SRAMCAN，必须给 FDCAN2/3 单独偏移。 */
         s_hfdcan[i]->Init.AutoRetransmission = ENABLE;
+        s_hfdcan[i]->Init.ProtocolException = ENABLE;
         if (i == BSP_FDCAN_2 && s_hfdcan[i]->Init.MessageRAMOffset == 0U) {
             s_hfdcan[i]->Init.MessageRAMOffset = BSP_FDCAN2_MSG_RAM_OFFSET_WORDS;
+        }
+        if (i == BSP_FDCAN_3 && s_hfdcan[i]->Init.MessageRAMOffset == 0U) {
+            s_hfdcan[i]->Init.MessageRAMOffset = BSP_FDCAN3_MSG_RAM_OFFSET_WORDS;
         }
         if (HAL_FDCAN_Init(s_hfdcan[i]) != HAL_OK) {
             s_bus_err_cnt[i]++;
@@ -129,9 +134,15 @@ app_err_t bsp_fdcan_init(void) {
         filter.FilterIndex = 0;
         filter.FilterType = FDCAN_FILTER_MASK;
         filter.FilterConfig = FDCAN_FILTER_TO_RXFIFO0;
-        /* 接收 0x200~0x20F：(ID & 0x7F0) == 0x200，覆盖 M3508 反馈 0x201~0x208 */
-        filter.FilterID1 = 0x200;
-        filter.FilterID2 = 0x7F0;
+        if (i == BSP_FDCAN_3) {
+            /* CAN3 预留给达妙机械臂：先放行标准帧，由设备驱动按 ID 筛选反馈。 */
+            filter.FilterID1 = 0x000;
+            filter.FilterID2 = 0x000;
+        } else {
+            /* 接收 0x200~0x20F：(ID & 0x7F0) == 0x200，覆盖 M3508 反馈 0x201~0x208 */
+            filter.FilterID1 = 0x200;
+            filter.FilterID2 = 0x7F0;
+        }
 
         if (HAL_FDCAN_ConfigGlobalFilter(s_hfdcan[i],
                                           FDCAN_REJECT, FDCAN_REJECT,
@@ -257,6 +268,7 @@ void bsp_fdcan_hal_rxfifo0_cb(FDCAN_HandleTypeDef *hfdcan, uint32_t RxFifo0ITs) 
     bsp_fdcan_bus_t bus = BSP_FDCAN_BUS_MAX;
     if      (hfdcan == &hfdcan1) bus = BSP_FDCAN_1;
     else if (hfdcan == &hfdcan2) bus = BSP_FDCAN_2;
+    else if (hfdcan == &hfdcan3) bus = BSP_FDCAN_3;
     else return;
 
     while (HAL_FDCAN_GetRxFifoFillLevel(hfdcan, FDCAN_RX_FIFO0) > 0U) {
@@ -300,6 +312,7 @@ void bsp_fdcan_hal_error_cb(FDCAN_HandleTypeDef *hfdcan, uint32_t ErrorStatusITs
     bsp_fdcan_bus_t bus = BSP_FDCAN_BUS_MAX;
     if      (hfdcan == &hfdcan1) bus = BSP_FDCAN_1;
     else if (hfdcan == &hfdcan2) bus = BSP_FDCAN_2;
+    else if (hfdcan == &hfdcan3) bus = BSP_FDCAN_3;
     else return;
 
     s_bus_err_cnt[bus]++;

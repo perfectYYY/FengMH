@@ -4,9 +4,11 @@
  * 实现 motor_ops_t vtable，通过 bsp_uart (RS485) 与 GO-8010 通信。
  * RIS 协议：17B TX 帧 / 16B RX 帧，CRC16-CCITT 校验。
  *
- * 8 个 GO-8010 电机分属 2 条 RS485 总线，沿用老工程物理槽位：
- *   - USART2 (BSP_UART_2): RL_HIP(3), RL_KNEE(4), FR_HIP(9), FR_KNEE(10)
- *   - USART3 (BSP_UART_3): FL_HIP(0), FL_KNEE(1), RR_HIP(6), RR_KNEE(7)
+ * 8 个 GO-8010 电机分属 4 条 RS485 总线，沿用老工程物理槽位：
+ *   - USART2 (BSP_UART_2): FL_HIP(0), FL_KNEE(1)
+ *   - USART3 (BSP_UART_3): RL_HIP(3), RL_KNEE(4)
+ *   - UART4  (BSP_UART_4): FR_HIP(9), FR_KNEE(10)
+ *   - UART7  (BSP_UART_7): RR_HIP(6), RR_KNEE(7)
  *
  * RIS 帧里的电机 ID 使用老工程全局 ID，不在每条总线上重新编号。
  */
@@ -30,7 +32,7 @@ extern "C" {
 
 /* GO-8010 驱动私有上下文 */
 typedef struct {
-    uint8_t         bus_id;      /* UART 总线索引 (BSP_UART_2 或 BSP_UART_3) */
+    uint8_t         bus_id;      /* UART 总线索引 (BSP_UART_2/3/4/7) */
     uint8_t         motor_id;    /* RIS 帧里的老工程全局电机 ID */
     uint8_t         mode;        /* 当前模式: 0=锁定, 1=FOC闭环, 2=校准 */
     float           zero_offset; /* enable 时锁存的原始电机位置参考 (rad) */

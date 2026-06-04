@@ -1,8 +1,8 @@
 /*
  * motor_go.c — GO-8010  电机驱动 vtable 实现
  *
- * 1. 8 个 GO 电机分属 2 条 RS485 总线 (USART2/USART3)
- * 2. 每条总线上电机按顺序 ID 0~3 寻址
+ * 1. 8 个 GO 电机分属 4 条 RS485 总线 (USART2/USART3/UART4/UART7)
+ * 2. RIS 帧里的电机 ID 沿用老工程全局物理槽位
  * 3. TX 采用逐电机发送（1kHz 周期由 motor_go_send_all 驱动）
  * 4. RX 在 UART 回调中解码，只更新 state，不触发重发
  * 5. 零位标定：enable 时记录当前位置为零位
@@ -379,8 +379,9 @@ static int go_find_index_by_logical_id(motor_logical_id_t id) {
 }
 
 /*
- * 总线映射沿用老工程 MotorInstance_Init():
- *   0/1 -> USART3, 3/4 -> USART2, 6/7 -> USART3, 9/10 -> USART2。
+ * 总线映射：
+ *   FL(左前) -> USART2, FR(右前) -> UART4,
+ *   RL(左后) -> USART3, RR(右后) -> UART7。
  * RIS 协议 ID 也沿用这些全局物理槽位。
  */
 typedef struct {
@@ -390,14 +391,14 @@ typedef struct {
 } go_bus_map_t;
 
 static const go_bus_map_t s_go_map[GO_MOTOR_COUNT] = {
-    { MOTOR_ID_FL_HIP,  BSP_UART_3, 0 },
-    { MOTOR_ID_FL_KNEE, BSP_UART_3, 1 },
-    { MOTOR_ID_RL_HIP,  BSP_UART_2, 3 },
-    { MOTOR_ID_RL_KNEE, BSP_UART_2, 4 },
-    { MOTOR_ID_RR_HIP,  BSP_UART_3, 6 },
-    { MOTOR_ID_RR_KNEE, BSP_UART_3, 7 },
-    { MOTOR_ID_FR_HIP,  BSP_UART_2, 9 },
-    { MOTOR_ID_FR_KNEE, BSP_UART_2, 10 },
+    { MOTOR_ID_FL_HIP,  BSP_UART_2, 0 },
+    { MOTOR_ID_FL_KNEE, BSP_UART_2, 1 },
+    { MOTOR_ID_RL_HIP,  BSP_UART_3, 3 },
+    { MOTOR_ID_RL_KNEE, BSP_UART_3, 4 },
+    { MOTOR_ID_RR_HIP,  BSP_UART_7, 6 },
+    { MOTOR_ID_RR_KNEE, BSP_UART_7, 7 },
+    { MOTOR_ID_FR_HIP,  BSP_UART_4, 9 },
+    { MOTOR_ID_FR_KNEE, BSP_UART_4, 10 },
 };
 
 app_err_t motor_go_init_all(void) {
@@ -433,6 +434,8 @@ app_err_t motor_go_init_all(void) {
     /* 注册 UART RX 回调 */
     bsp_uart_attach_rx(BSP_UART_2, motor_go_uart_rx_cb, NULL);
     bsp_uart_attach_rx(BSP_UART_3, motor_go_uart_rx_cb, NULL);
+    bsp_uart_attach_rx(BSP_UART_4, motor_go_uart_rx_cb, NULL);
+    bsp_uart_attach_rx(BSP_UART_7, motor_go_uart_rx_cb, NULL);
 
     LOGI("GO motors: %u instances initialized, bound to registry", GO_MOTOR_COUNT);
     return APP_OK;
@@ -469,18 +472,26 @@ app_err_t motor_go_send_all(void) {
      * 17B @ 4Mbps 物理传输约 42.5us；用短超时等待，避免 1ms tick 级
      * delay 把 500Hz 底盘任务拖到几十 Hz。
      */
-    for (int bus = BSP_UART_2; bus <= BSP_UART_3; bus++) {
+    static const bsp_uart_bus_t buses[] = {
+        BSP_UART_2,
+        BSP_UART_3,
+        BSP_UART_4,
+        BSP_UART_7,
+    };
+
+    for (uint32_t b = 0; b < (sizeof(buses) / sizeof(buses[0])); b++) {
+        bsp_uart_bus_t bus = buses[b];
         for (int i = 0; i < GO_MOTOR_COUNT; i++) {
             if (s_go_ctxs[i].bus_id != (uint8_t)bus) continue;
 
             go_ris_send_t frame;
             go_encode_cmd(&s_go_ctxs[i], &frame);
 
-            bsp_uart_send((bsp_uart_bus_t)bus,
+            bsp_uart_send(bus,
                           (const uint8_t*)&frame,
                           sizeof(frame));
 
-            (void)bsp_uart_wait_tx_done((bsp_uart_bus_t)bus, GO_TX_WAIT_TIMEOUT_US);
+            (void)bsp_uart_wait_tx_done(bus, GO_TX_WAIT_TIMEOUT_US);
         }
     }
     return APP_OK;

@@ -32,6 +32,8 @@ app_err_t app_init(void) {
     bsp_fdcan_init();
     bsp_uart_init(BSP_UART_2);
     bsp_uart_init(BSP_UART_3);
+    bsp_uart_init(BSP_UART_4);
+    bsp_uart_init(BSP_UART_7);
     bsp_usb_cdc_init();
 
     /* SPI 初始化 (BMI088) */

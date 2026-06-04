@@ -6,8 +6,10 @@
  *   - 板上：包 HAL_UART + RS485 DE 控制 + DMA；host 单测：内存回环
  *
  * USART1: 调试串口 115200 (暂不使用)
- * USART2: RS485-1 (GO 电机腿1/2), 4Mbps, DE=PD4
- * USART3: RS485-2 (GO 电机腿3/4), 4Mbps, DE=PB14
+ * USART2: RS485-FL 左前 GO 电机, 4Mbps, DE=PD4
+ * USART3: RS485-RL 左后 GO 电机, 4Mbps, DE=PB14
+ * UART4:  RS485-FR 右前 GO 电机, 4Mbps, DE=PA15
+ * UART7:  RS485-RR 右后 GO 电机, 4Mbps, DE=PE9
  */
 #ifndef APP_BSP_UART_H_
 #define APP_BSP_UART_H_
@@ -21,8 +23,10 @@ extern "C" {
 
 typedef enum {
     BSP_UART_1 = 0,   /* 调试串口 115200 */
-    BSP_UART_2 = 1,   /* RS485-1 (GO 电机) 4Mbps, DE=PD4 */
-    BSP_UART_3 = 2,   /* RS485-2 (GO 电机) 4Mbps, DE=PB14 */
+    BSP_UART_2 = 1,   /* RS485-FL 左前 GO 电机, 4Mbps, DE=PD4 */
+    BSP_UART_3 = 2,   /* RS485-RL 左后 GO 电机, 4Mbps, DE=PB14 */
+    BSP_UART_4 = 3,   /* RS485-FR 右前 GO 电机, 4Mbps, DE=PA15 */
+    BSP_UART_7 = 4,   /* RS485-RR 右后 GO 电机, 4Mbps, DE=PE9 */
     BSP_UART_BUS_MAX
 } bsp_uart_bus_t;
 

@@ -18,6 +18,7 @@ extern "C" {
 typedef enum {
     BSP_FDCAN_1 = 0,
     BSP_FDCAN_2 = 1,
+    BSP_FDCAN_3 = 2,
     BSP_FDCAN_BUS_MAX
 } bsp_fdcan_bus_t;
 
