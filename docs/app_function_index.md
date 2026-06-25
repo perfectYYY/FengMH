@@ -255,7 +255,18 @@ changing code.
 - `try_set_vel()`: Issues a motor velocity command when supported.
 - `try_set_wheel_mit()`: Issues M3508 wheel MIT command and limits.
 - `wheel_mit_reset_refs()`: Clears wheel MIT integrated position references.
+- `wheel_mit_read_cfg()`: Resolves debug MIT gains and safety limits.
+- `wheel_mit_limit_dt()`: Clamps wheel MIT integration timestep.
+- `wheel_mit_latch_ref_if_needed()`: Locks a wheel reference angle before MIT use.
+- `wheel_mit_command()`: Sends one wheel MIT position/velocity command.
+- `wheel_mit_apply_stance()`: Integrates and commands stance-phase wheel MIT.
+- `wheel_mit_apply_swing()`: Holds or zeroes swing-phase wheel behavior.
 - `try_set_wheel()`: Selects wheel velocity path or debug MIT path.
+- `leg_output_enabled()`: Checks the configured leg output mask.
+- `leg_has_required_actuators()`: Verifies enabled joint/wheel handles exist.
+- `send_joint_targets()`: Sends hip/knee position targets.
+- `send_wheel_target()`: Sends one wheel velocity or MIT target.
+- `send_leg_targets()`: Dispatches all enabled actuators for one leg.
 - `leg_controller_apply_dt()`: Runs IK and sends joint/wheel commands.
 - `leg_controller_apply()`: Uses default 2 ms timestep.
 
