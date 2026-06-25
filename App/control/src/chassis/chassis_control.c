@@ -59,6 +59,7 @@ static uint8_t s_last_online = 0U;
 static const gait_params_t S_OFFLINE_MARCH_PARAMS = {
     .body_height_m    = 0.20f,
     .step_length_m    = 0.0f,
+    .turn_step_m      = 0.0f,
     .step_height_m    = 0.015f,
     .period_s         = 1.0f,
     .duty             = 0.50f,
@@ -88,6 +89,9 @@ static int validate_trot_params(const gait_params_t* params) {
         return 0;
     }
     if (!isfinite(params->step_length_m) || fabsf(params->step_length_m) > 0.20f) {
+        return 0;
+    }
+    if (!isfinite(params->turn_step_m) || fabsf(params->turn_step_m) > 0.20f) {
         return 0;
     }
     if (!isfinite(params->step_height_m) ||

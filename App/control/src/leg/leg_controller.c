@@ -27,6 +27,13 @@ volatile leg_wheel_mit_debug_t g_leg_wheel_mit;
 void leg_controller_init(leg_controller_t* lc) {
     if (!lc) return;
     memset(lc, 0, sizeof(*lc));
+    memset((void*)&g_leg_wheel_mit, 0, sizeof(g_leg_wheel_mit));
+    g_leg_wheel_mit.enable = 1U;
+    g_leg_wheel_mit.hold_swing = 1U;
+    g_leg_wheel_mit.kp = 20.0f;
+    g_leg_wheel_mit.kd = 0.6f;
+    g_leg_wheel_mit.tau_limit_nm = M3508_MIT_TAU_MAX_NM;
+    g_leg_wheel_mit.pos_err_limit_rad = M3508_MIT_POS_ERR_MAX_RAD;
 }
 
 app_err_t leg_controller_bind_from_registry(leg_controller_t* lc) {
@@ -69,10 +76,6 @@ void leg_controller_set_output_options(uint8_t leg_mask,
 static int try_set_pos(motor_dev_t* d, float rad) {
     if (!d || !d->ops || !d->ops->set_position) return APP_ERR_UNSUPPORTED;
     return d->ops->set_position(d, rad, 0.0f, s_joint_kp, s_joint_kd, 0.0f);
-}
-static int try_set_vel(motor_dev_t* d, float v) {
-    if (!d || !d->ops || !d->ops->set_velocity) return APP_ERR_UNSUPPORTED;
-    return d->ops->set_velocity(d, v);
 }
 
 static int try_set_wheel_mit(motor_dev_t* d,
@@ -163,10 +166,8 @@ static int wheel_mit_apply_swing(motor_dev_t* wheel,
     volatile leg_wheel_mit_debug_t* dbg = &g_leg_wheel_mit;
     dbg->theta_ref_rad[leg_idx] = wheel->state.angle_rad;
     dbg->active_mask &= (uint8_t)~(1U << leg_idx);
-    if (dbg->hold_swing) {
-        return wheel_mit_command(wheel, leg_idx, 0.0f, cfg);
-    }
-    return try_set_vel(wheel, 0.0f);
+    dbg->hold_swing = 1U;
+    return wheel_mit_command(wheel, leg_idx, 0.0f, cfg);
 }
 
 static int try_set_wheel(motor_dev_t* wheel,
@@ -181,10 +182,7 @@ static int try_set_wheel(motor_dev_t* wheel,
         dbg->reset = 0U;
     }
 
-    if (!dbg->enable) {
-        dbg->active_mask = 0U;
-        return try_set_vel(wheel, t->wheel_rads);
-    }
+    dbg->enable = 1U;
 
     wheel_mit_cfg_t cfg = wheel_mit_read_cfg(dbg);
     dt_s = wheel_mit_limit_dt(dt_s);

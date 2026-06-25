@@ -26,10 +26,9 @@ typedef enum {
 /*
  * 单条腿的步态目标。
  *
- * foot_x_m / foot_z_m are body-frame foot displacements used by IK. The
- * legacy hip_rad / knee_rad fields are kept during the readability refactor
- * because scripts still store old keyframes there; new gait code should write
- * foot_* and let leg_controller/IK fill hip_rad/knee_rad.
+ * foot_x_m / foot_z_m 是机体系足端位移，IK 使用这两个字段解算关节角。
+ * hip_rad / knee_rad 是兼容旧脚本关键帧的遗留字段；新步态代码应写 foot_*，
+ * 再由 leg_controller/IK 填充关节目标。
  */
 typedef struct {
     float foot_x_m;
@@ -50,6 +49,7 @@ typedef struct {
 typedef struct {
     float body_height_m;     /* 站立高度 */
     float step_length_m;     /* 单步长，纵向 */
+    float turn_step_m;       /* yaw 步态转向步长差：正值右侧腿更向前、左侧腿更向后 */
     float step_height_m;     /* 抬腿离地高度 */
     float period_s;          /* 步态周期 */
     float duty;              /* 支撑相占空比 [0,1] */

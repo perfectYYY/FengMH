@@ -199,11 +199,14 @@
 - `clampf_local()`: 限幅 float。
 - `signf_local()`: 返回 float 符号。
 - `chassis_planner_init()`: planner 初始化保留钩子。
-- `sanitized_gain()`: 限幅转向增益，非法时使用默认值。
 - `planner_limit_wheel()`: 应用配置的轮速上限。
 - `planner_is_low_speed_turn()`: 判断低速 yaw 转向场景。
+- `planner_configured_turn_step_gain()`: 读取 yaw 到步态转向步长差的比例，非法时使用默认值。
+- `planner_configured_turn_step_limit()`: 读取步态转向步长差限幅，非法时使用默认值。
+- `planner_limit_turn_step_for_base()`: 根据共同前进步长限制左右侧合成步长。
+- `planner_turn_step()`: 将 `wz` 转换成 `gait_params.turn_step_m`。
 - `planner_apply_turn_gait()`: 覆盖转向场景的 gait 参数。
-- `chassis_planner_update()`: 将命令转换为 gait 参数和轮速。
+- `chassis_planner_update()`: 将命令转换为 gait 参数和共同前进轮速；yaw 转向写入 `turn_step_m`。
 
 ## `App/control/gait`
 
@@ -235,6 +238,8 @@
 - `trot_init()`: 重置 trot 相位。
 - `trot_set_param()`: 保存已校验的 trot 参数。
 - `gait_trot_foot_traj()`: 计算支撑/摆动足端轨迹。
+- `trot_leg_side_sign()`: 返回单腿用于 yaw 步态转向的左右侧符号。
+- `trot_leg_step_length()`: 合成单腿实际步长 `step_length_m ± turn_step_m`。
 - `trot_update()`: 推进 trot 相位并写入足端目标。
 - `trot_exit()`: trot gait 退出钩子。
 - `trot_name()`: 返回 `"trot"`。
@@ -262,20 +267,19 @@
 - `leg_controller_set_stand_height()`: 设置 IK 站立高度。
 - `leg_controller_set_output_options()`: 配置启用腿、关节输出和轮子输出。
 - `try_set_pos()`: 电机支持位置接口时发送位置命令。
-- `try_set_vel()`: 电机支持速度接口时发送速度命令。
 - `try_set_wheel_mit()`: 发送 M3508 轮子 MIT 命令和安全限幅。
 - `wheel_mit_reset_refs()`: 清空轮子 MIT 积分参考位置。
-- `wheel_mit_read_cfg()`: 解析调试 MIT 增益和安全限幅。
+- `wheel_mit_read_cfg()`: 读取轮子 MIT 默认/调试增益和安全限幅。
 - `wheel_mit_limit_dt()`: 限制轮子 MIT 积分步长。
 - `wheel_mit_latch_ref_if_needed()`: MIT 使用前锁存轮子参考角。
 - `wheel_mit_command()`: 发送一个轮子 MIT 位置/速度命令。
 - `wheel_mit_apply_stance()`: 支撑相积分并发送轮子 MIT 命令。
-- `wheel_mit_apply_swing()`: 摆动相保持轮角或置零。
-- `try_set_wheel()`: 选择默认轮速路径或调试 MIT 路径。
+- `wheel_mit_apply_swing()`: 摆动相使用 MIT 保持当前轮角。
+- `try_set_wheel()`: 对轮毂电机发送默认 MIT 命令。
 - `leg_output_enabled()`: 检查腿输出 mask 是否启用。
 - `leg_has_required_actuators()`: 检查启用的关节/轮子句柄是否存在。
 - `send_joint_targets()`: 发送髋/膝位置目标。
-- `send_wheel_target()`: 发送一个轮子的速度或 MIT 目标。
+- `send_wheel_target()`: 发送一个轮子的 MIT 目标。
 - `send_leg_targets()`: 派发单腿所有启用执行器命令。
 - `leg_controller_apply_dt()`: 运行 IK 并发送关节/轮子命令。
 - `leg_controller_apply()`: 使用默认 2 ms 周期调用控制器。

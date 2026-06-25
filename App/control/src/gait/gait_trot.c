@@ -6,6 +6,7 @@
  * 在每条腿的 leg_phase 内：
  *   leg_phase < duty   → 支撑相：足端 x 从 +step/2 线性扫到 -step/2，z 维持 0
  *   leg_phase >= duty  → 摆动相：足端按摆线从 -step/2 抬到 +step/2
+ * yaw 转向通过 step_length_m ± turn_step_m 生成左右侧不同步长。
  *
  * 该层不做 IK。它输出 body-frame 足端位移 foot_x_m / foot_z_m；
  * leg_controller 后续接 IK 转换为关节角。
@@ -67,6 +68,15 @@ void gait_trot_foot_traj(float leg_phase, float duty,
     }
 }
 
+static float trot_leg_side_sign(int leg_idx) {
+    return (leg_idx == GAIT_LEG_FR || leg_idx == GAIT_LEG_RR) ? 1.0f : -1.0f;
+}
+
+static float trot_leg_step_length(const gait_params_t* p, int leg_idx) {
+    if (!p) return 0.0f;
+    return p->step_length_m + trot_leg_side_sign(leg_idx) * p->turn_step_m;
+}
+
 static int trot_update(gait_if_t* self, float dt_s, gait_output_t* out) {
     if (!self || !out) return APP_ERR_INVALID_ARG;
     trot_ctx_t* c = (trot_ctx_t*)self;
@@ -83,16 +93,17 @@ static int trot_update(gait_if_t* self, float dt_s, gait_output_t* out) {
 
     for (int i = 0; i < GAIT_LEG_NUM; i++) {
         float lp = gait_wrap01(c->phase + p->phase_offset[i]);
+        float leg_step = trot_leg_step_length(p, i);
         float dx, dz; uint8_t st;
-        gait_trot_foot_traj(lp, p->duty, p->step_length_m, p->step_height_m, &dx, &dz, &st);
+        gait_trot_foot_traj(lp, p->duty, leg_step, p->step_height_m, &dx, &dz, &st);
         out->leg[i].in_stance  = st;
         out->leg[i].foot_x_m   = dx;
         out->leg[i].foot_z_m   = dz;
-        /* Compatibility for old debug tooling; IK now reads foot_x_m/foot_z_m. */
+        /* 兼容旧调试工具；IK 当前读取 foot_x_m/foot_z_m。 */
         out->leg[i].hip_rad    = dx;
         out->leg[i].knee_rad   = dz;
         /* 轮速：支撑相用 dx 方向（不在本层做完整里程，只给一个粗略前向轮速） */
-        out->leg[i].wheel_rads = (st ? (-p->step_length_m / (p->period_s * p->duty + 1e-9f)) : 0.0f);
+        out->leg[i].wheel_rads = (st ? (-leg_step / (p->period_s * p->duty + 1e-9f)) : 0.0f);
     }
     return APP_OK;
 }

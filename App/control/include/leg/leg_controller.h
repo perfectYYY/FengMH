@@ -28,10 +28,10 @@ typedef struct {
 } leg_controller_t;
 
 typedef struct {
-    uint8_t  enable;       /* 1=wheel 使用支撑相 MIT 位置积分，0=原速度环 */
+    uint8_t  enable;       /* 诊断位：轮子默认使用 MIT，初始化后保持 1 */
     uint8_t  reset;        /* GDB 写 1 重新锁存各轮参考位置 */
-    uint8_t  active_mask;  /* bit0..3: 当前处于 MIT 管理的腿 */
-    uint8_t  hold_swing;   /* 1=摆动相也保持当前轮角，0=摆动相零电流 */
+    uint8_t  active_mask;  /* bit0..3: 当前支撑相积分轮角参考的腿 */
+    uint8_t  hold_swing;   /* 诊断位：摆动相默认 MIT 保持当前轮角 */
     float    kp;           /* 输出轴 N·m/rad */
     float    kd;           /* 输出轴 N·m·s/rad */
     float    tau_limit_nm;
