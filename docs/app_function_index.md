@@ -197,16 +197,21 @@
 
 ### `chassis_planner.c`
 - `clampf_local()`: 限幅 float。
-- `signf_local()`: 返回 float 符号。
 - `chassis_planner_init()`: planner 初始化保留钩子。
 - `planner_limit_wheel()`: 应用配置的轮速上限。
 - `planner_is_low_speed_turn()`: 判断低速 yaw 转向场景。
-- `planner_configured_turn_step_gain()`: 读取 yaw 到步态转向步长差的比例，非法时使用默认值。
-- `planner_configured_turn_step_limit()`: 读取步态转向步长差限幅，非法时使用默认值。
-- `planner_limit_turn_step_for_base()`: 根据共同前进步长限制左右侧合成步长。
-- `planner_turn_step()`: 将 `wz` 转换成 `gait_params.turn_step_m`。
+- `planner_configured_half_track()`: 读取腿/轮接触点到机体中心线的横向距离，非法时使用默认 `0.15 m`。
+- `planner_configured_max_leg_step()`: 读取单腿步长限幅，非法时使用默认值并限制到全局最大步长内。
+- `planner_leg_y_m()`: 返回单腿横向位置；左侧为 `+half_track`，右侧为 `-half_track`。
+- `planner_leg_local_vx()`: 按 `v_leg_x = vx - wz * y_leg` 计算单腿局部前后速度。
 - `planner_apply_turn_gait()`: 覆盖转向场景的 gait 参数。
-- `chassis_planner_update()`: 将命令转换为 gait 参数和共同前进轮速；yaw 转向写入 `turn_step_m`。
+- `planner_safe_duty()`: 清理 duty，避免步长/周期计算除以零。
+- `planner_base_period_for_speed()`: 根据基准步长、速度和 duty 计算 gait 周期。
+- `planner_step_from_vx()`: 将单腿局部前后速度转换成单腿步长，并应用步长限幅。
+- `planner_mean_step()`: 计算四腿步长均值，写入 `step_length_m` 作为诊断摘要。
+- `planner_right_left_turn_step()`: 计算右侧均值和左侧均值的半差，写入 `turn_step_m` 作为诊断摘要。
+- `planner_fill_leg_steps()`: 为四条腿写入 `leg_step_length_m[]`，并刷新摘要字段。
+- `chassis_planner_update()`: 将 `vx/vy/wz` 命令转换为 moving、每腿步长和每轮局部滚动速度；`vy` 只参与 moving 判断。
 
 ## `App/control/gait`
 
@@ -239,7 +244,8 @@
 - `trot_set_param()`: 保存已校验的 trot 参数。
 - `gait_trot_foot_traj()`: 计算支撑/摆动足端轨迹。
 - `trot_leg_side_sign()`: 返回单腿用于 yaw 步态转向的左右侧符号。
-- `trot_leg_step_length()`: 合成单腿实际步长 `step_length_m ± turn_step_m`。
+- `trot_has_per_leg_steps()`: 判断当前参数是否启用了每腿步长；允许某条腿的步长为 0。
+- `trot_leg_step_length()`: 优先读取 `leg_step_length_m[]`；没有每腿步长时回退到 `step_length_m ± turn_step_m`。
 - `trot_update()`: 推进 trot 相位并写入足端目标。
 - `trot_exit()`: trot gait 退出钩子。
 - `trot_name()`: 返回 `"trot"`。

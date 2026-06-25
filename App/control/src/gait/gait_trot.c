@@ -6,7 +6,7 @@
  * 在每条腿的 leg_phase 内：
  *   leg_phase < duty   → 支撑相：足端 x 从 +step/2 线性扫到 -step/2，z 维持 0
  *   leg_phase >= duty  → 摆动相：足端按摆线从 -step/2 抬到 +step/2
- * yaw 转向通过 step_length_m ± turn_step_m 生成左右侧不同步长。
+ * yaw 转向优先使用 planner 写入的每腿步长；未写入时回退到 step_length_m ± turn_step_m。
  *
  * 该层不做 IK。它输出 body-frame 足端位移 foot_x_m / foot_z_m；
  * leg_controller 后续接 IK 转换为关节角。
@@ -72,8 +72,19 @@ static float trot_leg_side_sign(int leg_idx) {
     return (leg_idx == GAIT_LEG_FR || leg_idx == GAIT_LEG_RR) ? 1.0f : -1.0f;
 }
 
+static int trot_has_per_leg_steps(const gait_params_t* p) {
+    if (!p) return 0;
+    for (int i = 0; i < GAIT_LEG_NUM; i++) {
+        if (fabsf(p->leg_step_length_m[i]) > 1e-7f) return 1;
+    }
+    return 0;
+}
+
 static float trot_leg_step_length(const gait_params_t* p, int leg_idx) {
     if (!p) return 0.0f;
+    if (trot_has_per_leg_steps(p)) {
+        return p->leg_step_length_m[leg_idx];
+    }
     return p->step_length_m + trot_leg_side_sign(leg_idx) * p->turn_step_m;
 }
 

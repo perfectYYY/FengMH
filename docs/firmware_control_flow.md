@@ -40,7 +40,7 @@ task_comm 缓存的命令
 5. 判断在线/离线状态。
 6. 选择 stand、trot 或 script gait。
 7. 更新 gait machine。
-8. 在线时只给支撑相腿应用 planner 的共同前进轮速。
+8. 在线时只给支撑相腿应用 planner 的每轮局部滚动速度。
 9. 派发腿部命令。
 10. 在 MCU 构建中刷新电机输出。
 
@@ -55,15 +55,17 @@ task_comm 缓存的命令
 
 - `moving` 标志
 - trot 步态参数
-- 四个轮子的共同前进速度目标
+- 四个轮子的局部滚动速度目标
 
-当前 yaw 转向不再使用左右轮差速。`wz` 会被转换成 `gait_params.turn_step_m`：
+当前 yaw 转向使用 2DOF 轮腿可实现的刚体前后速度分量：
 
-- `step_length_m` 表示共同前后步长。
-- `turn_step_m` 表示左右侧步长差；正 `wz` 时右侧腿步长增大、左侧腿步长减小。
-- 原地/低速转向时 `step_length_m = 0`，`turn_step_m != 0`，轮子共同前进速度为 0。
+- `y_leg = 0.15 m`，表示腿/轮接触点到机体中心线的横向距离。
+- 每条腿的局部前后速度按 `v_leg_x = vx - wz * y_leg` 计算。
+- `gait_params.leg_step_length_m[i]` 保存每条腿实际步长。
+- `step_length_m` 和 `turn_step_m` 只作为诊断摘要：共同步长均值、右左步长差的一半。
+- 轮毂速度也来自同一个 `v_leg_x / wheel_radius`，用于匹配腿端接触速度。这里不是独立的轮子差速转向控制，而是让支撑轮圆周速度和同一条腿的步态位移保持一致。
 
-当前限制：`vy` 会传入 planner，并参与 moving 判断，但还不是完整横向运动控制。
+当前限制：`vy` 会传入 planner，并参与 moving 判断，但 2DOF 腿不能生成真实横向足端轨迹，因此暂不进入运动学控制。
 
 ## 步态阶段
 
@@ -71,10 +73,10 @@ task_comm 缓存的命令
 
 - Stand 输出固定站立目标和零轮速。
 - Trot 输出显式足端目标：`foot_x_m`、`foot_z_m`、`in_stance`。
-- Trot 使用 `step_length_m ± turn_step_m` 生成左右侧足端轨迹，从步态层完成 yaw 转向。
+- Trot 优先使用 `leg_step_length_m[i]` 生成每条腿的足端轨迹；未写入每腿步长时才回退到 `step_length_m ± turn_step_m`。
 - Script gait 通过脚本播放器包装成 gait 接口。
 
-在线移动时，planner 的共同前进轮速只应用到支撑相腿；摆动相腿轮速置零。
+在线移动时，planner 的每轮局部滚动速度只应用到支撑相腿；摆动相腿轮速置零。
 
 ## 腿和电机阶段
 

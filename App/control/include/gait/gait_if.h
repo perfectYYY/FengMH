@@ -48,8 +48,9 @@ typedef struct {
 /* 公共参数（高度/步长/周期/步高/占空比/相位偏移） */
 typedef struct {
     float body_height_m;     /* 站立高度 */
-    float step_length_m;     /* 单步长，纵向 */
-    float turn_step_m;       /* yaw 步态转向步长差：正值右侧腿更向前、左侧腿更向后 */
+    float step_length_m;     /* 诊断/默认纵向步长 */
+    float turn_step_m;       /* 诊断 yaw 步态转向步长差：正值右侧腿更向前、左侧腿更向后 */
+    float leg_step_length_m[GAIT_LEG_NUM]; /* 每条腿实际纵向步长；全 0 时使用 step_length_m/turn_step_m */
     float step_height_m;     /* 抬腿离地高度 */
     float period_s;          /* 步态周期 */
     float duty;              /* 支撑相占空比 [0,1] */
