@@ -1,79 +1,76 @@
-# Firmware Architecture
+# 固件架构
 
-This document defines the ownership boundaries for the maintained firmware
-code. Use it before deciding where new code or refactors belong.
+本文档说明当前固件代码的分层、职责边界和依赖方向。新增代码或做重构前，先用这里判断代码应该放在哪一层。
 
-## Layers
+## 分层结构
 
 ```text
-App/app/          FreeRTOS task entry points and app lifecycle
-App/control/      robot behavior, gait, kinematics, steering, leg dispatch
-App/device/       motor, IMU, and registry drivers
-App/bsp/          MCU bus adapters and host mocks
-App/service/      reusable protocol and control utilities
-App/common/       config, errors, logging, shared basics
+App/app/          FreeRTOS 任务入口和应用生命周期
+App/control/      机器人行为、步态、运动学、转向、腿部派发
+App/device/       电机、IMU、设备注册表等设备驱动
+App/bsp/          MCU 外设适配和 host mock
+App/service/      协议、PID 等可复用工具
+App/common/       配置、错误码、日志和公共基础类型
 ```
 
-## Ownership Rules
+## 各层职责
 
 ### `App/app`
 
-Owns task entry points, protocol-facing caches, and application lifecycle.
-It should stay thin:
+负责任务入口、协议缓存和应用生命周期。这里应保持很薄：
 
-- initialize modules
-- read communication state
-- call control ticks
-- expose compatibility wrappers used by older code
+- 初始化模块
+- 读取通信状态
+- 调用控制周期
+- 保留旧公开 API 的兼容包装
 
-Do not put gait math, IK, motor protocol details, or board-driver logic here.
+不要把步态数学、IK、电机协议细节或板级驱动逻辑放在这一层。
 
 ### `App/control`
 
-Owns robot behavior:
+负责机器人行为：
 
-- online/offline decision policy
-- steering and planner state
-- gait selection and gait updates
-- foot target to joint target conversion
-- leg and wheel command dispatch
+- 在线/离线决策
+- 转向和 planner 状态
+- 步态选择和步态更新
+- 足端目标到关节目标的转换
+- 腿和轮的命令派发
 
-New locomotion behavior belongs here unless it is a device protocol detail.
+新的运动行为优先放在这一层，除非它只是某个具体设备协议的细节。
 
 ### `App/device`
 
-Owns concrete devices and motor vtables:
+负责具体设备和电机 vtable：
 
-- logical motor registry binding
-- GO-8010 RS485/RIS protocol
-- M3508/C620 FDCAN protocol
-- BMI088 device behavior
+- logical motor id 到运行期设备的绑定
+- GO-8010 RS485/RIS 协议
+- M3508/C620 FDCAN 协议
+- BMI088 设备行为
 
-Device code may translate between physical units and protocol units, but it
-should not decide high-level gait policy.
+设备层可以做物理量和协议量之间的转换，但不应该决定高层步态策略。
 
 ### `App/bsp`
 
-Owns MCU peripheral access and host-side mocks:
+负责 MCU 外设访问和 host 侧 mock：
 
 - UART / RS485
 - FDCAN
 - SPI
 - USB CDC
-- time
+- 时间
 
-Code above BSP should call stable BSP APIs rather than HAL APIs directly.
+BSP 以上的代码应调用稳定的 BSP API，不直接依赖 HAL。
 
 ### `App/service`
 
-Owns reusable utilities that are not robot state machines:
+负责不持有机器人行为状态的通用工具：
 
-- protocol frame parsing and dispatch
-- PID utilities
+- 协议帧解析和分发
+- PID 工具
 
-## Direction Of Dependency
+## 依赖方向
 
-Higher layers may depend on lower layers:
+推荐依赖方向如下：
 
 ```text
 app -> control -> device -> bsp
@@ -82,23 +79,21 @@ control -> service
 device -> service/common
 ```
 
-Avoid reverse dependencies. For example, `device/` should not call
-`task_chassis`, and `bsp/` should not know about gait or motor registry policy.
+避免反向依赖。例如 `device/` 不应该调用 `task_chassis`，`bsp/` 不应该知道步态或电机注册表策略。
 
-## Current Runtime Shape
+## 当前运行形态
 
 ```text
-USB command
+USB 命令
   -> task_comm
   -> task_chassis
   -> chassis_control
   -> chassis_planner
-  -> gait_machine + gait implementation
+  -> gait_machine + 具体 gait
   -> leg_ik + leg_controller
   -> motor registry vtable
-  -> GO / M3508 drivers
+  -> GO / M3508 驱动
   -> UART / FDCAN BSP
 ```
 
-For the detailed runtime path, read
-[`firmware_control_flow.md`](firmware_control_flow.md).
+更详细的运行链路见 [`firmware_control_flow.md`](firmware_control_flow.md)。

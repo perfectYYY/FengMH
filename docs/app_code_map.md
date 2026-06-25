@@ -1,132 +1,126 @@
-# App Code Map
+# App 代码地图
 
-This is the file-level map for the maintained App firmware. It tells you where
-to look first. For every function, use [`app_function_index.md`](app_function_index.md).
+本文档按文件说明当前 App 固件的主要职责，用来快速判断“应该先看哪个文件”。逐函数查找见 [`app_function_index.md`](app_function_index.md)。
 
-## App Task Layer
+## App 任务层
 
 ### `App/app/src/app_init.c`
 
-Board bring-up entry. Initializes log, time, buses, motor registry, motors, and
-IMU.
+板级启动入口。初始化日志、时间、总线、电机注册表、电机和 IMU。
 
 ### `App/app/src/app_tasks.c`
 
-Creates application tasks. It initializes communication and chassis control
-before starting FreeRTOS tasks on MCU builds.
+创建应用任务。在 MCU 构建中，先初始化通信和底盘控制，再启动 FreeRTOS 任务。
 
 ### `App/app/src/task_comm.c`
 
-USB CDC protocol ingress and telemetry egress.
+USB CDC 协议输入和遥测输出。
 
-Important responsibilities:
+主要职责：
 
-- parse protocol frames
-- cache the latest chassis command
-- update heartbeat time
-- dispatch gait and MIT debug commands
-- send state and motor telemetry on MCU builds
+- 解析协议帧
+- 缓存最新底盘命令
+- 更新心跳时间
+- 分发步态命令和 MIT 调试命令
+- 在 MCU 构建中发送状态和电机遥测
 
 ### `App/app/src/task_chassis.c`
 
-Thin RTOS wrapper around `chassis_control`.
+`chassis_control` 的 RTOS 包装层。
 
-Important responsibilities:
+主要职责：
 
-- adapt `task_comm` state into `chassis_control_input_t`
-- run one 500 Hz control tick
-- keep old `task_chassis_*` public API calls as wrappers
+- 将 `task_comm` 状态转换成 `chassis_control_input_t`
+- 运行一个 500 Hz 控制周期
+- 保留旧 `task_chassis_*` 公开 API 的转发包装
 
 ### `App/app/src/task_safety.c`
 
-Emergency stop and safety monitor task.
+急停和安全监控任务。
 
-## Control Layer
+## Control 控制层
 
 ### `App/control/src/chassis/chassis_control.c`
 
-Main behavior pipeline. This is where online/offline policy, steering, gait
-selection, gait update, and motor dispatch are staged.
+主行为流水线。在线/离线策略、转向、步态选择、步态更新和电机派发都在这里分阶段执行。
 
-Read this file first when changing behavior.
+改行为时优先读这个文件。
 
 ### `App/control/src/chassis/chassis_planner.c`
 
-Converts velocity command into planner output:
+将速度命令转换成 planner 输出：
 
 - `moving`
-- trot parameters
-- wheel speed targets
+- trot 参数
+- 轮速目标
 
-Current note: `vy` participates in the moving decision but is not a complete
-lateral control path.
+当前注意点：`vy` 参与 moving 判断，但还不是完整横向控制链路。
 
 ### `App/control/src/attitude`
 
-Yaw estimate and yaw steering controller.
+yaw 估计和 yaw 转向控制器。
 
 ### `App/control/src/gait`
 
-Gait implementations and gait transitions:
+步态实现和步态切换：
 
-- `gait_machine.c`: current/target gait and blend transitions
-- `gait_stand.c`: stationary stance
-- `gait_trot.c`: trot phase and foot trajectory
+- `gait_machine.c`：当前/目标步态和过渡混合
+- `gait_stand.c`：静态站立
+- `gait_trot.c`：trot 相位和足端轨迹
 
 ### `App/control/src/kinematics/leg_ik.c`
 
-Two-link leg IK/FK and four-leg mapping.
+二连杆腿部 IK/FK 和四腿映射。
 
 ### `App/control/src/leg/leg_controller.c`
 
-Converts gait output into motor vtable calls:
+将 gait 输出转换成电机 vtable 调用：
 
-- GO hip/knee position commands
-- M3508 wheel velocity commands
-- optional M3508 wheel MIT debug path
+- GO 髋/膝位置命令
+- M3508 轮毂速度命令
+- 可选 M3508 轮子 MIT 调试路径
 
 ### `App/control/src/script`
 
-Script gait player and wrapper. This is a maintained feature, not a dev log:
-scripts can provide keyframed gait outputs through the gait interface.
+脚本步态播放器和 gait 包装。脚本步态是当前维护功能，不是开发日志；脚本可以通过 gait 接口输出关键帧步态。
 
-## Device Layer
+## Device 设备层
 
 ### `App/device/src/motor_registry.c`
 
-Logical motor ID table and runtime motor handle binding.
+logical motor id 表和运行期电机句柄绑定。
 
 ### `App/device/src/motor_go.c`
 
-GO-8010 hip/knee motor driver over RS485/RIS.
+GO-8010 髋/膝电机驱动，使用 RS485/RIS 协议。
 
-Important responsibilities:
+主要职责：
 
-- create and bind GO motor instances
-- convert joint commands to motor-side protocol units
-- latch zero offsets from feedback
-- send command frames by UART bus
+- 创建并绑定 GO 电机实例
+- 将关节侧命令转换成电机协议单位
+- 根据反馈锁存零偏
+- 按 UART 总线发送命令帧
 
 ### `App/device/src/motor_m3508.c`
 
-M3508/C620 wheel driver over FDCAN.
+M3508/C620 轮毂电机驱动，使用 FDCAN。
 
-Important responsibilities:
+主要职责：
 
-- create and bind wheel motor instances
-- decode C620 feedback
-- run velocity, position, torque, current, and MIT modes
-- pack and send DJI current frames
+- 创建并绑定轮毂电机实例
+- 解码 C620 反馈
+- 运行速度、位置、力矩、电流和 MIT 控制模式
+- 打包并发送 DJI 电流帧
 
 ### `App/device/src/imu_bmi088.c`
 
-BMI088 initialization and sensor readout.
+BMI088 初始化和传感器读取。
 
-## BSP Layer
+## BSP 层
 
 ### `App/bsp/src`
 
-Hardware adapters and host mocks:
+硬件适配和 host mock：
 
 - `bsp_fdcan.c`
 - `bsp_uart.c`
@@ -134,20 +128,18 @@ Hardware adapters and host mocks:
 - `bsp_spi.c`
 - `bsp_time.c`
 
-## Service Layer
+## Service 工具层
 
 ### `App/service/src/protocol`
 
-Protocol frame parser and function dispatcher.
+协议帧解析器和功能号分发器。
 
 ### `App/service/src/pid`
 
-Reusable PID implementation.
+可复用 PID 实现。
 
-## Test Layer
+## 测试层
 
 ### `host_tests`
 
-Host-side regression tests for the readable control path. Current coverage
-includes planner behavior, gait output, IK, command parsing, and direct
-`chassis_control_tick()` to stub motor commands.
+host 侧回归测试，覆盖当前可读控制链路。现有覆盖包括 planner 行为、gait 输出、IK、命令解析，以及 `chassis_control_tick()` 到 stub 电机命令的直接链路。

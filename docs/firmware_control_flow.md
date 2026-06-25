@@ -1,109 +1,99 @@
-# Firmware Control Flow
+# 固件控制链路
 
-This document explains the current command-to-motor path. It describes behavior
-as implemented now, not desired future behavior.
+本文档说明当前“上位机命令到电机输出”的实际路径。这里描述的是已经实现的行为，不是未来目标。
 
-## One Tick
+## 一个控制周期
 
-The MCU chassis task runs at 500 Hz. One tick follows this path:
+MCU 底盘任务以 500 Hz 运行。一个周期的路径如下：
 
 ```text
-task_comm cached command
+task_comm 缓存的命令
   -> task_chassis read_chassis_input()
   -> chassis_control_tick()
   -> chassis_planner_update()
   -> gait_machine_update()
   -> leg_controller_apply_dt()
-  -> motor vtable commands
+  -> motor vtable 命令
   -> motor_go_send_all() / motor_m3508_send_all()
 ```
 
-## Input Stage
+## 输入阶段
 
-`task_comm` parses USB CDC protocol frames.
+`task_comm` 解析 USB CDC 协议帧。
 
-- Function `0x10`: chassis command
-- Base payload: `vx`, `vy`, `wz`
-- Extended payload: `target_yaw`, `steer_mode`
+- 功能号 `0x10`：底盘命令
+- 基础 payload：`vx`、`vy`、`wz`
+- 扩展 payload：`target_yaw`、`steer_mode`
 
-`task_comm` only stores the latest command and heartbeat timestamp. It does not
-decide gait behavior.
+`task_comm` 只缓存最新命令和心跳时间，不决定步态行为。
 
-`task_chassis` copies the cached command into `chassis_control_input_t` and
-calls `chassis_control_tick()`.
+`task_chassis` 将缓存命令复制到 `chassis_control_input_t`，然后调用 `chassis_control_tick()`。
 
-## Chassis Stage
+## 底盘控制阶段
 
-`chassis_control_tick()` owns the behavior sequence:
+`chassis_control_tick()` 负责行为流水线：
 
-1. Run the GO pre-calibration window on MCU builds.
-2. Normalize missing input to a zero command.
-3. Update yaw steering and compute effective `wz`.
-4. Run the planner.
-5. Resolve online/offline state.
-6. Select stand, trot, or script gait.
-7. Update the gait machine.
-8. Apply wheel speeds to stance legs when online.
-9. Dispatch leg commands.
-10. Flush staged motor commands on MCU builds.
+1. 在 MCU 构建中运行 GO 预标定窗口。
+2. 输入为空时生成零命令快照。
+3. 更新 yaw 转向，得到实际使用的 `wz`。
+4. 调用 planner。
+5. 判断在线/离线状态。
+6. 选择 stand、trot 或 script gait。
+7. 更新 gait machine。
+8. 在线时只给支撑相腿应用 planner 轮速。
+9. 派发腿部命令。
+10. 在 MCU 构建中刷新电机输出。
 
-Current steering behavior:
+当前转向行为：
 
-- `steer_mode == 0`: use raw `wz`.
-- `steer_mode == 1`: use BMI088 yaw estimate and steering controller to produce
-  effective `wz`.
+- `steer_mode == 0`：直接使用上位机给的 `wz`。
+- `steer_mode == 1`：使用 BMI088 yaw 估计和 steering controller 计算实际 `wz`。
 
-## Planner Stage
+## Planner 阶段
 
-`chassis_planner_update()` converts the command into:
+`chassis_planner_update()` 将速度命令转换为：
 
-- a `moving` flag
-- trot gait parameters
-- four wheel speed targets
+- `moving` 标志
+- trot 步态参数
+- 四个轮子的速度目标
 
-Important current limitation: `vy` is passed into the planner and participates
-in the moving decision, but it is not a complete lateral motion controller.
+当前限制：`vy` 会传入 planner，并参与 moving 判断，但还不是完整横向运动控制。
 
-## Gait Stage
+## 步态阶段
 
-The gait machine owns current gait and blend transitions.
+`gait_machine` 管理当前步态、目标步态和过渡混合。
 
-- Stand outputs fixed stance targets and zero wheel speed.
-- Trot outputs explicit foot targets: `foot_x_m`, `foot_z_m`, `in_stance`.
-- Script gait is available through the script player wrapper.
+- Stand 输出固定站立目标和零轮速。
+- Trot 输出显式足端目标：`foot_x_m`、`foot_z_m`、`in_stance`。
+- Script gait 通过脚本播放器包装成 gait 接口。
 
-During online movement, planner wheel speeds are applied only to stance legs.
-Swing legs receive zero wheel speed.
+在线移动时，planner 轮速只应用到支撑相腿；摆动相腿轮速置零。
 
-## Leg And Motor Stage
+## 腿和电机阶段
 
-`leg_controller_apply_dt()`:
+`leg_controller_apply_dt()` 的流程：
 
-1. Calls `leg_ik_solve_all()`.
-2. Sends GO hip/knee position commands.
-3. Sends M3508 wheel velocity commands.
-4. Optionally uses the M3508 wheel MIT debug path when
-   `g_leg_wheel_mit.enable` is set.
+1. 调用 `leg_ik_solve_all()`。
+2. 给 GO 髋/膝电机发送位置命令。
+3. 给 M3508 轮毂电机发送速度命令。
+4. 当 `g_leg_wheel_mit.enable` 置位时，可走 M3508 轮子 MIT 调试路径。
 
-Default wheel behavior is velocity control, not MIT.
+默认轮子策略是速度控制，不是 MIT。
 
-Motor drivers translate vtable commands into bus frames:
+电机驱动负责把 vtable 命令转换成总线帧：
 
-- GO hip/knee motors use RS485/RIS frames through `motor_go_send_all()`.
-- M3508 wheel motors use FDCAN/C620 current frames through
-  `motor_m3508_send_all()`.
+- GO 髋/膝电机通过 `motor_go_send_all()` 发送 RS485/RIS 帧。
+- M3508 轮毂电机通过 `motor_m3508_send_all()` 发送 FDCAN/C620 电流帧。
 
-## Safety Notes
+## 安全相关
 
-- Offline mode falls back to conservative stand behavior unless manual hold is
-  active.
-- Emergency stop is handled by the safety task and disables motors before the
-  chassis task sends normal outputs.
-- M3508 thermal derating happens inside the M3508 driver.
+- 离线模式默认回到保守站立，除非当前处于手动保持。
+- 急停由 safety task 处理，会在正常底盘输出前禁用电机。
+- M3508 温度降额在 M3508 驱动内部处理。
 
-## Verification
+## 验证命令
 
-Run these checks after control-path changes:
+控制链路改动后执行：
 
 ```sh
 cmake --build build_arm
