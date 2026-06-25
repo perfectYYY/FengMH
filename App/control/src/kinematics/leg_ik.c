@@ -291,16 +291,28 @@ void leg_ik_solve_all(const gait_output_t* foot_disp,
                        gait_output_t* out) {
     if (!foot_disp || !dim || !out) return;
 
-    /* 复制 wheel_rads 和 in_stance (IK 不改变这些字段) */
+    /* 复制 wheel_rads / stance / foot target metadata. */
     memcpy(out, foot_disp, sizeof(*out));
 
     for (int i = 0; i < GAIT_LEG_NUM; i++) {
         const gait_leg_target_t* ft = &foot_disp->leg[i];
         gait_leg_target_t* ot = &out->leg[i];
 
-        /* foot_disp 中 hip_rad 临时携带 body-frame dx，IK 先转成本腿局部 x。 */
-        float dx = ft->hip_rad * s_leg_x_dir[i];
-        float dz = ft->knee_rad;
+        float foot_x = ft->foot_x_m;
+        float foot_z = ft->foot_z_m;
+
+        /*
+         * Compatibility path for legacy scripts that still store foot dx/dz in
+         * hip_rad/knee_rad. Trot and new code should always set foot_*.
+         */
+        if (fabsf(foot_x) < 1e-7f && fabsf(foot_z) < 1e-7f &&
+            (fabsf(ft->hip_rad) > 1e-7f || fabsf(ft->knee_rad) > 1e-7f)) {
+            foot_x = ft->hip_rad;
+            foot_z = ft->knee_rad;
+        }
+
+        float dx = foot_x * s_leg_x_dir[i];
+        float dz = foot_z;
 
         leg_ik_result_t ik;
         int ret = leg_ik_solve(dx, dz, dim, hight, s_leg_type[i], &ik);

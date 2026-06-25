@@ -18,24 +18,13 @@
 #define APP_TASK_CHASSIS_H_
 
 #include <stdint.h>
+#include "chassis_types.h"
 #include "gait_if.h"
 #include "script_if.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
-
-typedef enum {
-    CHASSIS_MODE_AUTO = 0,
-    CHASSIS_MODE_ONLINE,
-    CHASSIS_MODE_STANDALONE,
-} chassis_mode_t;
-
-typedef enum {
-    CHASSIS_GAIT_STAND = 0,
-    CHASSIS_GAIT_TROT = 1,
-    CHASSIS_GAIT_SCRIPT = 2,
-} chassis_gait_active_t;
 
 void  task_chassis_entry(void* arg);
 void  task_chassis_init(void);

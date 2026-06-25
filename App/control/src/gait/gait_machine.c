@@ -14,6 +14,8 @@ static void blend_outputs(const gait_output_t* a, const gait_output_t* b,
     o->phase = b->phase;  /* 主相位以目标步态为准 */
     o->tick_count = b->tick_count;
     for (int i = 0; i < GAIT_LEG_NUM; i++) {
+        o->leg[i].foot_x_m   = lerp(a->leg[i].foot_x_m,   b->leg[i].foot_x_m,   t);
+        o->leg[i].foot_z_m   = lerp(a->leg[i].foot_z_m,   b->leg[i].foot_z_m,   t);
         o->leg[i].hip_rad    = lerp(a->leg[i].hip_rad,    b->leg[i].hip_rad,    t);
         o->leg[i].knee_rad   = lerp(a->leg[i].knee_rad,   b->leg[i].knee_rad,   t);
         o->leg[i].wheel_rads = lerp(a->leg[i].wheel_rads, b->leg[i].wheel_rads, t);

@@ -7,7 +7,7 @@
  *   leg_phase < duty   → 支撑相：足端 x 从 +step/2 线性扫到 -step/2，z 维持 0
  *   leg_phase >= duty  → 摆动相：足端按摆线从 -step/2 抬到 +step/2
  *
- * 该层不做 IK。把 (dx, dz) 写到 leg_target 的 hip/knee 字段供上层调试观察；
+ * 该层不做 IK。它输出 body-frame 足端位移 foot_x_m / foot_z_m；
  * leg_controller 后续接 IK 转换为关节角。
  */
 #include "gait_trot.h"
@@ -86,8 +86,9 @@ static int trot_update(gait_if_t* self, float dt_s, gait_output_t* out) {
         float dx, dz; uint8_t st;
         gait_trot_foot_traj(lp, p->duty, p->step_length_m, p->step_height_m, &dx, &dz, &st);
         out->leg[i].in_stance  = st;
-        /* 临时把 dx/dz 寄到 hip/knee 通道，供调试与 host 测试断言；
-           等 leg_controller 接入后会替换为真正的关节角度 */
+        out->leg[i].foot_x_m   = dx;
+        out->leg[i].foot_z_m   = dz;
+        /* Compatibility for old debug tooling; IK now reads foot_x_m/foot_z_m. */
         out->leg[i].hip_rad    = dx;
         out->leg[i].knee_rad   = dz;
         /* 轮速：支撑相用 dx 方向（不在本层做完整里程，只给一个粗略前向轮速） */

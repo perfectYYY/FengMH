@@ -17,9 +17,25 @@ static const char* TAG = "SCRIPT";
 
 static float lerp(float a, float b, float t) { return a + (b - a) * t; }
 
+static void normalize_legacy_foot_fields(gait_leg_target_t* leg) {
+    if (!leg) return;
+    if (leg->foot_x_m == 0.0f && leg->foot_z_m == 0.0f &&
+        (leg->hip_rad != 0.0f || leg->knee_rad != 0.0f)) {
+        leg->foot_x_m = leg->hip_rad;
+        leg->foot_z_m = leg->knee_rad;
+    }
+}
+
 static void blend_kf(const script_keyframe_t* a, const script_keyframe_t* b,
                      float alpha, gait_output_t* out) {
     for (int i = 0; i < GAIT_LEG_NUM; i++) {
+        gait_leg_target_t leg_a = a->leg[i];
+        gait_leg_target_t leg_b = b->leg[i];
+        normalize_legacy_foot_fields(&leg_a);
+        normalize_legacy_foot_fields(&leg_b);
+
+        out->leg[i].foot_x_m   = lerp(leg_a.foot_x_m,   leg_b.foot_x_m,   alpha);
+        out->leg[i].foot_z_m   = lerp(leg_a.foot_z_m,   leg_b.foot_z_m,   alpha);
         out->leg[i].hip_rad    = lerp(a->leg[i].hip_rad,    b->leg[i].hip_rad,    alpha);
         out->leg[i].knee_rad   = lerp(a->leg[i].knee_rad,   b->leg[i].knee_rad,   alpha);
         out->leg[i].wheel_rads = lerp(a->leg[i].wheel_rads, b->leg[i].wheel_rads, alpha);
@@ -41,11 +57,13 @@ app_err_t script_sample(const script_t* s, float t_s, gait_output_t* out) {
 
     if (t_s <= s->frames[0].t_s) {
         for (int i = 0; i < GAIT_LEG_NUM; i++) out->leg[i] = s->frames[0].leg[i];
+        for (int i = 0; i < GAIT_LEG_NUM; i++) normalize_legacy_foot_fields(&out->leg[i]);
         out->phase = 0.0f;
         return APP_OK;
     }
     if (t_s >= total) {
         for (int i = 0; i < GAIT_LEG_NUM; i++) out->leg[i] = s->frames[s->n_frames - 1].leg[i];
+        for (int i = 0; i < GAIT_LEG_NUM; i++) normalize_legacy_foot_fields(&out->leg[i]);
         out->phase = 1.0f;
         return APP_OK;
     }

@@ -1,10 +1,8 @@
 /*
  * leg_controller.h — 腿控制器：把 gait_output 翻译成"对每条腿的关节/轮电机指令"
  *
- * M2 阶段只做骨架：
- *   - 持有 motor_dev_t* hip / knee / wheel（来自 motor_registry）
- *   - apply(out)：把 gait_leg_target_t 推送给三个电机
- * IK 接入留到 M3 与 kinematics 一起做。
+ * 持有每条腿的 hip / knee / wheel 电机句柄，把 gait_output_t 的足端
+ * 目标先做 IK，再转换成 GO 关节位置指令和 M3508 轮毂指令。
  */
 #ifndef APP_SERVICE_LEG_CONTROLLER_H_
 #define APP_SERVICE_LEG_CONTROLLER_H_

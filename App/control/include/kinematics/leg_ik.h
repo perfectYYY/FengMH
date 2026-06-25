@@ -68,11 +68,11 @@ void leg_fk_solve(float theta1, float theta2,
 /*
  * 批量 IK：对 4 条腿执行 IK
  *
- * 输入 gait_output_t 中 hip_rad/knee_rad 临时携带 (dx, dz) 足端位移，
- * 输出替换为 (theta1, theta2) 关节角度。
+ * 输入 gait_output_t 中 foot_x_m / foot_z_m 是足端位移，
+ * 输出 gait_output_t 中 hip_rad / knee_rad 是关节角度。
  *
  * 参数：
- *   foot_disp - 足端位移 gait_output (hip_rad=dx, knee_rad=dz)
+ *   foot_disp - 足端位移 gait_output
  *   dim       - 腿尺寸参数
  *   hight     - 站立高度 (m)
  *   out       - 输出关节角度 gait_output

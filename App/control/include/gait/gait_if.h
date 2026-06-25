@@ -23,8 +23,17 @@ typedef enum {
     GAIT_LEG_NUM
 } gait_leg_t;
 
-/* 单条腿的步态目标：髋/膝关节（rad）+ 轮速（rad/s） + 触地标志 */
+/*
+ * 单条腿的步态目标。
+ *
+ * foot_x_m / foot_z_m are body-frame foot displacements used by IK. The
+ * legacy hip_rad / knee_rad fields are kept during the readability refactor
+ * because scripts still store old keyframes there; new gait code should write
+ * foot_* and let leg_controller/IK fill hip_rad/knee_rad.
+ */
 typedef struct {
+    float foot_x_m;
+    float foot_z_m;
     float hip_rad;
     float knee_rad;
     float wheel_rads;

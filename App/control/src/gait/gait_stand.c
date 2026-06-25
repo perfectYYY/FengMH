@@ -1,8 +1,8 @@
 /*
  * gait_stand.c — 站立步态实现
  *
- * 不调 IK，只把每条腿目标角度 / 轮速归零（等 leg_controller 后续接 IK 把 height 转角度）。
- * 重要的是 in_stance=1 与 wheel_rads=0；上层即可应用重力补偿与制动。
+ * 不调 IK，只输出足端位移 0、in_stance=1、wheel_rads=0。
+ * leg_controller 会用站立高度把足端目标反解为关节角。
  */
 #include "gait_stand.h"
 #include "log.h"
@@ -35,7 +35,7 @@ static int stand_update(gait_if_t* self, float dt_s, gait_output_t* out) {
     for (int i = 0; i < GAIT_LEG_NUM; i++) {
         out->leg[i].in_stance  = 1u;
         out->leg[i].wheel_rads = 0.0f;
-        /* hip/knee 留 0：M3 阶段 leg_controller 接 IK 后用 body_height_m 反解。 */
+        /* foot/hip/knee 保持 0；leg_controller 统一做 IK。 */
     }
     return APP_OK;
 }

@@ -41,4 +41,5 @@ __pycache__/
 
 # host-pc unit test build dir
 build_host/
+build_host_tests/
 build_arm/
