@@ -37,6 +37,10 @@ changing code.
 - `task_chassis_entry()`: 500 Hz MCU task wrapper with estop guard.
 
 ### `task_comm.c`
+- `mark_valid_rx()`: Updates the latest valid RX timestamp.
+- `cache_chassis_base_command()`: Stores `vx/vy/wz` from the chassis command.
+- `cache_chassis_steering_extension()`: Stores optional target-yaw steering fields.
+- `mark_chassis_command_rx()`: Advances chassis sequence and heartbeat timestamp.
 - `handle_chassis()`: Decodes `0x10` chassis speed command payload.
 - `gait_params_from_payload()`: Converts protocol gait payload to `gait_params_t`.
 - `handle_gait()`: Decodes `0x12` stand/trot/set-params command.
@@ -49,7 +53,12 @@ changing code.
 - `task_comm_dispatch_miss()`: Returns unmatched handler count.
 - `task_comm_last_rx_ms()`: Returns latest valid command timestamp.
 - `task_comm_get_chassis()`: Copies latest chassis command.
+- `build_state_payload()`: Builds `0x80` robot state telemetry payload.
+- `send_proto_payload()`: Frames and sends one protocol payload over USB CDC.
 - `send_state_frame()`: Builds and sends `0x80` robot state telemetry.
+- `build_motor_payload()`: Builds one motor telemetry payload from registry state.
+- `next_motor_tx_index()`: Advances round-robin motor telemetry index.
+- `send_motor_payload_if_present()`: Sends motor telemetry when the handle exists.
 - `send_motor_frame()`: Builds and sends one round-robin `0x81` motor telemetry frame.
 - `task_comm_entry()`: MCU telemetry task loop.
 

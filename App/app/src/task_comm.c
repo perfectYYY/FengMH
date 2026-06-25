@@ -38,6 +38,34 @@ static const uint32_t STATE_TX_INTERVAL_MS  = 100;  /* 10Hz */
 static const uint32_t MOTOR_TX_INTERVAL_MS  = 200;  /* 5Hz, motor states are round-robin */
 #endif
 
+static void mark_valid_rx(void) {
+    s_last_rx_ms = (uint32_t)bsp_time_now_ms();
+}
+
+static void cache_chassis_base_command(const uint8_t* p) {
+    payload_chassis_cmd_t cmd;
+    memcpy(&cmd, p, sizeof(cmd));
+    s_chassis.vx = cmd.vx;
+    s_chassis.vy = cmd.vy;
+    s_chassis.wz = cmd.wz;
+}
+
+static void cache_chassis_steering_extension(const uint8_t* p, uint8_t len) {
+    if (len >= PROTO_CHASSIS_CMD_EXT_LEN) {
+        const uint8_t* ext = p + sizeof(payload_chassis_cmd_t);
+        memcpy(&s_chassis.target_yaw, ext, sizeof(float));
+        s_chassis.steer_mode = ext[sizeof(float)];
+    } else {
+        s_chassis.target_yaw = 0.0f;
+        s_chassis.steer_mode = 0U;  /* OFF: 保持现有行为 */
+    }
+}
+
+static void mark_chassis_command_rx(void) {
+    s_chassis.seq++;
+    mark_valid_rx();
+}
+
 static int handle_chassis(const uint8_t* p, uint8_t len) {
     /*
      * 兼容两种帧长:
@@ -46,23 +74,9 @@ static int handle_chassis(const uint8_t* p, uint8_t len) {
      */
     if (len < sizeof(payload_chassis_cmd_t)) return -1;
 
-    payload_chassis_cmd_t cmd;
-    memcpy(&cmd, p, sizeof(cmd));
-    s_chassis.vx = cmd.vx;
-    s_chassis.vy = cmd.vy;
-    s_chassis.wz = cmd.wz;
-
-    /* 新协议扩展字段 (>= 17 bytes 时有效) */
-    if (len >= PROTO_CHASSIS_CMD_EXT_LEN) {
-        memcpy(&s_chassis.target_yaw, p + sizeof(payload_chassis_cmd_t), sizeof(float));
-        s_chassis.steer_mode = p[16];
-    } else {
-        s_chassis.target_yaw = 0.0f;
-        s_chassis.steer_mode = 0U;  /* OFF: 保持现有行为 */
-    }
-
-    s_chassis.seq++;
-    s_last_rx_ms = (uint32_t)bsp_time_now_ms();
+    cache_chassis_base_command(p);
+    cache_chassis_steering_extension(p, len);
+    mark_chassis_command_rx();
     return 0;
 }
 
@@ -107,7 +121,7 @@ static int handle_gait(const uint8_t* p, uint8_t len) {
     }
 
     if (ret == APP_OK) {
-        s_last_rx_ms = (uint32_t)bsp_time_now_ms();
+        mark_valid_rx();
         return 0;
     }
     return ret;
@@ -126,7 +140,7 @@ static int handle_mit_cmd(const uint8_t* p, uint8_t len) {
                                      cmd.pos_rad, cmd.vel_rads,
                                      cmd.kp, cmd.kd, cmd.tau_ff_nm);
     if (ret == APP_OK) {
-        s_last_rx_ms = (uint32_t)bsp_time_now_ms();
+        mark_valid_rx();
         return 0;
     }
     return ret;
@@ -192,8 +206,7 @@ typedef struct {
 
 #pragma pack(pop)
 
-/* 发送上行帧 */
-static void send_state_frame(void) {
+static payload_state_t build_state_payload(void) {
     payload_state_t p;
     memset(&p, 0, sizeof(p));
     p.mode        = (uint8_t)task_chassis_get_mode();
@@ -203,13 +216,46 @@ static void send_state_frame(void) {
     p.vy_cmd      = s_chassis.vy;
     p.wz_cmd      = s_chassis.wz;
     p.uptime_ms   = (uint32_t)bsp_time_now_ms();
+    return p;
+}
 
+static int send_proto_payload(uint8_t func_id, const void* payload, uint8_t len) {
     uint8_t buf[64];
-    int n = proto_frame_build(PROTO_FUNC_STATE,
-                               (const uint8_t*)&p, (uint8_t)sizeof(p),
-                               buf, sizeof(buf));
+    int n = proto_frame_build(func_id, (const uint8_t*)payload, len, buf, sizeof(buf));
     if (n > 0) {
         bsp_usb_cdc_send(buf, (uint32_t)n);
+    }
+    return n;
+}
+
+/* 发送上行帧 */
+static void send_state_frame(void) {
+    payload_state_t p = build_state_payload();
+    (void)send_proto_payload(PROTO_FUNC_STATE, &p, (uint8_t)sizeof(p));
+}
+
+static int build_motor_payload(uint8_t motor_idx, payload_motor_one_t* out) {
+    if (!out) return 0;
+
+    motor_dev_t* d = motor_get((motor_logical_id_t)motor_idx);
+    if (!d) return 0;
+
+    out->id            = (uint16_t)motor_idx;
+    out->online        = d->state.online;
+    out->type          = (uint8_t)d->state.type;
+    out->angle_rad     = d->state.angle_rad;
+    out->velocity_rads = d->state.velocity_rads;
+    return 1;
+}
+
+static uint8_t next_motor_tx_index(uint8_t motor_idx) {
+    return (uint8_t)((motor_idx + 1U) % (uint8_t)motor_registry_count());
+}
+
+static void send_motor_payload_if_present(uint8_t motor_idx) {
+    payload_motor_one_t p;
+    if (build_motor_payload(motor_idx, &p)) {
+        (void)send_proto_payload(PROTO_FUNC_MOTOR_STATE, &p, (uint8_t)sizeof(p));
     }
 }
 
@@ -217,25 +263,8 @@ static void send_motor_frame(void) {
     /* 每次发送一个电机的状态，循环发送 */
     static uint8_t s_motor_tx_idx = 0;
 
-    motor_dev_t* d = motor_get((motor_logical_id_t)s_motor_tx_idx);
-    if (d) {
-        payload_motor_one_t p;
-        p.id            = (uint16_t)s_motor_tx_idx;
-        p.online        = d->state.online;
-        p.type          = (uint8_t)d->state.type;
-        p.angle_rad     = d->state.angle_rad;
-        p.velocity_rads = d->state.velocity_rads;
-
-        uint8_t buf[64];
-        int n = proto_frame_build(PROTO_FUNC_MOTOR_STATE,
-                                   (const uint8_t*)&p, (uint8_t)sizeof(p),
-                                   buf, sizeof(buf));
-        if (n > 0) {
-            bsp_usb_cdc_send(buf, (uint32_t)n);
-        }
-    }
-
-    s_motor_tx_idx = (s_motor_tx_idx + 1) % (uint8_t)motor_registry_count();
+    send_motor_payload_if_present(s_motor_tx_idx);
+    s_motor_tx_idx = next_motor_tx_index(s_motor_tx_idx);
 }
 
 void task_comm_entry(void* arg) {
