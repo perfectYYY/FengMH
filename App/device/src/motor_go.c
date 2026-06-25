@@ -401,34 +401,43 @@ static const go_bus_map_t s_go_map[GO_MOTOR_COUNT] = {
     { MOTOR_ID_FR_KNEE, BSP_UART_4, 10 },
 };
 
+static void go_init_ctx(go_drv_ctx_t* ctx, const go_bus_map_t* map) {
+    memset(ctx, 0, sizeof(*ctx));
+    ctx->bus_id = (uint8_t)map->uart_bus;
+    ctx->motor_id = map->bus_motor_id;
+    ctx->mode = 1;  /* 零力矩：mode=1, kp/kd/tau=0，上电即可通信 */
+    ctx->cmd_kp = 0.0f;
+    ctx->cmd_kd = 0.0f;
+
+    const motor_cfg_t* cfg = motor_get_cfg(map->logical_id);
+    ctx->zero_offset = cfg ? cfg->zero_offset : 0.0f;
+}
+
+static void go_init_dev(motor_dev_t* dev,
+                        go_drv_ctx_t* ctx,
+                        const go_bus_map_t* map) {
+    memset(dev, 0, sizeof(*dev));
+    dev->ops = &s_go_ops;
+    dev->drv_ctx = ctx;
+    dev->state.id = (uint16_t)map->logical_id;
+    dev->state.type = MOTOR_GO;
+    dev->state.can_bus = (uint8_t)map->uart_bus;
+    dev->state.can_id = map->bus_motor_id;
+}
+
+static void go_init_instance(int index, const go_bus_map_t* map) {
+    go_init_ctx(&s_go_ctxs[index], map);
+    go_init_dev(&s_go_devs[index], &s_go_ctxs[index], map);
+    motor_registry_bind(map->logical_id, &s_go_devs[index]);
+}
+
 app_err_t motor_go_init_all(void) {
     memset(s_go_devs, 0, sizeof(s_go_devs));
     memset(s_go_ctxs, 0, sizeof(s_go_ctxs));
 
     for (int i = 0; i < GO_MOTOR_COUNT; i++) {
         const go_bus_map_t* m = &s_go_map[i];
-
-        /* 初始化驱动上下文 */
-        s_go_ctxs[i].bus_id      = (uint8_t)m->uart_bus;
-        s_go_ctxs[i].motor_id    = m->bus_motor_id;
-        s_go_ctxs[i].mode        = 1;  /* 零力矩：mode=1, kp/kd/tau=0，上电即可通信 */
-        s_go_ctxs[i].cmd_kp      = 0.0f;
-        s_go_ctxs[i].cmd_kd      = 0.0f;
-        {
-            const motor_cfg_t* cfg = motor_get_cfg(m->logical_id);
-            s_go_ctxs[i].zero_offset = cfg ? cfg->zero_offset : 0.0f;
-        }
-
-        /* 初始化 motor_dev_t */
-        s_go_devs[i].ops     = &s_go_ops;
-        s_go_devs[i].drv_ctx = &s_go_ctxs[i];
-        s_go_devs[i].state.id      = (uint16_t)m->logical_id;
-        s_go_devs[i].state.type    = MOTOR_GO;
-        s_go_devs[i].state.can_bus = (uint8_t)m->uart_bus;
-        s_go_devs[i].state.can_id  = m->bus_motor_id;
-
-        /* 绑定到 registry */
-        motor_registry_bind(m->logical_id, &s_go_devs[i]);
+        go_init_instance(i, m);
     }
 
     /* 注册 UART RX 回调 */
@@ -466,33 +475,43 @@ void motor_go_uart_rx_cb(bsp_uart_bus_t bus, const uint8_t* data,
 
 /* ─── 周期性发送 ─── */
 
+static const bsp_uart_bus_t s_go_tx_buses[] = {
+    BSP_UART_2,
+    BSP_UART_3,
+    BSP_UART_4,
+    BSP_UART_7,
+};
+
+static uint32_t go_tx_bus_count(void) {
+    return (uint32_t)(sizeof(s_go_tx_buses) / sizeof(s_go_tx_buses[0]));
+}
+
+static void go_send_one_on_bus(bsp_uart_bus_t bus, int index) {
+    go_ris_send_t frame;
+    go_encode_cmd(&s_go_ctxs[index], &frame);
+
+    bsp_uart_send(bus,
+                  (const uint8_t*)&frame,
+                  sizeof(frame));
+
+    (void)bsp_uart_wait_tx_done(bus, GO_TX_WAIT_TIMEOUT_US);
+}
+
+static void go_send_bus(bsp_uart_bus_t bus) {
+    for (int i = 0; i < GO_MOTOR_COUNT; i++) {
+        if (s_go_ctxs[i].bus_id != (uint8_t)bus) continue;
+        go_send_one_on_bus(bus, i);
+    }
+}
+
 app_err_t motor_go_send_all(void) {
     /* 按总线分组发送:
      * RS485 半双工 + DMA，每发一帧后等 DMA 完成再发同总线下一帧。
      * 17B @ 4Mbps 物理传输约 42.5us；用短超时等待，避免 1ms tick 级
      * delay 把 500Hz 底盘任务拖到几十 Hz。
      */
-    static const bsp_uart_bus_t buses[] = {
-        BSP_UART_2,
-        BSP_UART_3,
-        BSP_UART_4,
-        BSP_UART_7,
-    };
-
-    for (uint32_t b = 0; b < (sizeof(buses) / sizeof(buses[0])); b++) {
-        bsp_uart_bus_t bus = buses[b];
-        for (int i = 0; i < GO_MOTOR_COUNT; i++) {
-            if (s_go_ctxs[i].bus_id != (uint8_t)bus) continue;
-
-            go_ris_send_t frame;
-            go_encode_cmd(&s_go_ctxs[i], &frame);
-
-            bsp_uart_send(bus,
-                          (const uint8_t*)&frame,
-                          sizeof(frame));
-
-            (void)bsp_uart_wait_tx_done(bus, GO_TX_WAIT_TIMEOUT_US);
-        }
+    for (uint32_t b = 0; b < go_tx_bus_count(); b++) {
+        go_send_bus(s_go_tx_buses[b]);
     }
     return APP_OK;
 }

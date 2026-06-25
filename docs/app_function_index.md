@@ -360,8 +360,14 @@ changing code.
 - `go_reset_fault()`: Clears error count and zero-torque mode.
 - `go_feed_rx()`: Feeds decoded RX payload to state.
 - `go_find_index_by_logical_id()`: Finds GO instance by logical motor ID.
+- `go_init_ctx()`: Initializes one GO driver context from the bus map.
+- `go_init_dev()`: Initializes one `motor_dev_t` wrapper for a GO motor.
+- `go_init_instance()`: Initializes and registry-binds one GO instance.
 - `motor_go_init_all()`: Creates GO instances and binds registry.
 - `motor_go_uart_rx_cb()`: Routes UART feedback to matching GO instance.
+- `go_tx_bus_count()`: Returns the number of GO UART TX buses.
+- `go_send_one_on_bus()`: Encodes and sends one GO command frame.
+- `go_send_bus()`: Sends all GO motors assigned to one UART bus.
 - `motor_go_send_all()`: Sends all GO command frames.
 - `motor_go_calibrate_all()`: Calibrates all GO motors with feedback.
 - `motor_go_debug_get_state()`: Copies debug state for one GO motor.
