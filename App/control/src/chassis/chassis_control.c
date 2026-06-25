@@ -327,6 +327,59 @@ static void flush_motor_outputs(void) {
 #endif
 }
 
+static chassis_control_input_t safe_input_or_zero(const chassis_control_input_t* input) {
+    chassis_control_input_t safe_input;
+    if (input) {
+        safe_input = *input;
+    } else {
+        memset(&safe_input, 0, sizeof(safe_input));
+    }
+    return safe_input;
+}
+
+static chassis_cmd_plan_t make_plan_command(const chassis_control_input_t* input,
+                                            float effective_wz) {
+    chassis_cmd_plan_t plan_cmd = {
+        .vx_m_s = input->command.vx_m_s,
+        .vy_m_s = input->command.vy_m_s,
+        .wz_rad_s = effective_wz,
+    };
+    return plan_cmd;
+}
+
+static void update_plan_from_input(const chassis_control_input_t* input,
+                                   float effective_wz) {
+    chassis_cmd_plan_t plan_cmd = make_plan_command(input, effective_wz);
+    (void)chassis_planner_update(&plan_cmd, &s_trot_params, &s_chassis_plan);
+}
+
+static uint8_t update_online_state(const chassis_control_input_t* input,
+                                   uint32_t now_ms) {
+    uint8_t online = (uint8_t)!is_offline(input, now_ms);
+    s_last_online = online;
+    return online;
+}
+
+static void decide_gait_for_link_state(uint8_t online, uint32_t now_ms) {
+    if (!online) {
+        offline_decide(now_ms);
+        return;
+    }
+
+    s_offline_seq_active = 0U;
+    s_offline_seq_done = 0U;
+    online_decide(&s_chassis_plan);
+}
+
+static void apply_gait_output_to_motors(uint8_t online, float dt_s) {
+    gait_output_t gait_output;
+    gait_machine_update(&s_gait_machine, dt_s, &gait_output);
+    if (online) {
+        apply_plan_wheel_speed(&gait_output, &s_chassis_plan);
+    }
+    leg_controller_apply_dt(&s_leg_controller, &gait_output, dt_s);
+}
+
 void chassis_control_init(void) {
     s_stand_gait  = gait_stand_create();
     s_trot_gait   = gait_trot_create();
@@ -379,24 +432,13 @@ void chassis_control_tick(const chassis_control_input_t* input,
         return;
     }
 
-    if (input) {
-        safe_input = *input;
-    } else {
-        memset(&safe_input, 0, sizeof(safe_input));
-    }
+    safe_input = safe_input_or_zero(input);
 
     update_steering(dt_s, &safe_input.command, &effective_wz);
     s_last_effective_wz = effective_wz;
 
-    chassis_cmd_plan_t plan_cmd = {
-        .vx_m_s = safe_input.command.vx_m_s,
-        .vy_m_s = safe_input.command.vy_m_s,
-        .wz_rad_s = effective_wz,
-    };
-    (void)chassis_planner_update(&plan_cmd, &s_trot_params, &s_chassis_plan);
-
-    uint8_t online = (uint8_t)!is_offline(&safe_input, now_ms);
-    s_last_online = online;
+    update_plan_from_input(&safe_input, effective_wz);
+    uint8_t online = update_online_state(&safe_input, now_ms);
 
 #if APP_DEBUG_RL_WHEEL_ONLY
     apply_rl_single_leg_debug(online, &s_chassis_plan, dt_s);
@@ -404,21 +446,8 @@ void chassis_control_tick(const chassis_control_input_t* input,
     return;
 #endif
 
-    if (!online) {
-        offline_decide(now_ms);
-    } else {
-        s_offline_seq_active = 0U;
-        s_offline_seq_done = 0U;
-        online_decide(&s_chassis_plan);
-    }
-
-    gait_output_t gait_output;
-    gait_machine_update(&s_gait_machine, dt_s, &gait_output);
-    if (online) {
-        apply_plan_wheel_speed(&gait_output, &s_chassis_plan);
-    }
-    leg_controller_apply_dt(&s_leg_controller, &gait_output, dt_s);
-
+    decide_gait_for_link_state(online, now_ms);
+    apply_gait_output_to_motors(online, dt_s);
     flush_motor_outputs();
 }
 

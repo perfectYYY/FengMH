@@ -166,6 +166,12 @@ changing code.
 - `offline_decide()`: Selects conservative offline behavior.
 - `go_pre_calibration_ready()`: MCU GO feedback collection window before closed loop.
 - `flush_motor_outputs()`: Sends staged motor commands on MCU builds.
+- `safe_input_or_zero()`: Copies input or creates a zero command snapshot.
+- `make_plan_command()`: Builds planner command from input and effective yaw rate.
+- `update_plan_from_input()`: Runs chassis planner and stores the latest plan.
+- `update_online_state()`: Updates the cached online/offline status.
+- `decide_gait_for_link_state()`: Applies online or offline gait policy.
+- `apply_gait_output_to_motors()`: Updates gait output and dispatches leg commands.
 - `chassis_control_init()`: Initializes gait, leg, planner, and steering state.
 - `chassis_control_tick()`: Runs one full command-to-motor control cycle.
 - `chassis_control_set_mode()`: Sets chassis mode.
