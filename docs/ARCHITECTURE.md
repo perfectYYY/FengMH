@@ -1,47 +1,104 @@
-# FengMH App Architecture
+# Firmware Architecture
 
-This layout follows the same separation used by `cyberdog_locomotion-master`,
-but keeps the embedded firmware surface small:
+This document defines the ownership boundaries for the maintained firmware
+code. Use it before deciding where new code or refactors belong.
+
+## Layers
 
 ```text
 App/app/          FreeRTOS task entry points and app lifecycle
-  include/        task/app public headers
-  src/            task/app implementations
-
-App/control/      locomotion pipeline: gait, kinematics, chassis, attitude
-  include/<mod>/  controller-facing headers
-  src/<mod>/      controller implementations
-
-App/service/      reusable utilities that are not robot-control state
-  include/<mod>/  protocol/PID headers
-  src/<mod>/      protocol/PID implementations
-
-App/device/       device drivers and motor registry
-  include/        device-driver headers
-  src/            device-driver implementations
-
+App/control/      robot behavior, gait, kinematics, steering, leg dispatch
+App/device/       motor, IMU, and registry drivers
 App/bsp/          MCU bus adapters and host mocks
-  include/        BSP headers
-  src/            BSP implementations
-
-App/common/       shared config, error codes, logging, basic types
-  include/        common headers
-  src/            common implementations
+App/service/      reusable protocol and control utilities
+App/common/       config, errors, logging, shared basics
 ```
 
-The intended data flow is:
+## Ownership Rules
+
+### `App/app`
+
+Owns task entry points, protocol-facing caches, and application lifecycle.
+It should stay thin:
+
+- initialize modules
+- read communication state
+- call control ticks
+- expose compatibility wrappers used by older code
+
+Do not put gait math, IK, motor protocol details, or board-driver logic here.
+
+### `App/control`
+
+Owns robot behavior:
+
+- online/offline decision policy
+- steering and planner state
+- gait selection and gait updates
+- foot target to joint target conversion
+- leg and wheel command dispatch
+
+New locomotion behavior belongs here unless it is a device protocol detail.
+
+### `App/device`
+
+Owns concrete devices and motor vtables:
+
+- logical motor registry binding
+- GO-8010 RS485/RIS protocol
+- M3508/C620 FDCAN protocol
+- BMI088 device behavior
+
+Device code may translate between physical units and protocol units, but it
+should not decide high-level gait policy.
+
+### `App/bsp`
+
+Owns MCU peripheral access and host-side mocks:
+
+- UART / RS485
+- FDCAN
+- SPI
+- USB CDC
+- time
+
+Code above BSP should call stable BSP APIs rather than HAL APIs directly.
+
+### `App/service`
+
+Owns reusable utilities that are not robot state machines:
+
+- protocol frame parsing and dispatch
+- PID utilities
+
+## Direction Of Dependency
+
+Higher layers may depend on lower layers:
 
 ```text
-USB CDC frame
-  -> app/src/task_comm.c
-  -> app/src/task_chassis.c
-  -> control/src/chassis planner
-  -> control/src/gait + control/src/kinematics
-  -> control/src/leg controller
-  -> device motors
-  -> bsp buses
+app -> control -> device -> bsp
+app -> service
+control -> service
+device -> service/common
 ```
 
-`app/` should stay thin: create tasks, collect commands, call control steps, and
-push commands to devices. New locomotion math belongs in `control/`; new board
-drivers belong in `device/` or `bsp/`; new wire protocols belong in `service/`.
+Avoid reverse dependencies. For example, `device/` should not call
+`task_chassis`, and `bsp/` should not know about gait or motor registry policy.
+
+## Current Runtime Shape
+
+```text
+USB command
+  -> task_comm
+  -> task_chassis
+  -> chassis_control
+  -> chassis_planner
+  -> gait_machine + gait implementation
+  -> leg_ik + leg_controller
+  -> motor registry vtable
+  -> GO / M3508 drivers
+  -> UART / FDCAN BSP
+```
+
+For the detailed runtime path, read
+[`firmware_control_flow.md`](firmware_control_flow.md).

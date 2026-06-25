@@ -1,8 +1,8 @@
 /*
  * motor_if.h — 统一电机抽象（vtable）
  *
- * 与 SYSTEM_DESIGN.md §4 对齐。所有电机实现（M3508/GO/达妙）必须提供
- * 以下 vtable，并通过 motor_registry 暴露给上层使用。
+ * 所有电机实现（M3508/GO/达妙）通过同一组 vtable 暴露给控制层，
+ * 再由 motor_registry 按 logical id 查找。
  */
 #ifndef APP_DEVICE_MOTOR_IF_H_
 #define APP_DEVICE_MOTOR_IF_H_

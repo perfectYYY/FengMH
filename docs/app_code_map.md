@@ -1,153 +1,153 @@
 # App Code Map
 
-This file is the human-facing map for the firmware App layer. It lists each
-important file, its responsibility, and the functions that matter when changing
-behavior.
+This is the file-level map for the maintained App firmware. It tells you where
+to look first. For every function, use [`app_function_index.md`](app_function_index.md).
 
 ## App Task Layer
 
+### `App/app/src/app_init.c`
+
+Board bring-up entry. Initializes log, time, buses, motor registry, motors, and
+IMU.
+
+### `App/app/src/app_tasks.c`
+
+Creates application tasks. It initializes communication and chassis control
+before starting FreeRTOS tasks on MCU builds.
+
 ### `App/app/src/task_comm.c`
 
-Responsibility: USB CDC protocol ingestion and telemetry output.
+USB CDC protocol ingress and telemetry egress.
 
-Key functions:
-- `task_comm_init()`: installs protocol parser and USB RX callback.
-- `handle_chassis()`: decodes `0x10` speed command into cached chassis command.
-- `handle_gait()`: decodes `0x12` stand/trot/parameter command.
-- `handle_mit_cmd()`: decodes `0x13` single-motor MIT debug command.
-- `task_comm_get_chassis()`: exposes the latest speed command to the chassis task.
-- `task_comm_entry()`: MCU telemetry loop for state and motor reports.
+Important responsibilities:
+
+- parse protocol frames
+- cache the latest chassis command
+- update heartbeat time
+- dispatch gait and MIT debug commands
+- send state and motor telemetry on MCU builds
 
 ### `App/app/src/task_chassis.c`
 
-Responsibility: RTOS wrapper for chassis control.
+Thin RTOS wrapper around `chassis_control`.
 
-Key functions:
-- `read_chassis_input()`: adapts `task_comm` state to `chassis_control_input_t`.
-- `task_chassis_step_for_test()`: single control tick used by host tests and MCU loop.
-- `task_chassis_entry()`: 500 Hz MCU FreeRTOS task.
-- `task_chassis_*`: compatibility wrappers that forward old public API calls to
-  `chassis_control`.
+Important responsibilities:
 
-## Chassis Control Layer
+- adapt `task_comm` state into `chassis_control_input_t`
+- run one 500 Hz control tick
+- keep old `task_chassis_*` public API calls as wrappers
+
+### `App/app/src/task_safety.c`
+
+Emergency stop and safety monitor task.
+
+## Control Layer
 
 ### `App/control/src/chassis/chassis_control.c`
 
-Responsibility: behavior pipeline for the wheeled-leg chassis.
+Main behavior pipeline. This is where online/offline policy, steering, gait
+selection, gait update, and motor dispatch are staged.
 
-Key functions:
-- `chassis_control_init()`: creates gait instances, binds leg motors, initializes
-  steering/planner state.
-- `chassis_control_tick()`: one full control cycle from command input to motor output.
-- `update_steering()`: converts target yaw mode into effective `wz`.
-- `online_decide()`: chooses stand or trot from planner output.
-- `offline_decide()`: conservative offline fallback.
-- `apply_plan_wheel_speed()`: applies wheel speeds only to stance legs.
-- `chassis_control_get_status()`: diagnostics/test snapshot.
+Read this file first when changing behavior.
 
 ### `App/control/src/chassis/chassis_planner.c`
 
-Responsibility: velocity command to gait parameters and wheel speeds.
+Converts velocity command into planner output:
 
-Key functions:
-- `chassis_planner_update()`: computes `moving`, dynamic trot params, and four
-  wheel speeds.
-- `planner_is_low_speed_turn()`: detects low-speed yaw turns.
-- `planner_apply_turn_gait()`: overrides gait parameters for turn-in-place style motion.
+- `moving`
+- trot parameters
+- wheel speed targets
 
-## Gait Layer
+Current note: `vy` participates in the moving decision but is not a complete
+lateral control path.
 
-### `App/control/src/gait/gait_machine.c`
+### `App/control/src/attitude`
 
-Responsibility: current/target gait state and blend transitions.
+Yaw estimate and yaw steering controller.
 
-Key functions:
-- `gait_machine_set()`: hard switch to a gait.
-- `gait_machine_request()`: request switch with optional blend.
-- `gait_machine_update()`: update current gait or blend current/target outputs.
+### `App/control/src/gait`
 
-### `App/control/src/gait/gait_stand.c`
+Gait implementations and gait transitions:
 
-Responsibility: stationary stance target.
-
-Key functions:
-- `stand_update()`: outputs zero foot displacement, stance=true, wheel speed zero.
-
-### `App/control/src/gait/gait_trot.c`
-
-Responsibility: trot phase oscillator and foot trajectory.
-
-Key functions:
-- `gait_trot_foot_traj()`: stance line and swing cycloid trajectory.
-- `trot_update()`: updates phase and writes explicit `foot_x_m` / `foot_z_m` targets.
-
-## Leg And Kinematics
-
-### `App/control/src/leg/leg_controller.c`
-
-Responsibility: convert gait targets into motor vtable commands.
-
-Key functions:
-- `leg_controller_bind_from_registry()`: maps FL/FR/RL/RR hip/knee/wheel handles.
-- `leg_controller_set_output_options()`: enables leg masks and joint/wheel outputs.
-- `try_set_wheel()`: default velocity wheel path or optional debug MIT path.
-- `leg_controller_apply_dt()`: IK plus hip/knee/wheel command dispatch.
+- `gait_machine.c`: current/target gait and blend transitions
+- `gait_stand.c`: stationary stance
+- `gait_trot.c`: trot phase and foot trajectory
 
 ### `App/control/src/kinematics/leg_ik.c`
 
-Responsibility: two-link leg IK/FK and four-leg mapping.
+Two-link leg IK/FK and four-leg mapping.
 
-Key functions:
-- `leg_ik_solve()`: single-leg inverse kinematics.
-- `leg_fk_solve()`: single-leg forward kinematics.
-- `leg_ik_solve_all()`: maps gait foot targets to per-leg joint angles.
+### `App/control/src/leg/leg_controller.c`
+
+Converts gait output into motor vtable calls:
+
+- GO hip/knee position commands
+- M3508 wheel velocity commands
+- optional M3508 wheel MIT debug path
+
+### `App/control/src/script`
+
+Script gait player and wrapper. This is a maintained feature, not a dev log:
+scripts can provide keyframed gait outputs through the gait interface.
 
 ## Device Layer
 
 ### `App/device/src/motor_registry.c`
 
-Responsibility: logical motor IDs to concrete motor device handles.
-
-Key functions:
-- `motor_registry_init()`: clears the registry.
-- `motor_registry_bind()`: binds a logical ID to a `motor_dev_t`.
-- `motor_get()`: returns the motor handle used by control code.
+Logical motor ID table and runtime motor handle binding.
 
 ### `App/device/src/motor_go.c`
 
-Responsibility: GO-8010 RS485/RIS protocol driver for hip/knee joints.
+GO-8010 hip/knee motor driver over RS485/RIS.
 
-Key functions:
-- `motor_go_init_all()`: creates GO instances and binds them to registry.
-- `go_set_position()`: converts joint-side position command to motor-side RIS command.
-- `motor_go_calibrate_all()`: latches boot zero offsets from feedback.
-- `motor_go_send_all()`: sends all GO command frames over four RS485 buses.
+Important responsibilities:
+
+- create and bind GO motor instances
+- convert joint commands to motor-side protocol units
+- latch zero offsets from feedback
+- send command frames by UART bus
 
 ### `App/device/src/motor_m3508.c`
 
-Responsibility: M3508/C620 wheel driver and control loops.
+M3508/C620 wheel driver over FDCAN.
 
-Key functions:
-- `motor_m3508_init_all()`: creates wheel instances and binds them to registry.
-- `m3508_set_velocity()`: default wheel speed command entry.
-- `m3508_set_position()`: position or MIT command entry depending on kp/kd/vel/tau.
-- `motor_m3508_send_all()`: runs selected control loop and sends CAN current frame.
+Important responsibilities:
+
+- create and bind wheel motor instances
+- decode C620 feedback
+- run velocity, position, torque, current, and MIT modes
+- pack and send DJI current frames
+
+### `App/device/src/imu_bmi088.c`
+
+BMI088 initialization and sensor readout.
+
+## BSP Layer
+
+### `App/bsp/src`
+
+Hardware adapters and host mocks:
+
+- `bsp_fdcan.c`
+- `bsp_uart.c`
+- `bsp_usb_cdc.c`
+- `bsp_spi.c`
+- `bsp_time.c`
+
+## Service Layer
+
+### `App/service/src/protocol`
+
+Protocol frame parser and function dispatcher.
+
+### `App/service/src/pid`
+
+Reusable PID implementation.
 
 ## Test Layer
 
-### `host_tests/test_main.c`
+### `host_tests`
 
-Responsibility: host-side regression tests for the readable control path.
-
-Covered tests:
-- planner forward/yaw behavior
-- trot explicit foot target output
-- IK reading `foot_x_m` / `foot_z_m`
-- end-to-end `chassis_control_tick()` to stub motor commands
-
-### `host_tests/stubs.c`
-
-Responsibility: host replacements for hardware drivers and MCU-only functions.
-
-The stubs keep host tests focused on control behavior rather than HAL/FDCAN/UART
-availability.
+Host-side regression tests for the readable control path. Current coverage
+includes planner behavior, gait output, IK, command parsing, and direct
+`chassis_control_tick()` to stub motor commands.
