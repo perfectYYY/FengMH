@@ -289,6 +289,41 @@ static uint32_t wheel_velocity_commands(void) {
            s_stub_ctxs[MOTOR_ID_RR_WHEEL].set_velocity_count;
 }
 
+static void assert_leg_motor_position_path_active(void) {
+    static const motor_logical_id_t ids[] = {
+        MOTOR_ID_FL_HIP, MOTOR_ID_FL_KNEE, MOTOR_ID_FL_WHEEL,
+        MOTOR_ID_FR_HIP, MOTOR_ID_FR_KNEE, MOTOR_ID_FR_WHEEL,
+        MOTOR_ID_RL_HIP, MOTOR_ID_RL_KNEE, MOTOR_ID_RL_WHEEL,
+        MOTOR_ID_RR_HIP, MOTOR_ID_RR_KNEE, MOTOR_ID_RR_WHEEL,
+    };
+
+    for (size_t i = 0; i < sizeof(ids) / sizeof(ids[0]); i++) {
+        const stub_motor_ctx_t* ctx = &s_stub_ctxs[ids[i]];
+        TEST_ASSERT(ctx->set_position_count > 0U);
+        TEST_ASSERT(isfinite(ctx->last_pos));
+        TEST_ASSERT(isfinite(ctx->last_vel));
+        TEST_ASSERT(isfinite(ctx->last_kp));
+        TEST_ASSERT(isfinite(ctx->last_kd));
+    }
+
+    TEST_ASSERT(wheel_velocity_commands() == 0U);
+}
+
+static void assert_wheel_mit_gains_active(void) {
+    static const motor_logical_id_t ids[] = {
+        MOTOR_ID_FL_WHEEL,
+        MOTOR_ID_FR_WHEEL,
+        MOTOR_ID_RL_WHEEL,
+        MOTOR_ID_RR_WHEEL,
+    };
+
+    for (size_t i = 0; i < sizeof(ids) / sizeof(ids[0]); i++) {
+        const stub_motor_ctx_t* ctx = &s_stub_ctxs[ids[i]];
+        TEST_ASSERT(ctx->last_kp > 0.0f);
+        TEST_ASSERT(ctx->last_kd > 0.0f);
+    }
+}
+
 static void test_chassis_control_end_to_end(void) {
     chassis_control_input_t input;
     chassis_control_status_t status;
@@ -317,12 +352,8 @@ static void test_chassis_control_end_to_end(void) {
     TEST_ASSERT(status.wheel_rads[GAIT_LEG_FL] < 0.0f);
     TEST_ASSERT(status.wheel_rads[GAIT_LEG_FR] > 0.0f);
     TEST_ASSERT(total_position_commands() > 0U);
-    TEST_ASSERT(wheel_velocity_commands() == 0U);
-    TEST_ASSERT(s_stub_ctxs[MOTOR_ID_FL_HIP].set_position_count > 0U);
-    TEST_ASSERT(s_stub_ctxs[MOTOR_ID_FL_KNEE].set_position_count > 0U);
-    TEST_ASSERT(s_stub_ctxs[MOTOR_ID_FL_WHEEL].set_position_count > 0U);
-    TEST_ASSERT(s_stub_ctxs[MOTOR_ID_FL_WHEEL].last_kp > 0.0f);
-    TEST_ASSERT(s_stub_ctxs[MOTOR_ID_FL_WHEEL].last_kd > 0.0f);
+    assert_leg_motor_position_path_active();
+    assert_wheel_mit_gains_active();
 }
 
 static void test_usb_protocol_to_chassis_task_end_to_end(void) {
@@ -355,9 +386,8 @@ static void test_usb_protocol_to_chassis_task_end_to_end(void) {
 
     TEST_ASSERT(task_chassis_get_gait_active() == CHASSIS_GAIT_TROT);
     TEST_ASSERT(total_position_commands() > 0U);
-    TEST_ASSERT(wheel_velocity_commands() == 0U);
-    TEST_ASSERT(s_stub_ctxs[MOTOR_ID_FR_WHEEL].set_position_count > 0U);
-    TEST_ASSERT(s_stub_ctxs[MOTOR_ID_FR_WHEEL].last_kp > 0.0f);
+    assert_leg_motor_position_path_active();
+    assert_wheel_mit_gains_active();
 }
 
 int main(void) {
