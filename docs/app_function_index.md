@@ -379,6 +379,22 @@ changing code.
 - `m3508_mit_ramp_update()`: Debug MIT ramp state machine.
 - `motor_m3508_init_all()`: Creates M3508 instances and binds registry.
 - `motor_m3508_fdcan_rx_cb()`: Routes CAN feedback to matching M3508 instance.
+- `m3508_apply_temperature_derate()`: Applies the M3508 thermal half-current derate.
+- `m3508_run_position_control()`: Runs cascaded position-to-speed-to-current control.
+- `m3508_run_torque_control()`: Runs output-torque feed-forward plus current correction.
+- `m3508_run_mit_control()`: Runs wheel MIT impedance control and safety limits.
+- `m3508_run_current_control()`: Applies direct current mode thermal derate.
+- `m3508_velocity_target_to_rpm()`: Converts output shaft velocity target to rotor rpm.
+- `m3508_pid_needs_tuning_update()`: Detects velocity PID gain changes.
+- `m3508_prepare_velocity_target_rpm()`: Selects move or zero-speed hold velocity target.
+- `m3508_run_velocity_control()`: Runs velocity PI, feed-forward, slew, and power limits.
+- `m3508_run_control_mode()`: Dispatches one motor context to the active control mode.
+- `m3508_pack_current_slot()`: Packs one raw current command into the DJI CAN slot.
+- `m3508_log_tx_failure()`: Rate-limited logging for 0x200 frame send failure.
+- `m3508_log_probe_tx_failure()`: Rate-limited logging for 0x1FF probe frame failure.
+- `m3508_send_current_frame()`: Sends the bus 0x200 current frame.
+- `m3508_send_probe_frame()`: Sends the zero-current 0x1FF probe frame.
+- `m3508_run_bus_controls()`: Runs all motors assigned to one FDCAN bus.
 - `motor_m3508_send_all()`: Runs control loops and sends CAN current frames.
 
 ### `motor_registry.c`

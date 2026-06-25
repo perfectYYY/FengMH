@@ -746,6 +746,275 @@ void motor_m3508_fdcan_rx_cb(bsp_fdcan_bus_t bus,
 
 /* ─── 周期性发送 ─── */
 
+static float m3508_apply_temperature_derate(const m3508_drv_ctx_t* ctx,
+                                            float output) {
+    if (ctx->temp_limit_phase == 1) {
+        output *= 0.5f;
+    }
+    return output;
+}
+
+static void m3508_run_position_control(m3508_drv_ctx_t* ctx) {
+    float err = (float)(ctx->target_position - ctx->total_angle);
+    if (fabsf(err) < M3508_POS_DEADBAND) {
+        ctx->cmd_current_raw = 0;
+        ctx->pos_err_sum = 0.0f;
+        return;
+    }
+
+    ctx->pos_err_sum += err;
+    if (ctx->pos_err_sum >  M3508_POS_MAX_SUM) ctx->pos_err_sum =  M3508_POS_MAX_SUM;
+    if (ctx->pos_err_sum < -M3508_POS_MAX_SUM) ctx->pos_err_sum = -M3508_POS_MAX_SUM;
+
+    /* D 项直接用滤波速度反馈，与新版 Core 驱动行为一致。 */
+    float pos_speed = M3508_POS_KP * err
+                    + M3508_POS_KI * ctx->pos_err_sum * M3508_PID_DT_S
+                    - M3508_POS_KD * ctx->filter_speed;
+    if (pos_speed >  M3508_POS_MAX_OUT) pos_speed =  M3508_POS_MAX_OUT;
+    if (pos_speed < -M3508_POS_MAX_OUT) pos_speed = -M3508_POS_MAX_OUT;
+
+    float output = app_pid_update_dt(&ctx->speed_pid, pos_speed,
+                                     ctx->filter_speed, M3508_PID_DT_S);
+    output = m3508_apply_temperature_derate(ctx, output);
+    ctx->cmd_current_raw = m3508_power_limit(output, ctx->filter_speed);
+}
+
+static void m3508_run_torque_control(motor_dev_t* dev,
+                                     m3508_drv_ctx_t* ctx) {
+    /* 前馈：目标力矩 -> 目标电流 raw；PID 做闭环补偿。 */
+    float tgt_curr = m3508_output_torque_to_raw(dev, ctx->target_torque_nm);
+    float err = tgt_curr - (float)ctx->actual_current_raw;
+    ctx->trq_err_sum += err;
+    if (ctx->trq_err_sum >  M3508_TRQ_MAX_SUM) ctx->trq_err_sum =  M3508_TRQ_MAX_SUM;
+    if (ctx->trq_err_sum < -M3508_TRQ_MAX_SUM) ctx->trq_err_sum = -M3508_TRQ_MAX_SUM;
+
+    float output = tgt_curr
+                 + M3508_TRQ_KP * err
+                 + M3508_TRQ_KI * ctx->trq_err_sum * M3508_PID_DT_S;
+    if (output >  M3508_TRQ_MAX_OUT) output =  M3508_TRQ_MAX_OUT;
+    if (output < -M3508_TRQ_MAX_OUT) output = -M3508_TRQ_MAX_OUT;
+
+    output = m3508_apply_temperature_derate(ctx, output);
+    ctx->cmd_current_raw = m3508_power_limit(output, ctx->filter_speed);
+}
+
+static void m3508_run_mit_control(motor_dev_t* dev,
+                                  m3508_drv_ctx_t* ctx) {
+    float pos_err = ctx->mit_pos_des_rad - dev->state.angle_rad;
+    float vel_err = ctx->mit_vel_des_rads - dev->state.velocity_rads;
+    const float pos_err_limit = m3508_mit_limit_pos_err(ctx->mit_pos_err_limit_rad);
+    const float tau_limit = m3508_mit_limit_tau(ctx->mit_tau_limit_nm);
+    pos_err = m3508_clampf(pos_err, -pos_err_limit, pos_err_limit);
+
+    float tau_out = ctx->mit_kp * pos_err
+                  + ctx->mit_kd * vel_err
+                  + ctx->mit_tau_ff_nm;
+    tau_out = m3508_clampf(tau_out, -tau_limit, tau_limit);
+
+    ctx->mit_pos_err_rad = pos_err;
+    ctx->mit_tau_cmd_nm = tau_out;
+
+    float output = m3508_output_torque_to_raw(dev, tau_out);
+    output = m3508_apply_temperature_derate(ctx, output);
+    ctx->cmd_current_raw = m3508_power_limit(output, ctx->filter_speed);
+}
+
+static void m3508_run_current_control(m3508_drv_ctx_t* ctx) {
+    /* cmd_current_raw 已由 set_current 直接写入，仅做温度限功率。 */
+    if (ctx->temp_limit_phase == 1) {
+        ctx->cmd_current_raw = (int16_t)((float)ctx->cmd_current_raw * 0.5f);
+    }
+}
+
+static float m3508_velocity_target_to_rpm(const m3508_drv_ctx_t* ctx) {
+    return ctx->target_vel_rads * M3508_REDUCTION_RATIO
+         * 60.0f / (2.0f * 3.14159265f);
+}
+
+static uint8_t m3508_pid_needs_tuning_update(const app_pid_t* pid,
+                                             float kp,
+                                             float ki) {
+    return (fabsf(pid->Kp - kp) > 1e-6f ||
+            fabsf(pid->Ki - ki) > 1e-6f) ? 1U : 0U;
+}
+
+static float m3508_prepare_velocity_target_rpm(m3508_drv_ctx_t* ctx,
+                                               uint8_t* clear_integral,
+                                               float* i_out_limit) {
+    float target_rpm = m3508_velocity_target_to_rpm(ctx);
+    uint8_t reset_pid = 0U;
+    *clear_integral = 0U;
+    *i_out_limit = M3508_PID_MOVE_I_OUT_LIMIT;
+
+    if (fabsf(target_rpm) < M3508_PID_TARGET_ZERO_RPM) {
+        *i_out_limit = M3508_PID_HOLD_I_OUT_LIMIT;
+        if (m3508_pid_needs_tuning_update(&ctx->speed_pid,
+                                          M3508_PID_HOLD_KP,
+                                          M3508_PID_HOLD_KI)) {
+            reset_pid = 1U;
+        }
+        m3508_speed_pid_set_tunings(ctx,
+                                    M3508_PID_HOLD_KP,
+                                    M3508_PID_HOLD_KI,
+                                    *i_out_limit,
+                                    reset_pid);
+        target_rpm = m3508_velocity_hold_target_rpm(ctx);
+        if (fabsf(target_rpm) < M3508_PID_ERR_DEADBAND_RPM) {
+            *clear_integral = 1U;
+        }
+        return target_rpm;
+    }
+
+    if (ctx->velocity_hold_active) {
+        ctx->velocity_hold_active = 0U;
+        reset_pid = 1U;
+    }
+    if (m3508_pid_needs_tuning_update(&ctx->speed_pid,
+                                      M3508_PID_MOVE_KP,
+                                      M3508_PID_MOVE_KI)) {
+        reset_pid = 1U;
+    }
+    m3508_speed_pid_set_tunings(ctx,
+                                M3508_PID_MOVE_KP,
+                                M3508_PID_MOVE_KI,
+                                *i_out_limit,
+                                reset_pid);
+    return target_rpm;
+}
+
+static void m3508_run_velocity_control(m3508_drv_ctx_t* ctx) {
+    uint8_t clear_integral = 0U;
+    float i_out_limit = M3508_PID_MOVE_I_OUT_LIMIT;
+    float target_rpm = m3508_prepare_velocity_target_rpm(ctx,
+                                                         &clear_integral,
+                                                         &i_out_limit);
+
+    float output = m3508_speed_pid_update(ctx, target_rpm, ctx->filter_speed,
+                                          clear_integral, i_out_limit);
+    output = m3508_apply_static_ff(output, target_rpm, target_rpm - ctx->filter_speed);
+    output = m3508_apply_temperature_derate(ctx, output);
+    output = m3508_slew_current(output, (float)ctx->cmd_current_raw);
+    ctx->cmd_current_raw = m3508_power_limit(output, ctx->filter_speed);
+}
+
+static void m3508_run_control_mode(motor_dev_t* dev,
+                                   m3508_drv_ctx_t* ctx) {
+    if (!ctx->online || !dev->state.online) {
+        ctx->cmd_current_raw = 0;
+        return;
+    }
+
+    switch (ctx->ctrl_mode) {
+    case M3508_MODE_POSITION:
+        m3508_run_position_control(ctx);
+        break;
+
+    case M3508_MODE_TORQUE:
+        m3508_run_torque_control(dev, ctx);
+        break;
+
+    case M3508_MODE_MIT:
+        m3508_run_mit_control(dev, ctx);
+        break;
+
+    case M3508_MODE_CURRENT:
+        m3508_run_current_control(ctx);
+        break;
+
+    case M3508_MODE_VELOCITY:
+    default:
+        m3508_run_velocity_control(ctx);
+        break;
+    }
+}
+
+static void m3508_pack_current_slot(uint8_t tx_data[8],
+                                    const m3508_drv_ctx_t* ctx) {
+    uint8_t slot = ctx->dji_id - 1U;
+    if (slot < 4U) {
+        int16_t iq = ctx->cmd_current_raw;
+        tx_data[slot * 2U] = (uint8_t)(iq >> 8);
+        tx_data[slot * 2U + 1U] = (uint8_t)(iq);
+    }
+}
+
+static void m3508_log_tx_failure(bsp_fdcan_bus_t bus,
+                                 app_err_t ret,
+                                 const uint8_t tx_data[8]) {
+    uint32_t now = (uint32_t)bsp_time_now_ms();
+    if ((now - s_m3508_last_tx_warn_ms) < M3508_TX_WARN_INTERVAL_MS) {
+        return;
+    }
+
+    s_m3508_last_tx_warn_ms = now;
+    LOGW("M3508 tx bus%u failed ret=%d cnt=%lu iq=[%d,%d,%d,%d]",
+         (unsigned)bus,
+         (int)ret,
+         (unsigned long)s_m3508_tx_err_cnt,
+         (int16_t)((tx_data[0] << 8) | tx_data[1]),
+         (int16_t)((tx_data[2] << 8) | tx_data[3]),
+         (int16_t)((tx_data[4] << 8) | tx_data[5]),
+         (int16_t)((tx_data[6] << 8) | tx_data[7]));
+}
+
+static void m3508_log_probe_tx_failure(bsp_fdcan_bus_t bus,
+                                       app_err_t ret) {
+    uint32_t now = (uint32_t)bsp_time_now_ms();
+    if ((now - s_m3508_last_tx_warn_ms) < M3508_TX_WARN_INTERVAL_MS) {
+        return;
+    }
+
+    s_m3508_last_tx_warn_ms = now;
+    LOGW("M3508 probe tx bus%u failed ret=%d cnt=%lu",
+         (unsigned)bus,
+         (int)ret,
+         (unsigned long)s_m3508_tx_err_cnt);
+}
+
+static app_err_t m3508_send_current_frame(bsp_fdcan_bus_t bus,
+                                          const uint8_t tx_data[8]) {
+    bsp_fdcan_frame_t frame;
+    frame.can_id = M3508_TX_ID;
+    frame.dlc = 8;
+    memcpy(frame.data, tx_data, 8);
+    frame.rx_tick = 0;
+
+    app_err_t ret = bsp_fdcan_send(bus, &frame);
+    if (ret != APP_OK) {
+        s_m3508_tx_err_cnt++;
+        m3508_log_tx_failure(bus, ret, tx_data);
+    }
+    return ret;
+}
+
+static app_err_t m3508_send_probe_frame(bsp_fdcan_bus_t bus,
+                                        const uint8_t probe_data[8]) {
+    bsp_fdcan_frame_t frame;
+    frame.can_id = M3508_TX_ID_HIGH;
+    frame.dlc = 8;
+    memcpy(frame.data, probe_data, 8);
+    frame.rx_tick = 0;
+
+    app_err_t ret = bsp_fdcan_send(bus, &frame);
+    if (ret != APP_OK) {
+        s_m3508_tx_err_cnt++;
+        m3508_log_probe_tx_failure(bus, ret);
+    }
+    return ret;
+}
+
+static void m3508_run_bus_controls(bsp_fdcan_bus_t bus,
+                                   uint8_t tx_data[8]) {
+    for (int i = 0; i < M3508_MOTOR_COUNT; i++) {
+        if (s_m3508_ctxs[i].bus_id != (uint8_t)bus) continue;
+
+        motor_dev_t* dev = &s_m3508_devs[i];
+        m3508_drv_ctx_t* ctx = &s_m3508_ctxs[i];
+        m3508_run_control_mode(dev, ctx);
+        m3508_pack_current_slot(tx_data, ctx);
+    }
+}
+
 /*
  * 每条总线构造一个 0x200 控制帧 (8B)。
  * 每个电机的电流 raw 占 2 字节，按 DJI ID 排列（每条总线 DJI_ID=1→slot0, 2→slot1）。
@@ -763,184 +1032,19 @@ app_err_t motor_m3508_send_all(void) {
         memset(tx_data, 0, 8);
         memset(probe_data, 0, 8);
 
-        for (int i = 0; i < M3508_MOTOR_COUNT; i++) {
-            if (s_m3508_ctxs[i].bus_id != (uint8_t)bus) continue;
+        m3508_run_bus_controls((bsp_fdcan_bus_t)bus, tx_data);
 
-            /* 按控制模式运行 PID */
-            motor_dev_t* dev = &s_m3508_devs[i];
-            m3508_drv_ctx_t* ctx = &s_m3508_ctxs[i];
-            if (ctx->online && dev->state.online) {
-                float output = 0.0f;
-                switch (ctx->ctrl_mode) {
-
-                case M3508_MODE_POSITION: {
-                    float err = (float)(ctx->target_position - ctx->total_angle);
-                    if (fabsf(err) < M3508_POS_DEADBAND) {
-                        ctx->cmd_current_raw = 0;
-                        ctx->pos_err_sum     = 0.0f;
-                        break;
-                    }
-                    ctx->pos_err_sum += err;
-                    if (ctx->pos_err_sum >  M3508_POS_MAX_SUM) ctx->pos_err_sum =  M3508_POS_MAX_SUM;
-                    if (ctx->pos_err_sum < -M3508_POS_MAX_SUM) ctx->pos_err_sum = -M3508_POS_MAX_SUM;
-                    /* D 项直接用滤波速度反馈，与新版 Core 驱动行为一致 */
-                    float pos_speed = M3508_POS_KP * err
-                                    + M3508_POS_KI * ctx->pos_err_sum * M3508_PID_DT_S
-                                    - M3508_POS_KD * ctx->filter_speed;
-                    if (pos_speed >  M3508_POS_MAX_OUT) pos_speed =  M3508_POS_MAX_OUT;
-                    if (pos_speed < -M3508_POS_MAX_OUT) pos_speed = -M3508_POS_MAX_OUT;
-                    output = app_pid_update_dt(&ctx->speed_pid, pos_speed,
-                                               ctx->filter_speed, M3508_PID_DT_S);
-                    if (ctx->temp_limit_phase == 1) output *= 0.5f;
-                    ctx->cmd_current_raw = m3508_power_limit(output, ctx->filter_speed);
-                    break;
-                }
-
-                case M3508_MODE_TORQUE: {
-                    /* 前馈：目标力矩 → 目标电流 raw；PID 做闭环补偿 */
-                    float tgt_curr   = m3508_output_torque_to_raw(dev, ctx->target_torque_nm);
-                    float err        = tgt_curr - (float)ctx->actual_current_raw;
-                    ctx->trq_err_sum += err;
-                    if (ctx->trq_err_sum >  M3508_TRQ_MAX_SUM) ctx->trq_err_sum =  M3508_TRQ_MAX_SUM;
-                    if (ctx->trq_err_sum < -M3508_TRQ_MAX_SUM) ctx->trq_err_sum = -M3508_TRQ_MAX_SUM;
-                    output = tgt_curr
-                           + M3508_TRQ_KP * err
-                           + M3508_TRQ_KI * ctx->trq_err_sum * M3508_PID_DT_S;
-                    if (output >  M3508_TRQ_MAX_OUT) output =  M3508_TRQ_MAX_OUT;
-                    if (output < -M3508_TRQ_MAX_OUT) output = -M3508_TRQ_MAX_OUT;
-                    if (ctx->temp_limit_phase == 1) output *= 0.5f;
-                    ctx->cmd_current_raw = m3508_power_limit(output, ctx->filter_speed);
-                    break;
-                }
-
-                case M3508_MODE_MIT: {
-                    float pos_err = ctx->mit_pos_des_rad - dev->state.angle_rad;
-                    float vel_err = ctx->mit_vel_des_rads - dev->state.velocity_rads;
-                    const float pos_err_limit = m3508_mit_limit_pos_err(ctx->mit_pos_err_limit_rad);
-                    const float tau_limit = m3508_mit_limit_tau(ctx->mit_tau_limit_nm);
-                    pos_err = m3508_clampf(pos_err, -pos_err_limit, pos_err_limit);
-                    float tau_out = ctx->mit_kp * pos_err
-                                  + ctx->mit_kd * vel_err
-                                  + ctx->mit_tau_ff_nm;
-                    tau_out = m3508_clampf(tau_out, -tau_limit, tau_limit);
-                    ctx->mit_pos_err_rad = pos_err;
-                    ctx->mit_tau_cmd_nm = tau_out;
-                    output = m3508_output_torque_to_raw(dev, tau_out);
-                    if (ctx->temp_limit_phase == 1) output *= 0.5f;
-                    ctx->cmd_current_raw = m3508_power_limit(output, ctx->filter_speed);
-                    break;
-                }
-
-                case M3508_MODE_CURRENT:
-                    /* cmd_current_raw 已由 set_current 直接写入，仅做温度限功率 */
-                    if (ctx->temp_limit_phase == 1) {
-                        ctx->cmd_current_raw = (int16_t)((float)ctx->cmd_current_raw * 0.5f);
-                    }
-                    break;
-
-                case M3508_MODE_VELOCITY:
-                default: {
-                    float target_rpm = ctx->target_vel_rads * M3508_REDUCTION_RATIO
-                                     * 60.0f / (2.0f * 3.14159265f);
-                    uint8_t clear_integral = 0U;
-                    uint8_t reset_pid = 0U;
-                    float i_out_limit = M3508_PID_MOVE_I_OUT_LIMIT;
-                    if (fabsf(target_rpm) < M3508_PID_TARGET_ZERO_RPM) {
-                        i_out_limit = M3508_PID_HOLD_I_OUT_LIMIT;
-                        if (fabsf(ctx->speed_pid.Kp - M3508_PID_HOLD_KP) > 1e-6f ||
-                            fabsf(ctx->speed_pid.Ki - M3508_PID_HOLD_KI) > 1e-6f) {
-                            reset_pid = 1U;
-                        }
-                        m3508_speed_pid_set_tunings(ctx,
-                                                    M3508_PID_HOLD_KP,
-                                                    M3508_PID_HOLD_KI,
-                                                    i_out_limit,
-                                                    reset_pid);
-                        target_rpm = m3508_velocity_hold_target_rpm(ctx);
-                        if (fabsf(target_rpm) < M3508_PID_ERR_DEADBAND_RPM) {
-                            clear_integral = 1U;
-                        }
-                    } else {
-                        if (ctx->velocity_hold_active) {
-                            ctx->velocity_hold_active = 0U;
-                            reset_pid = 1U;
-                        }
-                        if (fabsf(ctx->speed_pid.Kp - M3508_PID_MOVE_KP) > 1e-6f ||
-                            fabsf(ctx->speed_pid.Ki - M3508_PID_MOVE_KI) > 1e-6f) {
-                            reset_pid = 1U;
-                        }
-                        m3508_speed_pid_set_tunings(ctx,
-                                                    M3508_PID_MOVE_KP,
-                                                    M3508_PID_MOVE_KI,
-                                                    i_out_limit,
-                                                    reset_pid);
-                    }
-                    output = m3508_speed_pid_update(ctx, target_rpm, ctx->filter_speed,
-                                                    clear_integral, i_out_limit);
-                    output = m3508_apply_static_ff(output, target_rpm, target_rpm - ctx->filter_speed);
-                    if (ctx->temp_limit_phase == 1) output *= 0.5f;
-                    output = m3508_slew_current(output, (float)ctx->cmd_current_raw);
-                    ctx->cmd_current_raw = m3508_power_limit(output, ctx->filter_speed);
-                    break;
-                }
-                }
-            } else {
-                ctx->cmd_current_raw = 0;
-            }
-
-            /* 将电流指令填入 0x200 帧 */
-            uint8_t slot = ctx->dji_id - 1;  /* DJI ID 1→slot0, 2→slot1 */
-            if (slot < 4) {
-                int16_t iq = ctx->cmd_current_raw;
-                tx_data[slot * 2]     = (uint8_t)(iq >> 8);
-                tx_data[slot * 2 + 1] = (uint8_t)(iq);
-            }
-        }
-
-        /* 发送 0x200 控制帧 */
-        bsp_fdcan_frame_t frame;
-        frame.can_id = M3508_TX_ID;
-        frame.dlc    = 8;
-        memcpy(frame.data, tx_data, 8);
-        frame.rx_tick = 0;
-
-        app_err_t ret = bsp_fdcan_send((bsp_fdcan_bus_t)bus, &frame);
+        app_err_t ret = m3508_send_current_frame((bsp_fdcan_bus_t)bus, tx_data);
         if (ret != APP_OK) {
             ret_all = ret;
-            s_m3508_tx_err_cnt++;
-
-            uint32_t now = (uint32_t)bsp_time_now_ms();
-            if ((now - s_m3508_last_tx_warn_ms) >= M3508_TX_WARN_INTERVAL_MS) {
-                s_m3508_last_tx_warn_ms = now;
-                LOGW("M3508 tx bus%u failed ret=%d cnt=%lu iq=[%d,%d,%d,%d]",
-                     (unsigned)bus,
-                     (int)ret,
-                     (unsigned long)s_m3508_tx_err_cnt,
-                     (int16_t)((tx_data[0] << 8) | tx_data[1]),
-                     (int16_t)((tx_data[2] << 8) | tx_data[3]),
-                     (int16_t)((tx_data[4] << 8) | tx_data[5]),
-                     (int16_t)((tx_data[6] << 8) | tx_data[7]));
-            }
         }
 
         /* DJI ID 5~8 使用 0x1FF 控制帧。这里周期性发零电流探测帧，
          * 这样即使电调 ID 不在当前映射表内，也能触发/维持反馈并被
          * s_m3508_probe_seen 记录出来。 */
-        frame.can_id = M3508_TX_ID_HIGH;
-        memcpy(frame.data, probe_data, 8);
-        ret = bsp_fdcan_send((bsp_fdcan_bus_t)bus, &frame);
+        ret = m3508_send_probe_frame((bsp_fdcan_bus_t)bus, probe_data);
         if (ret != APP_OK) {
             ret_all = ret;
-            s_m3508_tx_err_cnt++;
-
-            uint32_t now = (uint32_t)bsp_time_now_ms();
-            if ((now - s_m3508_last_tx_warn_ms) >= M3508_TX_WARN_INTERVAL_MS) {
-                s_m3508_last_tx_warn_ms = now;
-                LOGW("M3508 probe tx bus%u failed ret=%d cnt=%lu",
-                     (unsigned)bus,
-                     (int)ret,
-                     (unsigned long)s_m3508_tx_err_cnt);
-            }
         }
     }
     m3508_trace_record();
