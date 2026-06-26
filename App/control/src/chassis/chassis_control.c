@@ -18,6 +18,7 @@
 #include "gait_script.h"
 #include "gait_stand.h"
 #include "gait_trot.h"
+#include "gait_walk.h"
 #include "imu_bmi088.h"
 #include "leg_controller.h"
 #include "log.h"
@@ -33,6 +34,7 @@ static const char* TAG = "CHASSIS";
 typedef enum {
     ACTIVE_STAND = 0,
     ACTIVE_TROT,
+    ACTIVE_WALK,
     ACTIVE_SCRIPT,
 } active_gait_t;
 
@@ -40,12 +42,14 @@ static gait_machine_t   s_gait_machine;
 static leg_controller_t s_leg_controller;
 static gait_if_t*       s_stand_gait;
 static gait_if_t*       s_trot_gait;
+static gait_if_t*       s_walk_gait;
 static gait_if_t*       s_script_gait;
 
 static chassis_mode_t s_mode = CHASSIS_MODE_AUTO;
 static active_gait_t  s_active = ACTIVE_STAND;
 static uint32_t       s_online_timeout_ms = 500U;
 static gait_params_t  s_trot_params;
+static gait_params_t  s_walk_params;
 static uint8_t        s_manual_gait_hold = 0U;
 static float          s_last_effective_wz = 0.0f;
 
@@ -82,8 +86,8 @@ static void apply_controller_height(const gait_params_t* params) {
     leg_controller_set_stand_height(controller_height_from_body(params->body_height_m));
 }
 
-/* Validate host-provided trot parameters before they enter the gait machine. */
-static int validate_trot_params(const gait_params_t* params) {
+/* Validate host-provided gait parameters before they enter the gait machine. */
+static int validate_gait_params(const gait_params_t* params) {
     if (!params) return 0;
     if (!isfinite(params->body_height_m) || fabsf(params->body_height_m) < 0.05f ||
         fabsf(params->body_height_m) > 0.40f) {
@@ -146,20 +150,20 @@ static int is_offline(const chassis_control_input_t* input, uint32_t now_ms) {
     return (now_ms - input->last_rx_ms) > s_online_timeout_ms;
 }
 
-/* Online policy: moving plan -> trot, still plan -> stand. */
+/* Online policy: moving plan -> walk, still plan -> stand. */
 static void online_decide(const chassis_plan_t* plan) {
     if (!plan) return;
 
     if (plan->moving) {
-        if (s_active != ACTIVE_TROT) {
+        if (s_active != ACTIVE_WALK) {
             apply_controller_height(&plan->gait_params);
-            if (request_gait(s_trot_gait, &plan->gait_params, 0.3f) == APP_OK) {
-                s_active = ACTIVE_TROT;
+            if (request_gait(s_walk_gait, &plan->gait_params, 0.3f) == APP_OK) {
+                s_active = ACTIVE_WALK;
                 s_manual_gait_hold = 0U;
             }
-        } else if (s_trot_gait && s_trot_gait->ops && s_trot_gait->ops->set_param) {
+        } else if (s_walk_gait && s_walk_gait->ops && s_walk_gait->ops->set_param) {
             apply_controller_height(&plan->gait_params);
-            (void)s_trot_gait->ops->set_param(s_trot_gait, &plan->gait_params);
+            (void)s_walk_gait->ops->set_param(s_walk_gait, &plan->gait_params);
         }
         return;
     }
@@ -229,7 +233,8 @@ static void update_steering(float dt_s,
 static void offline_decide(uint32_t now_ms) {
 #if !APP_OFFLINE_AUTO_MARCH
     (void)now_ms;
-    if (s_manual_gait_hold && (s_active == ACTIVE_STAND || s_active == ACTIVE_TROT)) {
+    if (s_manual_gait_hold &&
+        (s_active == ACTIVE_STAND || s_active == ACTIVE_TROT || s_active == ACTIVE_WALK)) {
         return;
     }
     if (!s_offline_seq_active) {
@@ -246,7 +251,8 @@ static void offline_decide(uint32_t now_ms) {
     }
     return;
 #else
-    if (s_manual_gait_hold && (s_active == ACTIVE_STAND || s_active == ACTIVE_TROT)) {
+    if (s_manual_gait_hold &&
+        (s_active == ACTIVE_STAND || s_active == ACTIVE_TROT || s_active == ACTIVE_WALK)) {
         return;
     }
 
@@ -361,7 +367,7 @@ static chassis_cmd_plan_t make_plan_command(const chassis_control_input_t* input
 static void update_plan_from_input(const chassis_control_input_t* input,
                                    float effective_wz) {
     chassis_cmd_plan_t plan_cmd = make_plan_command(input, effective_wz);
-    (void)chassis_planner_update(&plan_cmd, &s_trot_params, &s_chassis_plan);
+    (void)chassis_planner_update(&plan_cmd, &s_walk_params, &s_chassis_plan);
 }
 
 static uint8_t update_online_state(const chassis_control_input_t* input,
@@ -394,19 +400,21 @@ static void apply_gait_output_to_motors(uint8_t online, float dt_s) {
 void chassis_control_init(void) {
     s_stand_gait  = gait_stand_create();
     s_trot_gait   = gait_trot_create();
+    s_walk_gait   = gait_walk_create();
     s_script_gait = gait_script_create();
 
     gait_machine_init(&s_gait_machine);
     gait_machine_set(&s_gait_machine, s_stand_gait, &GAIT_PARAMS_STAND_DEFAULT);
 
     s_trot_params = GAIT_PARAMS_TROT_DEFAULT;
+    s_walk_params = GAIT_PARAMS_WALK_DEFAULT;
 
     leg_controller_init(&s_leg_controller);
     leg_controller_bind_from_registry(&s_leg_controller);
 #if APP_DEBUG_RL_WHEEL_ONLY
     leg_controller_set_output_options((uint8_t)(1U << GAIT_LEG_RL), 1U, 1U, 1.5f, 0.1f);
     apply_controller_height(&GAIT_PARAMS_STAND_DEFAULT);
-    LOGW("debug mode: RL single-leg closed loop; stand locks wheel, vx/wz drives RL trot + wheel");
+    LOGW("debug mode: RL single-leg closed loop; stand locks wheel, vx/wz drives online gait + wheel");
 #else
     leg_controller_set_output_options(0x0Fu, 1U, 1U, 1.5f, 0.1f);
     apply_controller_height(&GAIT_PARAMS_STAND_DEFAULT);
@@ -475,6 +483,7 @@ chassis_mode_t chassis_control_get_mode(void) {
 chassis_gait_active_t chassis_control_get_gait_active(void) {
     switch (s_active) {
         case ACTIVE_TROT:   return CHASSIS_GAIT_TROT;
+        case ACTIVE_WALK:   return CHASSIS_GAIT_WALK;
         case ACTIVE_SCRIPT: return CHASSIS_GAIT_SCRIPT;
         case ACTIVE_STAND:
         default:            return CHASSIS_GAIT_STAND;
@@ -511,7 +520,7 @@ int chassis_control_start_stand(float blend_dur_s) {
 }
 
 int chassis_control_set_trot_params(const gait_params_t* params) {
-    if (!validate_trot_params(params)) return APP_ERR_INVALID_ARG;
+    if (!validate_gait_params(params)) return APP_ERR_INVALID_ARG;
     s_trot_params = *params;
     if (s_active == ACTIVE_TROT && s_gait_machine.current == s_trot_gait) {
         apply_controller_height(&s_trot_params);
@@ -534,6 +543,35 @@ int chassis_control_start_trot(const gait_params_t* params, float blend_dur_s) {
     int ret = request_gait(s_trot_gait, &s_trot_params, blend_dur_s);
     if (ret == APP_OK) {
         s_active = ACTIVE_TROT;
+        s_manual_gait_hold = 1U;
+    }
+    return ret;
+}
+
+int chassis_control_set_walk_params(const gait_params_t* params) {
+    if (!validate_gait_params(params)) return APP_ERR_INVALID_ARG;
+    s_walk_params = *params;
+    if (s_active == ACTIVE_WALK && s_gait_machine.current == s_walk_gait) {
+        apply_controller_height(&s_walk_params);
+        return request_gait(s_walk_gait, &s_walk_params, 0.0f);
+    }
+    return APP_OK;
+}
+
+void chassis_control_get_walk_params(gait_params_t* out) {
+    if (!out) return;
+    *out = s_walk_params;
+}
+
+int chassis_control_start_walk(const gait_params_t* params, float blend_dur_s) {
+    if (params) {
+        int ret = chassis_control_set_walk_params(params);
+        if (ret != APP_OK) return ret;
+    }
+    apply_controller_height(&s_walk_params);
+    int ret = request_gait(s_walk_gait, &s_walk_params, blend_dur_s);
+    if (ret == APP_OK) {
+        s_active = ACTIVE_WALK;
         s_manual_gait_hold = 1U;
     }
     return ret;

@@ -21,7 +21,8 @@ typedef enum {
 typedef enum {
     CHASSIS_GAIT_STAND = 0,
     CHASSIS_GAIT_TROT = 1,
-    CHASSIS_GAIT_SCRIPT = 2,
+    CHASSIS_GAIT_WALK = 2,
+    CHASSIS_GAIT_SCRIPT = 3,
 } chassis_gait_active_t;
 
 #ifdef __cplusplus

@@ -58,6 +58,9 @@ int chassis_control_start_stand(float blend_dur_s);
 int chassis_control_set_trot_params(const gait_params_t* params);
 void chassis_control_get_trot_params(gait_params_t* out);
 int chassis_control_start_trot(const gait_params_t* params, float blend_dur_s);
+int chassis_control_set_walk_params(const gait_params_t* params);
+void chassis_control_get_walk_params(gait_params_t* out);
+int chassis_control_start_walk(const gait_params_t* params, float blend_dur_s);
 
 void chassis_control_set_online_timeout_ms(uint32_t timeout_ms);
 uint32_t chassis_control_get_online_timeout_ms(void);

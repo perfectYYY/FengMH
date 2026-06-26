@@ -12,9 +12,9 @@
  * leg_controller 后续接 IK 转换为关节角。
  */
 #include "gait_trot.h"
+#include "gait_trajectory.h"
 #include "log.h"
 #include <string.h>
-#include <math.h>
 
 static const char* TAG = "GAIT";
 
@@ -43,49 +43,13 @@ static int trot_set_param(gait_if_t* self, const gait_params_t* p) {
 void gait_trot_foot_traj(float leg_phase, float duty,
                          float step_len_m, float step_height_m,
                          float* dx_m, float* dz_m, uint8_t* in_stance) {
-    float lp = gait_wrap01(leg_phase);
-    if (duty <= 0.0f) duty = 0.0f;
-    if (duty >= 1.0f) duty = 1.0f;
-
-    if (lp < duty) {
-        /* 支撑相：足端在地面，x 从 +half 线性退到 -half */
-        float t = (duty > 0.0f) ? (lp / duty) : 0.0f;
-        if (dx_m) *dx_m = step_len_m * (0.5f - t);
-        if (dz_m) *dz_m = 0.0f;
-        if (in_stance) *in_stance = 1u;
-    } else {
-        /* 摆动相摆线：起落足处 x/z 速度都为 0。 */
-        float swing_dur = 1.0f - duty;
-        float t = (swing_dur > 0.0f) ? ((lp - duty) / swing_dur) : 0.0f;
-        float theta = 2.0f * (float)M_PI * t;
-        if (dx_m) {
-            *dx_m = step_len_m * (t - (sinf(theta) / (2.0f * (float)M_PI)) - 0.5f);
-        }
-        if (dz_m) {
-            *dz_m = 0.5f * step_height_m * (1.0f - cosf(theta));
-        }
-        if (in_stance) *in_stance = 0u;
-    }
-}
-
-static float trot_leg_side_sign(int leg_idx) {
-    return (leg_idx == GAIT_LEG_FR || leg_idx == GAIT_LEG_RR) ? 1.0f : -1.0f;
-}
-
-static int trot_has_per_leg_steps(const gait_params_t* p) {
-    if (!p) return 0;
-    for (int i = 0; i < GAIT_LEG_NUM; i++) {
-        if (fabsf(p->leg_step_length_m[i]) > 1e-7f) return 1;
-    }
-    return 0;
-}
-
-static float trot_leg_step_length(const gait_params_t* p, int leg_idx) {
-    if (!p) return 0.0f;
-    if (trot_has_per_leg_steps(p)) {
-        return p->leg_step_length_m[leg_idx];
-    }
-    return p->step_length_m + trot_leg_side_sign(leg_idx) * p->turn_step_m;
+    gait_cycloid_foot_traj(leg_phase,
+                           duty,
+                           step_len_m,
+                           step_height_m,
+                           dx_m,
+                           dz_m,
+                           in_stance);
 }
 
 static int trot_update(gait_if_t* self, float dt_s, gait_output_t* out) {
@@ -104,7 +68,7 @@ static int trot_update(gait_if_t* self, float dt_s, gait_output_t* out) {
 
     for (int i = 0; i < GAIT_LEG_NUM; i++) {
         float lp = gait_wrap01(c->phase + p->phase_offset[i]);
-        float leg_step = trot_leg_step_length(p, i);
+        float leg_step = gait_resolve_leg_step_length(p, i);
         float dx, dz; uint8_t st;
         gait_trot_foot_traj(lp, p->duty, leg_step, p->step_height_m, &dx, &dz, &st);
         out->leg[i].in_stance  = st;

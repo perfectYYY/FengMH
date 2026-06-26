@@ -48,6 +48,8 @@ typedef struct __attribute__((packed)) {
 #define PROTO_GAIT_ACTION_STAND             0u
 #define PROTO_GAIT_ACTION_TROT              1u
 #define PROTO_GAIT_ACTION_SET_TROT_PARAMS   2u
+#define PROTO_GAIT_ACTION_WALK              3u
+#define PROTO_GAIT_ACTION_SET_WALK_PARAMS   4u
 
 typedef struct __attribute__((packed)) {
     uint8_t action;      /* PROTO_GAIT_ACTION_* */

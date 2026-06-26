@@ -18,7 +18,7 @@
 #define PLANNER_DEFAULT_MAX_LEG_STEP_M  0.20f
 #define PLANNER_DEFAULT_TURN_STEP_HEIGHT_M 0.04f
 #define PLANNER_DEFAULT_TURN_PERIOD_S   0.60f
-#define PLANNER_DEFAULT_TURN_DUTY       0.50f
+#define PLANNER_DEFAULT_TURN_DUTY       0.75f
 
 volatile chassis_turn_cfg_t g_chassis_turn_cfg = {
     .enable_gait_turn = 1U,
@@ -161,12 +161,12 @@ static void planner_fill_leg_steps(const chassis_cmd_plan_t* cmd,
 }
 
 app_err_t chassis_planner_update(const chassis_cmd_plan_t* cmd,
-                                  const gait_params_t* base_trot,
+                                  const gait_params_t* base_gait,
                                   chassis_plan_t* out) {
-    if (!cmd || !base_trot || !out) return APP_ERR_INVALID_ARG;
+    if (!cmd || !base_gait || !out) return APP_ERR_INVALID_ARG;
 
     memset(out, 0, sizeof(*out));
-    out->gait_params = *base_trot;
+    out->gait_params = *base_gait;
 
     float forward_speed = fabsf(cmd->vx_m_s);
     float lateral_speed = fabsf(cmd->vy_m_s);

@@ -3,13 +3,14 @@
  *
  * The suite covers:
  *   1. planner math for velocity/yaw commands
- *   2. trot gait output and IK conversion
- *   3. chassis_control end-to-end tick using stub motors
+ *   2. trot/walk gait output and IK conversion
+ *   3. chassis_control/USB end-to-end ticks using stub motors
  */
 #include "chassis_control.h"
 #include "chassis_planner.h"
 #include "gait_params.h"
 #include "gait_trot.h"
+#include "gait_walk.h"
 #include "leg_controller.h"
 #include "leg_ik.h"
 #include "leg_params.h"
@@ -253,6 +254,72 @@ static void test_trot_outputs_explicit_foot_target(void) {
     TEST_ASSERT(any_foot_motion == 1U);
 }
 
+static void assert_walk_support_pattern(const gait_output_t* out) {
+    uint32_t stance_count = 0U;
+    uint32_t swing_count = 0U;
+
+    for (int i = 0; i < GAIT_LEG_NUM; i++) {
+        if (out->leg[i].in_stance) {
+            stance_count++;
+        } else {
+            swing_count++;
+            TEST_ASSERT_NEAR(out->leg[i].wheel_rads, 0.0f, 1e-6f);
+        }
+        TEST_ASSERT(isfinite(out->leg[i].foot_x_m));
+        TEST_ASSERT(isfinite(out->leg[i].foot_z_m));
+    }
+
+    TEST_ASSERT(stance_count == 3U);
+    TEST_ASSERT(swing_count == 1U);
+}
+
+static void test_walk_keeps_three_leg_support(void) {
+    gait_if_t* walk = gait_walk_create();
+    gait_output_t out;
+    gait_params_t params = GAIT_PARAMS_WALK_DEFAULT;
+    const int expected_swing_leg[4] = {
+        GAIT_LEG_FL,
+        GAIT_LEG_RR,
+        GAIT_LEG_FR,
+        GAIT_LEG_RL,
+    };
+
+    TEST_ASSERT(walk != NULL);
+
+    for (uint32_t i = 0; i < 4U; i++) {
+        TEST_ASSERT(walk->ops->set_param(walk, &params) == APP_OK);
+        TEST_ASSERT(walk->ops->init(walk) == APP_OK);
+        float dt_s = ((float)i * 0.25f) * params.period_s;
+        TEST_ASSERT(walk->ops->update(walk, dt_s, &out) == APP_OK);
+        assert_walk_support_pattern(&out);
+        TEST_ASSERT(out.leg[expected_swing_leg[i]].in_stance == 0U);
+    }
+}
+
+static void test_walk_uses_per_leg_step_lengths(void) {
+    gait_if_t* walk = gait_walk_create();
+    gait_output_t out;
+    gait_params_t params = GAIT_PARAMS_WALK_DEFAULT;
+
+    params.step_length_m = 0.0f;
+    params.turn_step_m = 0.0f;
+    params.leg_step_length_m[GAIT_LEG_FL] = -0.03f;
+    params.leg_step_length_m[GAIT_LEG_FR] = 0.05f;
+    params.leg_step_length_m[GAIT_LEG_RL] = -0.02f;
+    params.leg_step_length_m[GAIT_LEG_RR] = 0.04f;
+
+    TEST_ASSERT(walk != NULL);
+    TEST_ASSERT(walk->ops->set_param(walk, &params) == APP_OK);
+    TEST_ASSERT(walk->ops->init(walk) == APP_OK);
+    TEST_ASSERT(walk->ops->update(walk, 0.0f, &out) == APP_OK);
+
+    TEST_ASSERT_NEAR(out.leg[GAIT_LEG_FL].foot_x_m,  0.015f, 1e-6f);
+    TEST_ASSERT_NEAR(out.leg[GAIT_LEG_FR].foot_x_m,  0.008333f, 1e-5f);
+    TEST_ASSERT_NEAR(out.leg[GAIT_LEG_RL].foot_x_m, -0.010f, 1e-6f);
+    TEST_ASSERT_NEAR(out.leg[GAIT_LEG_RR].foot_x_m, -0.006667f, 1e-5f);
+    assert_walk_support_pattern(&out);
+}
+
 static void test_ik_reads_foot_target_fields(void) {
     gait_output_t foot;
     gait_output_t joints;
@@ -340,14 +407,14 @@ static void test_chassis_control_end_to_end(void) {
     input.valid_frame_count = 1U;
     input.last_rx_ms = 0U;
 
-    for (uint32_t tick = 0; tick < 20U; tick++) {
+    for (uint32_t tick = 0; tick < 1800U; tick++) {
         chassis_control_tick(&input, 0.002f, tick * 2U);
     }
 
     chassis_control_get_status(&status);
     TEST_ASSERT(status.online == 1U);
     TEST_ASSERT(status.moving == 1U);
-    TEST_ASSERT(status.active_gait == CHASSIS_GAIT_TROT);
+    TEST_ASSERT(status.active_gait == CHASSIS_GAIT_WALK);
     TEST_ASSERT(status.gait_params.turn_step_m > 0.0f);
     TEST_ASSERT(status.wheel_rads[GAIT_LEG_FL] < 0.0f);
     TEST_ASSERT(status.wheel_rads[GAIT_LEG_FR] > 0.0f);
@@ -380,12 +447,59 @@ static void test_usb_protocol_to_chassis_task_end_to_end(void) {
     bsp_usb_cdc_test_inject_rx(frame, (uint32_t)frame_len);
     TEST_ASSERT(task_comm_dispatch_hit() > 0U);
 
-    for (uint32_t tick = 0; tick < 20U; tick++) {
+    for (uint32_t tick = 0; tick < 1800U; tick++) {
         task_chassis_step_for_test(0.002f, tick * 2U);
     }
 
-    TEST_ASSERT(task_chassis_get_gait_active() == CHASSIS_GAIT_TROT);
+    TEST_ASSERT(task_chassis_get_gait_active() == CHASSIS_GAIT_WALK);
     TEST_ASSERT(total_position_commands() > 0U);
+    assert_leg_motor_position_path_active();
+    assert_wheel_mit_gains_active();
+}
+
+static void test_usb_gait_action_can_start_walk(void) {
+    uint8_t frame[64];
+    gait_params_t walk_params = GAIT_PARAMS_WALK_DEFAULT;
+    payload_gait_cmd_t cmd;
+    memset(&cmd, 0, sizeof(cmd));
+
+    cmd.action = PROTO_GAIT_ACTION_WALK;
+    cmd.body_height_m = walk_params.body_height_m;
+    cmd.step_length_m = walk_params.step_length_m;
+    cmd.step_height_m = walk_params.step_height_m;
+    cmd.period_s = walk_params.period_s;
+    cmd.duty = walk_params.duty;
+    for (int i = 0; i < GAIT_LEG_NUM; i++) {
+        cmd.phase_offset[i] = walk_params.phase_offset[i];
+    }
+    cmd.touchdown_thresh = walk_params.touchdown_thresh;
+    cmd.blend_dur_s = 0.0f;
+
+    log_init();
+    bind_stub_motors();
+    TEST_ASSERT(bsp_usb_cdc_init() == APP_OK);
+    task_comm_init();
+    task_chassis_init();
+
+    for (uint32_t tick = 0U; tick < 2200U; tick++) {
+        task_chassis_step_for_test(0.002f, tick * 2U);
+    }
+
+    int frame_len = proto_frame_build(PROTO_FUNC_GAIT_CMD,
+                                      (const uint8_t*)&cmd,
+                                      (uint8_t)sizeof(cmd),
+                                      frame,
+                                      sizeof(frame));
+    TEST_ASSERT(frame_len > 0);
+    bsp_usb_cdc_test_inject_rx(frame, (uint32_t)frame_len);
+    TEST_ASSERT(task_comm_dispatch_hit() > 0U);
+
+    for (uint32_t tick = 2200U; tick < 2220U; tick++) {
+        task_chassis_step_for_test(0.002f, tick * 2U);
+    }
+
+    TEST_ASSERT(task_chassis_get_gait_active() == CHASSIS_GAIT_WALK);
+    TEST_ASSERT(strcmp(task_chassis_active_gait_name(), "walk") == 0);
     assert_leg_motor_position_path_active();
     assert_wheel_mit_gains_active();
 }
@@ -396,9 +510,12 @@ int main(void) {
     test_trot_turn_step_drives_left_right_gait();
     test_trot_uses_per_leg_step_lengths();
     test_trot_outputs_explicit_foot_target();
+    test_walk_keeps_three_leg_support();
+    test_walk_uses_per_leg_step_lengths();
     test_ik_reads_foot_target_fields();
     test_chassis_control_end_to_end();
     test_usb_protocol_to_chassis_task_end_to_end();
+    test_usb_gait_action_can_start_walk();
     printf("fengmh_host_tests: PASS\n");
     return 0;
 }

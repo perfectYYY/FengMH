@@ -115,6 +115,13 @@ static int handle_gait(const uint8_t* p, uint8_t len) {
         case PROTO_GAIT_ACTION_SET_TROT_PARAMS:
             ret = task_chassis_set_trot_params(&params);
             break;
+        case PROTO_GAIT_ACTION_WALK:
+            task_chassis_set_mode(CHASSIS_MODE_STANDALONE);
+            ret = task_chassis_start_walk(&params, cmd.blend_dur_s);
+            break;
+        case PROTO_GAIT_ACTION_SET_WALK_PARAMS:
+            ret = task_chassis_set_walk_params(&params);
+            break;
         default:
             ret = APP_ERR_INVALID_ARG;
             break;
@@ -186,7 +193,7 @@ void task_comm_get_chassis(task_comm_chassis_cmd_t* out) {
 /* 0x80 整机状态 payload */
 typedef struct {
     uint8_t  mode;          /* chassis_mode_t */
-    uint8_t  gait_active;   /* 0=stand 1=trot 2=script */
+    uint8_t  gait_active;   /* 0=stand 1=trot 2=walk 3=script */
     uint8_t  estop;         /* 0=normal 1=estop */
     uint8_t  reserved;
     float    vx_cmd;        /* 当前速度指令 */

@@ -84,6 +84,18 @@ int task_chassis_start_trot(const gait_params_t* params, float blend_dur_s) {
     return chassis_control_start_trot(params, blend_dur_s);
 }
 
+int task_chassis_set_walk_params(const gait_params_t* params) {
+    return chassis_control_set_walk_params(params);
+}
+
+void task_chassis_get_walk_params(gait_params_t* out) {
+    chassis_control_get_walk_params(out);
+}
+
+int task_chassis_start_walk(const gait_params_t* params, float blend_dur_s) {
+    return chassis_control_start_walk(params, blend_dur_s);
+}
+
 const char* task_chassis_active_gait_name(void) {
     return chassis_control_active_gait_name();
 }

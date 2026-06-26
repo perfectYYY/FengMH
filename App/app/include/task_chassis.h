@@ -4,7 +4,7 @@
  * 模式：
  *   STANDALONE — 完全脱离 USB CDC：跑离线 stand/march/stand 序列。
  *                想自定义死程序步态：构造 script_t 调 task_chassis_play_script()。
- *   ONLINE     — 严格按 task_comm 的 chassis_cmd 走 stand/trot 状态机。
+ *   ONLINE     — 严格按 task_comm 的 chassis_cmd 走 stand/walk 状态机。
  *   AUTO       — 上电默认；心跳活着按 ONLINE，超时(>online_timeout_ms)自动回退 STANDALONE。
  *
  * 接口：
@@ -40,6 +40,9 @@ int   task_chassis_start_stand(float blend_dur_s);
 int   task_chassis_set_trot_params(const gait_params_t* p);
 void  task_chassis_get_trot_params(gait_params_t* out);
 int   task_chassis_start_trot(const gait_params_t* p, float blend_dur_s);
+int   task_chassis_set_walk_params(const gait_params_t* p);
+void  task_chassis_get_walk_params(gait_params_t* out);
+int   task_chassis_start_walk(const gait_params_t* p, float blend_dur_s);
 
 void     task_chassis_set_online_timeout_ms(uint32_t ms);
 uint32_t task_chassis_get_online_timeout_ms(void);

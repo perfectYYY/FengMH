@@ -21,7 +21,9 @@ add_executable(fengmh_host_tests
     ../App/control/src/gait/gait_machine.c
     ../App/control/src/gait/gait_params.c
     ../App/control/src/gait/gait_stand.c
+    ../App/control/src/gait/gait_trajectory.c
     ../App/control/src/gait/gait_trot.c
+    ../App/control/src/gait/gait_walk.c
     ../App/control/src/kinematics/leg_ik.c
     ../App/control/src/kinematics/leg_params.c
     ../App/control/src/leg/leg_controller.c

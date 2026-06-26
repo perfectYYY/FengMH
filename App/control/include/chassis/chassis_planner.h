@@ -34,16 +34,16 @@ typedef struct {
     float max_wheel_rads;        /* 轮速限幅，<=0 表示不额外限幅 */
     float half_track_m;          /* 腿/轮接触点到机体中心线的横向距离 */
     float max_leg_step_m;        /* 单腿步长限幅，<=0 使用默认值 */
-    float turn_step_height_m;    /* 原地/低速转向抬脚高度，<=0 使用 base_trot */
-    float turn_period_s;         /* 原地/低速转向步态周期，<=0 使用 base_trot */
-    float turn_duty;             /* 原地/低速转向支撑占空比，<=0 使用 base_trot */
+    float turn_step_height_m;    /* 原地/低速转向抬脚高度，<=0 使用 base_gait */
+    float turn_period_s;         /* 原地/低速转向步态周期，<=0 使用 base_gait */
+    float turn_duty;             /* 原地/低速转向支撑占空比，<=0 使用 base_gait */
 } chassis_turn_cfg_t;
 
 extern volatile chassis_turn_cfg_t g_chassis_turn_cfg;
 
 void chassis_planner_init(void);
 app_err_t chassis_planner_update(const chassis_cmd_plan_t* cmd,
-                                  const gait_params_t* base_trot,
+                                  const gait_params_t* base_gait,
                                   chassis_plan_t* out);
 
 #ifdef __cplusplus
