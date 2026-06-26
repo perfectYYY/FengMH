@@ -42,6 +42,20 @@ typedef struct {
 
 extern volatile leg_wheel_mit_debug_t g_leg_wheel_mit;
 
+typedef struct {
+    uint8_t enable;              /* 1=向 GO 关节位置指令叠加 tau_ff */
+    uint8_t compensate_leg_mass; /* 1=补偿腿/轮自身质量 */
+    uint8_t compensate_payload;  /* 1=把 payload_mass_kg 均分到支撑腿 */
+    uint8_t reserved;
+    float scale;                 /* 总体比例，必要时可用 -1 反向验证符号 */
+    float payload_mass_kg;       /* 机身/机械臂额外载荷，按支撑腿均分 */
+    float max_tau_nm;            /* 单关节前馈限幅 */
+    float hip_tau_ff_nm[GAIT_LEG_NUM];
+    float knee_tau_ff_nm[GAIT_LEG_NUM];
+} leg_gravity_comp_debug_t;
+
+extern volatile leg_gravity_comp_debug_t g_leg_gravity_comp;
+
 void      leg_controller_init(leg_controller_t* lc);
 /* 从 motor_registry 中按约定 logical id 装配 */
 app_err_t leg_controller_bind_from_registry(leg_controller_t* lc);

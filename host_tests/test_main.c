@@ -391,6 +391,72 @@ static void assert_wheel_mit_gains_active(void) {
     }
 }
 
+static void assert_joint_tau_zero(void) {
+    static const motor_logical_id_t ids[] = {
+        MOTOR_ID_FL_HIP, MOTOR_ID_FL_KNEE,
+        MOTOR_ID_FR_HIP, MOTOR_ID_FR_KNEE,
+        MOTOR_ID_RL_HIP, MOTOR_ID_RL_KNEE,
+        MOTOR_ID_RR_HIP, MOTOR_ID_RR_KNEE,
+    };
+
+    for (size_t i = 0; i < sizeof(ids) / sizeof(ids[0]); i++) {
+        TEST_ASSERT_NEAR(s_stub_ctxs[ids[i]].last_tau, 0.0f, 1e-6f);
+    }
+}
+
+static void assert_any_joint_tau_nonzero(void) {
+    static const motor_logical_id_t ids[] = {
+        MOTOR_ID_FL_HIP, MOTOR_ID_FL_KNEE,
+        MOTOR_ID_FR_HIP, MOTOR_ID_FR_KNEE,
+        MOTOR_ID_RL_HIP, MOTOR_ID_RL_KNEE,
+        MOTOR_ID_RR_HIP, MOTOR_ID_RR_KNEE,
+    };
+    uint8_t any = 0U;
+
+    for (size_t i = 0; i < sizeof(ids) / sizeof(ids[0]); i++) {
+        if (fabsf(s_stub_ctxs[ids[i]].last_tau) > 1e-5f) {
+            any = 1U;
+        }
+    }
+    TEST_ASSERT(any == 1U);
+}
+
+static void apply_stand_once_with_gravity_cfg(uint8_t enable, float payload_mass_kg) {
+    leg_controller_t lc;
+    gait_output_t stand;
+    memset(&stand, 0, sizeof(stand));
+
+    bind_stub_motors();
+    leg_controller_init(&lc);
+    leg_controller_bind_from_registry(&lc);
+    leg_controller_set_stand_height(-GAIT_PARAMS_STAND_DEFAULT.body_height_m);
+
+    g_leg_gravity_comp.enable = enable;
+    g_leg_gravity_comp.payload_mass_kg = payload_mass_kg;
+    g_leg_gravity_comp.max_tau_nm = 2.0f;
+
+    for (int i = 0; i < GAIT_LEG_NUM; i++) {
+        stand.leg[i].in_stance = 1U;
+    }
+
+    TEST_ASSERT(leg_controller_apply_dt(&lc, &stand, 0.002f) == APP_OK);
+}
+
+static void test_gravity_comp_disabled_keeps_zero_tau_ff(void) {
+    apply_stand_once_with_gravity_cfg(0U, 2.0f);
+    assert_leg_motor_position_path_active();
+    assert_joint_tau_zero();
+    TEST_ASSERT(fabsf(g_leg_gravity_comp.hip_tau_ff_nm[GAIT_LEG_FL]) > 1e-5f);
+}
+
+static void test_gravity_comp_enabled_sends_joint_tau_ff(void) {
+    apply_stand_once_with_gravity_cfg(1U, 2.0f);
+    assert_leg_motor_position_path_active();
+    assert_any_joint_tau_nonzero();
+    TEST_ASSERT(fabsf(s_stub_ctxs[MOTOR_ID_FL_HIP].last_tau) <= g_leg_gravity_comp.max_tau_nm);
+    TEST_ASSERT(fabsf(s_stub_ctxs[MOTOR_ID_FL_KNEE].last_tau) <= g_leg_gravity_comp.max_tau_nm);
+}
+
 static void test_chassis_control_end_to_end(void) {
     chassis_control_input_t input;
     chassis_control_status_t status;
@@ -513,6 +579,8 @@ int main(void) {
     test_walk_keeps_three_leg_support();
     test_walk_uses_per_leg_step_lengths();
     test_ik_reads_foot_target_fields();
+    test_gravity_comp_disabled_keeps_zero_tau_ff();
+    test_gravity_comp_enabled_sends_joint_tau_ff();
     test_chassis_control_end_to_end();
     test_usb_protocol_to_chassis_task_end_to_end();
     test_usb_gait_action_can_start_walk();
