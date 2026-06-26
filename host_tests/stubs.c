@@ -18,6 +18,8 @@
 #include <time.h>
 
 static app_tick_t s_now_ms;
+static imu_bmi088_data_t s_imu_data;
+static uint8_t s_imu_ready = 1U;
 
 void bsp_time_init(void) {
     s_now_ms = 0;
@@ -135,17 +137,30 @@ void bsp_fdcan_test_inject_rx(bsp_fdcan_bus_t bus, const bsp_fdcan_frame_t* fram
 void bsp_fdcan_test_reset(void) {}
 
 app_err_t imu_bmi088_init(void) {
+    memset(&s_imu_data, 0, sizeof(s_imu_data));
+    s_imu_data.accel[2] = BMI088_GRAVITY;
+    s_imu_ready = 1U;
     return APP_OK;
 }
 
 app_err_t imu_bmi088_read(imu_bmi088_data_t* data) {
     if (!data) return APP_ERR_INVALID_ARG;
-    memset(data, 0, sizeof(*data));
+    *data = s_imu_data;
     return APP_OK;
 }
 
 uint8_t imu_bmi088_is_ready(void) {
-    return 1;
+    return s_imu_ready;
+}
+
+void imu_bmi088_test_set(const imu_bmi088_data_t* data, uint8_t ready) {
+    if (data) {
+        s_imu_data = *data;
+    } else {
+        memset(&s_imu_data, 0, sizeof(s_imu_data));
+        s_imu_data.accel[2] = BMI088_GRAVITY;
+    }
+    s_imu_ready = ready;
 }
 
 app_err_t motor_go_init_all(void) {

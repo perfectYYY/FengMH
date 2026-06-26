@@ -1,8 +1,10 @@
 /*
  * attitude_estimator.h — 姿态估计器
  *
- * 当前实现: 仅陀螺仪 Z 轴积分 → 偏航角 (yaw)
- *   - 静止漂移抑制: gyro 模长 < 阈值时锁定积分
+ * 当前实现:
+ *   - 陀螺仪 Z 轴积分 → 偏航角 (yaw)
+ *   - 陀螺仪 X/Y 积分 + 加速度计低通修正 → roll/pitch
+ *   - 静止漂移抑制: gyro 模长 < 阈值时锁定 yaw 积分
  *   - 后续可扩展为完整 AHRS (Mahony / Madgwick)
  *
  * 接口设计:
@@ -25,7 +27,7 @@ app_err_t attitude_estimator_init(void);
 /*
  * 更新估计器。
  *   gyro[3]:  rad/s, 三轴角速度
- *   accel[3]: m/s^2, 三轴加速度 (当前未使用, 预留)
+ *   accel[3]: m/s^2, 三轴加速度，用于 roll/pitch 重力方向修正
  *   dt_s:     距上次更新的时间步长 (秒)
  */
 app_err_t attitude_estimator_update(const float gyro[3], const float accel[3], float dt_s);

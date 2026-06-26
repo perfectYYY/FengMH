@@ -43,6 +43,21 @@ typedef struct {
     gait_params_t gait_params;
 } chassis_control_status_t;
 
+typedef struct {
+    uint8_t enable;             /* 1=把 roll/pitch 补偿叠加到足端 z 目标 */
+    uint8_t stance_only;        /* 1=只修正支撑腿，摆动腿保持步态高度 */
+    uint8_t reserved[2];
+    float scale;                /* 总体比例，必要时可用 -1 反向验证符号 */
+    float half_length_m;        /* 腿接触点到机体中心的前后距离 */
+    float half_track_m;         /* 腿接触点到机体中心线的横向距离 */
+    float max_foot_z_m;         /* 单腿 foot_z 补偿限幅 */
+    float roll_rad;
+    float pitch_rad;
+    float foot_z_delta_m[GAIT_LEG_NUM];
+} chassis_attitude_comp_debug_t;
+
+extern volatile chassis_attitude_comp_debug_t g_chassis_attitude_comp;
+
 void chassis_control_init(void);
 void chassis_control_tick(const chassis_control_input_t* input,
                           float dt_s,

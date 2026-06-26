@@ -10,8 +10,10 @@ MCU 底盘任务以 500 Hz 运行。一个周期的路径如下：
 task_comm 缓存的命令
   -> task_chassis read_chassis_input()
   -> chassis_control_tick()
+  -> attitude_estimator_update()
   -> chassis_planner_update()
   -> gait_machine_update()
+  -> apply_attitude_compensation()
   -> leg_controller_apply_dt()
   -> motor vtable 命令
   -> motor_go_send_all() / motor_m3508_send_all()
@@ -35,19 +37,28 @@ task_comm 缓存的命令
 
 1. 在 MCU 构建中运行 GO 预标定窗口。
 2. 输入为空时生成零命令快照。
-3. 更新 yaw 转向，得到实际使用的 `wz`。
+3. 读取 IMU，更新 yaw/roll/pitch 姿态估计；需要闭环航向时得到实际使用的 `wz`。
 4. 调用 planner。
 5. 判断在线/离线状态。
 6. 选择 stand、trot 或 script gait。
 7. 更新 gait machine。
 8. 在线时只给支撑相腿应用 planner 的每轮局部滚动速度。
-9. 派发腿部命令。
-10. 在 MCU 构建中刷新电机输出。
+9. 可选地将 roll/pitch 转成四腿足端 `foot_z_m` 高度补偿。
+10. 派发腿部命令。
+11. 在 MCU 构建中刷新电机输出。
 
 当前转向行为：
 
 - `steer_mode == 0`：直接使用上位机给的 `wz`。
 - `steer_mode == 1`：使用 BMI088 yaw 估计和 steering controller 计算实际 `wz`。
+
+当前姿态行为：
+
+- `attitude_estimator` 使用陀螺仪积分 yaw，同时用加速度计估计 roll/pitch。
+- `g_chassis_attitude_comp.enable == 0` 为默认状态，不改变足端轨迹。
+- 打开后，`chassis_control` 在 gait 输出后、IK 前，根据 roll/pitch 和每条腿相对机体中心的位置给 `foot_z_m` 叠加小幅补偿。
+- `half_track_m` 默认 `0.15 m`，对应腿/轮接触点到机体中心线的横向距离；`half_length_m` 目前默认 `0.15 m`，上机后应按实际前后半距校准。
+- `scale` 可用于逐步放大或反向验证符号，`max_foot_z_m` 限制单腿高度补偿幅度。
 
 ## Planner 阶段
 
@@ -77,6 +88,8 @@ task_comm 缓存的命令
 - Script gait 通过脚本播放器包装成 gait 接口。
 
 在线移动时，planner 的每轮局部滚动速度只应用到支撑相腿；摆动相腿轮速置零。
+
+姿态补偿不会改变 gait 相位或 planner 决策，只在 `gait_output_t` 进入 IK 之前修正 `foot_z_m`。
 
 ## 腿和电机阶段
 

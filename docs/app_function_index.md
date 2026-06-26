@@ -178,6 +178,14 @@
 - `apply_gait_output_to_motors()`: 更新 gait 输出并派发腿部命令。
 - `chassis_control_init()`: 初始化 gait、leg、planner 和 steering 状态。
 - `chassis_control_tick()`: 运行一个完整的命令到电机控制周期。
+- `chassis_clampf()`: 底盘控制内部 float 限幅。
+- `attitude_comp_valid_or_default()`: 读取姿态补偿尺寸/限幅参数，非法时使用默认值。
+- `attitude_comp_leg_x_m()`: 返回单腿相对机体中心的前后位置。
+- `attitude_comp_leg_y_m()`: 返回单腿相对机体中心线的横向位置。
+- `attitude_comp_scale()`: 读取姿态补偿比例，非法时回退为 0。
+- `attitude_comp_limit()`: 限制单腿 foot z 补偿幅度。
+- `attitude_comp_clear_debug()`: 清空姿态补偿诊断输出。
+- `apply_attitude_compensation()`: 将 roll/pitch 姿态误差转换为四腿 `foot_z_m` 高度补偿。
 - `chassis_control_set_mode()`: 设置底盘模式。
 - `chassis_control_get_mode()`: 读取底盘模式。
 - `chassis_control_get_gait_active()`: 读取当前激活步态枚举。

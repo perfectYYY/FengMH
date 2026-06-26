@@ -11,6 +11,7 @@
 #include "gait_params.h"
 #include "gait_trot.h"
 #include "gait_walk.h"
+#include "imu_bmi088.h"
 #include "leg_controller.h"
 #include "leg_ik.h"
 #include "leg_params.h"
@@ -57,6 +58,8 @@ typedef struct {
 
 static motor_dev_t s_stub_devs[MOTOR_ID_MAX];
 static stub_motor_ctx_t s_stub_ctxs[MOTOR_ID_MAX];
+
+void imu_bmi088_test_set(const imu_bmi088_data_t* data, uint8_t ready);
 
 static int stub_set_position(motor_dev_t* dev,
                              float pos,
@@ -489,6 +492,46 @@ static void test_chassis_control_end_to_end(void) {
     assert_wheel_mit_gains_active();
 }
 
+static void test_attitude_comp_applies_leg_height_offsets(void) {
+    chassis_control_input_t input;
+    imu_bmi088_data_t imu;
+    memset(&input, 0, sizeof(input));
+    memset(&imu, 0, sizeof(imu));
+
+    log_init();
+    bind_stub_motors();
+    TEST_ASSERT(imu_bmi088_init() == APP_OK);
+    chassis_control_init();
+    chassis_control_set_mode(CHASSIS_MODE_ONLINE);
+
+    input.valid_frame_count = 1U;
+    input.last_rx_ms = 0U;
+
+    g_chassis_attitude_comp.enable = 1U;
+    g_chassis_attitude_comp.stance_only = 0U;
+    g_chassis_attitude_comp.scale = 1.0f;
+    g_chassis_attitude_comp.half_length_m = 0.15f;
+    g_chassis_attitude_comp.half_track_m = 0.15f;
+    g_chassis_attitude_comp.max_foot_z_m = 0.010f;
+
+    imu.accel[0] = -sinf(0.04f) * BMI088_GRAVITY;
+    imu.accel[1] =  sinf(0.06f) * BMI088_GRAVITY;
+    imu.accel[2] =  cosf(0.04f) * cosf(0.06f) * BMI088_GRAVITY;
+    imu_bmi088_test_set(&imu, 1U);
+
+    for (uint32_t tick = 0U; tick < 2200U; tick++) {
+        chassis_control_tick(&input, 0.002f, tick * 2U);
+    }
+
+    TEST_ASSERT(fabsf(g_chassis_attitude_comp.roll_rad) > 0.01f);
+    TEST_ASSERT(fabsf(g_chassis_attitude_comp.pitch_rad) > 0.01f);
+    TEST_ASSERT(g_chassis_attitude_comp.foot_z_delta_m[GAIT_LEG_FL] < 0.0f);
+    TEST_ASSERT(g_chassis_attitude_comp.foot_z_delta_m[GAIT_LEG_RR] > 0.0f);
+    TEST_ASSERT(fabsf(g_chassis_attitude_comp.foot_z_delta_m[GAIT_LEG_FL]) <=
+                g_chassis_attitude_comp.max_foot_z_m);
+    assert_leg_motor_position_path_active();
+}
+
 static void test_usb_protocol_to_chassis_task_end_to_end(void) {
     uint8_t frame[64];
     payload_chassis_cmd_t cmd = {
@@ -582,6 +625,7 @@ int main(void) {
     test_gravity_comp_disabled_keeps_zero_tau_ff();
     test_gravity_comp_enabled_sends_joint_tau_ff();
     test_chassis_control_end_to_end();
+    test_attitude_comp_applies_leg_height_offsets();
     test_usb_protocol_to_chassis_task_end_to_end();
     test_usb_gait_action_can_start_walk();
     printf("fengmh_host_tests: PASS\n");

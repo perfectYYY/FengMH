@@ -31,6 +31,10 @@
 
 static const char* TAG = "CHASSIS";
 
+#define ATTITUDE_COMP_DEFAULT_HALF_LENGTH_M 0.15f
+#define ATTITUDE_COMP_DEFAULT_HALF_TRACK_M  0.15f
+#define ATTITUDE_COMP_DEFAULT_LIMIT_M       0.025f
+
 typedef enum {
     ACTIVE_STAND = 0,
     ACTIVE_TROT,
@@ -59,6 +63,7 @@ static uint32_t s_offline_seq_start_ms = 0U;
 static steer_mode_t s_steer_mode = STEER_MODE_OFF;
 static chassis_plan_t s_chassis_plan;
 static uint8_t s_last_online = 0U;
+volatile chassis_attitude_comp_debug_t g_chassis_attitude_comp;
 
 static const gait_params_t S_OFFLINE_MARCH_PARAMS = {
     .body_height_m    = 0.20f,
@@ -84,6 +89,12 @@ static float controller_height_from_body(float body_height_m) {
 static void apply_controller_height(const gait_params_t* params) {
     if (!params) return;
     leg_controller_set_stand_height(controller_height_from_body(params->body_height_m));
+}
+
+static float chassis_clampf(float v, float min_v, float max_v) {
+    if (v < min_v) return min_v;
+    if (v > max_v) return max_v;
+    return v;
 }
 
 /* Validate host-provided gait parameters before they enter the gait machine. */
@@ -180,6 +191,76 @@ static void apply_plan_wheel_speed(gait_output_t* output, const chassis_plan_t* 
     if (!output || !plan) return;
     for (int i = 0; i < GAIT_LEG_NUM; i++) {
         output->leg[i].wheel_rads = output->leg[i].in_stance ? plan->wheel_rads[i] : 0.0f;
+    }
+}
+
+static float attitude_comp_valid_or_default(float value, float fallback) {
+    return (isfinite(value) && value > 0.0f) ? value : fallback;
+}
+
+static float attitude_comp_leg_x_m(int leg_idx) {
+    float half_length = attitude_comp_valid_or_default(
+        g_chassis_attitude_comp.half_length_m,
+        ATTITUDE_COMP_DEFAULT_HALF_LENGTH_M);
+    return (leg_idx == GAIT_LEG_FL || leg_idx == GAIT_LEG_FR) ? half_length : -half_length;
+}
+
+static float attitude_comp_leg_y_m(int leg_idx) {
+    float half_track = attitude_comp_valid_or_default(
+        g_chassis_attitude_comp.half_track_m,
+        ATTITUDE_COMP_DEFAULT_HALF_TRACK_M);
+    return (leg_idx == GAIT_LEG_FL || leg_idx == GAIT_LEG_RL) ? half_track : -half_track;
+}
+
+static float attitude_comp_scale(void) {
+    float scale = g_chassis_attitude_comp.scale;
+    return isfinite(scale) ? scale : 0.0f;
+}
+
+static float attitude_comp_limit(float dz_m) {
+    float limit = attitude_comp_valid_or_default(g_chassis_attitude_comp.max_foot_z_m,
+                                                ATTITUDE_COMP_DEFAULT_LIMIT_M);
+    return chassis_clampf(dz_m, -limit, limit);
+}
+
+static void attitude_comp_clear_debug(void) {
+    g_chassis_attitude_comp.roll_rad = 0.0f;
+    g_chassis_attitude_comp.pitch_rad = 0.0f;
+    for (int i = 0; i < GAIT_LEG_NUM; i++) {
+        g_chassis_attitude_comp.foot_z_delta_m[i] = 0.0f;
+    }
+}
+
+static void apply_attitude_compensation(gait_output_t* output) {
+    if (!output) return;
+    attitude_comp_clear_debug();
+
+    if (!g_chassis_attitude_comp.enable || !imu_bmi088_is_ready()) {
+        return;
+    }
+
+    const attitude_state_t* attitude = attitude_estimator_get_state();
+    if (!attitude) return;
+
+    float roll = attitude->roll;
+    float pitch = attitude->pitch;
+    if (!isfinite(roll) || !isfinite(pitch)) return;
+
+    g_chassis_attitude_comp.roll_rad = roll;
+    g_chassis_attitude_comp.pitch_rad = pitch;
+
+    for (int i = 0; i < GAIT_LEG_NUM; i++) {
+        if (g_chassis_attitude_comp.stance_only && !output->leg[i].in_stance) {
+            continue;
+        }
+
+        float dz = -attitude_comp_scale() *
+                   ((pitch * attitude_comp_leg_x_m(i)) +
+                    (roll * attitude_comp_leg_y_m(i)));
+        dz = attitude_comp_limit(dz);
+
+        output->leg[i].foot_z_m += dz;
+        g_chassis_attitude_comp.foot_z_delta_m[i] = dz;
     }
 }
 
@@ -394,6 +475,7 @@ static void apply_gait_output_to_motors(uint8_t online, float dt_s) {
     if (online) {
         apply_plan_wheel_speed(&gait_output, &s_chassis_plan);
     }
+    apply_attitude_compensation(&gait_output);
     leg_controller_apply_dt(&s_leg_controller, &gait_output, dt_s);
 }
 
@@ -411,6 +493,12 @@ void chassis_control_init(void) {
 
     leg_controller_init(&s_leg_controller);
     leg_controller_bind_from_registry(&s_leg_controller);
+    memset((void*)&g_chassis_attitude_comp, 0, sizeof(g_chassis_attitude_comp));
+    g_chassis_attitude_comp.stance_only = 1U;
+    g_chassis_attitude_comp.scale = 1.0f;
+    g_chassis_attitude_comp.half_length_m = ATTITUDE_COMP_DEFAULT_HALF_LENGTH_M;
+    g_chassis_attitude_comp.half_track_m = ATTITUDE_COMP_DEFAULT_HALF_TRACK_M;
+    g_chassis_attitude_comp.max_foot_z_m = ATTITUDE_COMP_DEFAULT_LIMIT_M;
 #if APP_DEBUG_RL_WHEEL_ONLY
     leg_controller_set_output_options((uint8_t)(1U << GAIT_LEG_RL), 1U, 1U, 1.5f, 0.1f);
     apply_controller_height(&GAIT_PARAMS_STAND_DEFAULT);

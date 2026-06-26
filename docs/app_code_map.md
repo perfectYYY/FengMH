@@ -60,7 +60,12 @@ USB CDC 协议输入和遥测输出。
 
 ### `App/control/src/attitude`
 
-yaw 估计和 yaw 转向控制器。
+姿态估计和 yaw 转向控制器。
+
+- `attitude_estimator.c`：用 BMI088 gyro/accel 更新 yaw、roll、pitch。yaw 仍用于航向闭环，roll/pitch 提供给底盘足端高度补偿。
+- `steer_controller.c`：目标 yaw 到实际 `wz` 的 PID 控制器。
+
+`chassis_control.c` 中的 `g_chassis_attitude_comp` 是姿态补偿调试入口，默认关闭；打开后在 gait 输出到 IK 前给四腿 `foot_z_m` 增加小幅补偿。
 
 ### `App/control/src/gait`
 
