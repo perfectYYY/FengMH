@@ -65,7 +65,7 @@ task_comm 缓存的命令
 `chassis_planner_update()` 将速度命令转换为：
 
 - `moving` 标志
-- trot 步态参数
+- walk/trot 通用步态参数
 - 四个轮子的局部滚动速度目标
 
 当前 yaw 转向使用 2DOF 轮腿可实现的刚体前后速度分量：
@@ -75,6 +75,13 @@ task_comm 缓存的命令
 - `gait_params.leg_step_length_m[i]` 保存每条腿实际步长。
 - `step_length_m` 和 `turn_step_m` 只作为诊断摘要：共同步长均值、右左步长差的一半。
 - 轮毂速度也来自同一个 `v_leg_x / wheel_radius`，用于匹配腿端接触速度。这里不是独立的轮子差速转向控制，而是让支撑轮圆周速度和同一条腿的步态位移保持一致。
+
+当前步频/步幅调度：
+
+- `g_chassis_stride_cfg.enable == 1` 时，planner 会按运动速度同时调度 gait 周期和每腿步长。
+- 低速时保持较稳定的周期，缩小步幅，避免低速命令把步频拖到很低导致明显颠簸。
+- 速度升高时周期从 `slow_period_s` 平滑过渡到 `fast_period_s`，每腿步长仍由局部速度、周期和 duty 计算并受 `max_leg_step_m` 限制。
+- 低速原地/小半径转向仍使用 `g_chassis_turn_cfg` 的转向周期、抬脚高度和支撑占空比。
 
 当前限制：`vy` 会传入 planner，并参与 moving 判断，但 2DOF 腿不能生成真实横向足端轨迹，因此暂不进入运动学控制。
 

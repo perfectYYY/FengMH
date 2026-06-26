@@ -185,6 +185,33 @@ static void test_planner_keeps_vy_as_motion_only(void) {
     }
 }
 
+static void test_planner_schedules_stride_and_period(void) {
+    chassis_plan_t slow;
+    chassis_plan_t fast;
+    chassis_cmd_plan_t cmd = {
+        .vx_m_s = 0.04f,
+        .vy_m_s = 0.0f,
+        .wz_rad_s = 0.0f,
+    };
+
+    g_chassis_stride_cfg.enable = 1U;
+    g_chassis_stride_cfg.slow_period_s = 0.75f;
+    g_chassis_stride_cfg.fast_period_s = 0.45f;
+    g_chassis_stride_cfg.fast_speed_m_s = 0.35f;
+
+    TEST_ASSERT(chassis_planner_update(&cmd, &GAIT_PARAMS_WALK_DEFAULT, &slow) == APP_OK);
+    TEST_ASSERT(slow.moving == 1U);
+    TEST_ASSERT_NEAR(slow.gait_params.period_s, 0.715714f, 1e-5f);
+    TEST_ASSERT(slow.gait_params.step_length_m > 0.0f);
+    TEST_ASSERT(slow.gait_params.step_length_m < GAIT_PARAMS_WALK_DEFAULT.step_length_m);
+
+    cmd.vx_m_s = 0.35f;
+    TEST_ASSERT(chassis_planner_update(&cmd, &GAIT_PARAMS_WALK_DEFAULT, &fast) == APP_OK);
+    TEST_ASSERT(fast.gait_params.period_s <= slow.gait_params.period_s);
+    TEST_ASSERT(fast.gait_params.step_length_m > slow.gait_params.step_length_m);
+    TEST_ASSERT(fast.gait_params.step_length_m <= g_chassis_turn_cfg.max_leg_step_m);
+}
+
 static void test_trot_turn_step_drives_left_right_gait(void) {
     gait_if_t* trot = gait_trot_create();
     gait_output_t out;
@@ -646,6 +673,7 @@ static void test_usb_gait_action_can_start_walk(void) {
 int main(void) {
     test_planner_forward_and_turn();
     test_planner_keeps_vy_as_motion_only();
+    test_planner_schedules_stride_and_period();
     test_trot_turn_step_drives_left_right_gait();
     test_trot_uses_per_leg_step_lengths();
     test_trot_outputs_explicit_foot_target();

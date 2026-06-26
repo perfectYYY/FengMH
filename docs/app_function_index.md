@@ -214,7 +214,13 @@
 - `planner_leg_local_vx()`: 按 `v_leg_x = vx - wz * y_leg` 计算单腿局部前后速度。
 - `planner_apply_turn_gait()`: 覆盖转向场景的 gait 参数。
 - `planner_safe_duty()`: 清理 duty，避免步长/周期计算除以零。
+- `planner_safe_base_step()`: 清理基准步长，防止周期计算使用非法或过小步长。
 - `planner_base_period_for_speed()`: 根据基准步长、速度和 duty 计算 gait 周期。
+- `planner_configured_slow_period()`: 读取低速步态周期配置，非法时使用默认值。
+- `planner_configured_fast_period()`: 读取高速步态周期配置，非法时使用默认值。
+- `planner_configured_fast_speed()`: 读取进入高速周期的速度阈值，非法时使用默认值。
+- `planner_period_from_speed()`: 根据运动速度在低速周期和高速周期之间插值。
+- `planner_apply_stride_schedule()`: 联合调度 gait 周期和步幅，低速缩小步幅并避免步频过低。
 - `planner_step_from_vx()`: 将单腿局部前后速度转换成单腿步长，并应用步长限幅。
 - `planner_mean_step()`: 计算四腿步长均值，写入 `step_length_m` 作为诊断摘要。
 - `planner_right_left_turn_step()`: 计算右侧均值和左侧均值的半差，写入 `turn_step_m` 作为诊断摘要。

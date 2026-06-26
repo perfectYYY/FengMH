@@ -19,6 +19,9 @@
 #define PLANNER_DEFAULT_TURN_STEP_HEIGHT_M 0.04f
 #define PLANNER_DEFAULT_TURN_PERIOD_S   0.60f
 #define PLANNER_DEFAULT_TURN_DUTY       0.75f
+#define PLANNER_DEFAULT_SLOW_PERIOD_S   0.75f
+#define PLANNER_DEFAULT_FAST_PERIOD_S   0.45f
+#define PLANNER_DEFAULT_FAST_SPEED_M_S  0.35f
 
 volatile chassis_turn_cfg_t g_chassis_turn_cfg = {
     .enable_gait_turn = 1U,
@@ -30,6 +33,14 @@ volatile chassis_turn_cfg_t g_chassis_turn_cfg = {
     .turn_step_height_m = PLANNER_DEFAULT_TURN_STEP_HEIGHT_M,
     .turn_period_s = PLANNER_DEFAULT_TURN_PERIOD_S,
     .turn_duty = PLANNER_DEFAULT_TURN_DUTY,
+};
+
+volatile chassis_stride_cfg_t g_chassis_stride_cfg = {
+    .enable = 1U,
+    .reserved = {0U, 0U, 0U},
+    .slow_period_s = PLANNER_DEFAULT_SLOW_PERIOD_S,
+    .fast_period_s = PLANNER_DEFAULT_FAST_PERIOD_S,
+    .fast_speed_m_s = PLANNER_DEFAULT_FAST_SPEED_M_S,
 };
 
 static float clampf_local(float v, float min_v, float max_v) {
@@ -115,13 +126,60 @@ static float planner_safe_duty(float duty) {
     return duty;
 }
 
+static float planner_safe_base_step(const gait_params_t* params) {
+    float base_step = params ? fabsf(params->step_length_m) : 0.0f;
+    if (!isfinite(base_step) || base_step < 1e-4f) base_step = 1e-4f;
+    return clampf_local(base_step, 1e-4f, PLANNER_MAX_STEP_M);
+}
+
 static float planner_base_period_for_speed(const gait_params_t* params, float speed_abs) {
     float duty = planner_safe_duty(params->duty);
-    float base_step = fabsf(params->step_length_m);
-    if (base_step < 1e-4f) base_step = 1e-4f;
-    if (base_step > PLANNER_MAX_STEP_M) base_step = PLANNER_MAX_STEP_M;
+    float base_step = planner_safe_base_step(params);
     if (speed_abs <= PLANNER_MOTION_EPSILON_M_S) return params->period_s;
     return clampf_local(base_step / (speed_abs * duty), PLANNER_MIN_PERIOD_S, PLANNER_MAX_PERIOD_S);
+}
+
+static float planner_configured_slow_period(void) {
+    float period = g_chassis_stride_cfg.slow_period_s;
+    if (!isfinite(period) || period <= 0.0f) period = PLANNER_DEFAULT_SLOW_PERIOD_S;
+    return clampf_local(period, PLANNER_MIN_PERIOD_S, PLANNER_MAX_PERIOD_S);
+}
+
+static float planner_configured_fast_period(void) {
+    float period = g_chassis_stride_cfg.fast_period_s;
+    if (!isfinite(period) || period <= 0.0f) period = PLANNER_DEFAULT_FAST_PERIOD_S;
+    return clampf_local(period, PLANNER_MIN_PERIOD_S, PLANNER_MAX_PERIOD_S);
+}
+
+static float planner_configured_fast_speed(void) {
+    float speed = g_chassis_stride_cfg.fast_speed_m_s;
+    if (!isfinite(speed) || speed <= PLANNER_MOTION_EPSILON_M_S) {
+        speed = PLANNER_DEFAULT_FAST_SPEED_M_S;
+    }
+    return speed;
+}
+
+static float planner_period_from_speed(float speed_abs) {
+    float slow_period = planner_configured_slow_period();
+    float fast_period = planner_configured_fast_period();
+    float fast_speed = planner_configured_fast_speed();
+    float t = clampf_local(speed_abs / fast_speed, 0.0f, 1.0f);
+    return slow_period + (fast_period - slow_period) * t;
+}
+
+static void planner_apply_stride_schedule(gait_params_t* params, float motion_speed) {
+    if (!params || !g_chassis_stride_cfg.enable) return;
+    if (motion_speed <= PLANNER_MOTION_EPSILON_M_S) return;
+
+    float scheduled_period = planner_period_from_speed(motion_speed);
+    float legacy_period = planner_base_period_for_speed(params, motion_speed);
+
+    /*
+     * The scheduled period prevents slow commands from creating a very low
+     * cadence, while legacy_period still protects against over-long steps at
+     * higher speeds or unusually small base step settings.
+     */
+    params->period_s = fminf(scheduled_period, legacy_period);
 }
 
 static float planner_step_from_vx(float local_vx, float period_s, float duty) {
@@ -182,7 +240,11 @@ app_err_t chassis_planner_update(const chassis_cmd_plan_t* cmd,
     if (low_speed_turn) {
         planner_apply_turn_gait(&out->gait_params);
     } else if (motion_speed > PLANNER_MOTION_EPSILON_M_S) {
-        out->gait_params.period_s = planner_base_period_for_speed(&out->gait_params, motion_speed);
+        if (g_chassis_stride_cfg.enable) {
+            planner_apply_stride_schedule(&out->gait_params, motion_speed);
+        } else {
+            out->gait_params.period_s = planner_base_period_for_speed(&out->gait_params, motion_speed);
+        }
     } else {
         out->gait_params.step_length_m = 0.0f;
     }
