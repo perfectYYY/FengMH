@@ -31,6 +31,8 @@
 
 static const char* TAG = "CHASSIS";
 
+#define STAND_RISE_START_HEIGHT_M 0.12f
+#define STAND_HEIGHT_RATE_MPS     0.025f
 #define ATTITUDE_COMP_DEFAULT_HALF_LENGTH_M 0.15f
 #define ATTITUDE_COMP_DEFAULT_HALF_TRACK_M  0.15f
 #define ATTITUDE_COMP_DEFAULT_LIMIT_M       0.025f
@@ -56,6 +58,9 @@ static gait_params_t  s_trot_params;
 static gait_params_t  s_walk_params;
 static uint8_t        s_manual_gait_hold = 0U;
 static float          s_last_effective_wz = 0.0f;
+static float          s_target_stand_height_m = 0.20f;
+static float          s_current_stand_height_m = STAND_RISE_START_HEIGHT_M;
+static uint8_t        s_boot_stand_done = 0U;
 
 static uint8_t  s_offline_seq_active = 0U;
 static uint8_t  s_offline_seq_done = 0U;
@@ -85,16 +90,50 @@ static float controller_height_from_body(float body_height_m) {
     return (body_height_m > 0.0f) ? -body_height_m : body_height_m;
 }
 
-/* Keep leg_controller's IK height synchronized with the gait currently being requested. */
-static void apply_controller_height(const gait_params_t* params) {
-    if (!params) return;
-    leg_controller_set_stand_height(controller_height_from_body(params->body_height_m));
+static float valid_body_height_or_default(float body_height_m) {
+    if (!isfinite(body_height_m) || body_height_m == 0.0f) {
+        return 0.18f;
+    }
+    return fabsf(body_height_m);
+}
+
+static float ramp_step(float current, float target, float max_delta) {
+    float err = target - current;
+    if (fabsf(err) <= max_delta) return target;
+    return current + ((err > 0.0f) ? max_delta : -max_delta);
 }
 
 static float chassis_clampf(float v, float min_v, float max_v) {
     if (v < min_v) return min_v;
     if (v > max_v) return max_v;
     return v;
+}
+
+static void set_leg_controller_height(float body_height_m) {
+    leg_controller_set_stand_height(controller_height_from_body(body_height_m));
+}
+
+/* Record the requested body height; the per-tick ramp applies it smoothly. */
+static void apply_controller_height(const gait_params_t* params) {
+    if (!params) return;
+    s_target_stand_height_m = valid_body_height_or_default(params->body_height_m);
+}
+
+static void reset_stand_height_ramp(const gait_params_t* params) {
+    float target = params ? valid_body_height_or_default(params->body_height_m) : 0.18f;
+    s_target_stand_height_m = target;
+    s_current_stand_height_m = fminf(STAND_RISE_START_HEIGHT_M, target);
+    set_leg_controller_height(s_current_stand_height_m);
+}
+
+static void update_stand_height_ramp(float dt_s) {
+    if (!isfinite(dt_s) || dt_s < 0.0f) dt_s = 0.0f;
+    if (dt_s > 0.02f) dt_s = 0.02f;
+
+    s_current_stand_height_m = ramp_step(s_current_stand_height_m,
+                                         s_target_stand_height_m,
+                                         STAND_HEIGHT_RATE_MPS * dt_s);
+    set_leg_controller_height(s_current_stand_height_m);
 }
 
 /* Validate host-provided gait parameters before they enter the gait machine. */
@@ -479,6 +518,28 @@ static void apply_gait_output_to_motors(uint8_t online, float dt_s) {
     leg_controller_apply_dt(&s_leg_controller, &gait_output, dt_s);
 }
 
+static uint8_t update_boot_stand(float dt_s) {
+    if (s_boot_stand_done) return 1U;
+
+    s_active = ACTIVE_STAND;
+    s_last_online = 0U;
+    s_last_effective_wz = 0.0f;
+    memset(&s_chassis_plan, 0, sizeof(s_chassis_plan));
+    s_chassis_plan.gait_params = GAIT_PARAMS_STAND_DEFAULT;
+
+    (void)request_gait(s_stand_gait, &GAIT_PARAMS_STAND_DEFAULT, 0.0f);
+    apply_controller_height(&GAIT_PARAMS_STAND_DEFAULT);
+    update_stand_height_ramp(dt_s);
+    apply_gait_output_to_motors(0U, dt_s);
+    flush_motor_outputs();
+
+    if (fabsf(s_current_stand_height_m - s_target_stand_height_m) < 1e-4f) {
+        s_boot_stand_done = 1U;
+        LOGI("boot stand-up done: height=%.3fm", (double)s_current_stand_height_m);
+    }
+    return 0U;
+}
+
 void chassis_control_init(void) {
     s_stand_gait  = gait_stand_create();
     s_trot_gait   = gait_trot_create();
@@ -501,18 +562,18 @@ void chassis_control_init(void) {
     g_chassis_attitude_comp.max_foot_z_m = ATTITUDE_COMP_DEFAULT_LIMIT_M;
 #if APP_DEBUG_RL_WHEEL_ONLY
     leg_controller_set_output_options((uint8_t)(1U << GAIT_LEG_RL), 1U, 1U, 1.5f, 0.1f);
-    apply_controller_height(&GAIT_PARAMS_STAND_DEFAULT);
     LOGW("debug mode: RL single-leg closed loop; stand locks wheel, vx/wz drives online gait + wheel");
 #else
     leg_controller_set_output_options(0x0Fu, 1U, 1U, 1.5f, 0.1f);
-    apply_controller_height(&GAIT_PARAMS_STAND_DEFAULT);
 #endif
+    reset_stand_height_ramp(&GAIT_PARAMS_STAND_DEFAULT);
 
     s_mode = CHASSIS_MODE_AUTO;
     s_active = ACTIVE_STAND;
     s_online_timeout_ms = 500U;
     s_manual_gait_hold = 0U;
     s_last_effective_wz = 0.0f;
+    s_boot_stand_done = 0U;
 
     attitude_estimator_init();
     steer_controller_init();
@@ -539,6 +600,10 @@ void chassis_control_tick(const chassis_control_input_t* input,
         return;
     }
 
+    if (!update_boot_stand(dt_s)) {
+        return;
+    }
+
     safe_input = safe_input_or_zero(input);
 
     update_steering(dt_s, &safe_input.command, &effective_wz);
@@ -548,12 +613,14 @@ void chassis_control_tick(const chassis_control_input_t* input,
     uint8_t online = update_online_state(&safe_input, now_ms);
 
 #if APP_DEBUG_RL_WHEEL_ONLY
+    update_stand_height_ramp(dt_s);
     apply_rl_single_leg_debug(online, &s_chassis_plan, dt_s);
     flush_motor_outputs();
     return;
 #endif
 
     decide_gait_for_link_state(online, now_ms);
+    update_stand_height_ramp(dt_s);
     apply_gait_output_to_motors(online, dt_s);
     flush_motor_outputs();
 }
@@ -694,6 +761,7 @@ void chassis_control_get_status(chassis_control_status_t* out) {
     out->online = s_last_online;
     out->moving = s_chassis_plan.moving;
     out->effective_wz_rad_s = s_last_effective_wz;
+    out->stand_height_m = s_current_stand_height_m;
     out->gait_params = s_chassis_plan.gait_params;
     for (int i = 0; i < GAIT_LEG_NUM; i++) {
         out->wheel_rads[i] = s_chassis_plan.wheel_rads[i];

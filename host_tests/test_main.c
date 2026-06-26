@@ -492,6 +492,36 @@ static void test_chassis_control_end_to_end(void) {
     assert_wheel_mit_gains_active();
 }
 
+static void test_chassis_control_ramps_stand_height(void) {
+    chassis_control_input_t input;
+    chassis_control_status_t status;
+    memset(&input, 0, sizeof(input));
+
+    log_init();
+    bind_stub_motors();
+    chassis_control_init();
+    chassis_control_set_mode(CHASSIS_MODE_ONLINE);
+
+    input.valid_frame_count = 1U;
+    input.last_rx_ms = 0U;
+
+    chassis_control_tick(&input, 0.002f, 0U);
+    chassis_control_get_status(&status);
+    TEST_ASSERT(status.stand_height_m > 0.12f);
+    TEST_ASSERT(status.stand_height_m < GAIT_PARAMS_STAND_DEFAULT.body_height_m);
+    TEST_ASSERT(status.moving == 0U);
+    TEST_ASSERT(status.active_gait == CHASSIS_GAIT_STAND);
+
+    for (uint32_t tick = 1U; tick < 2200U; tick++) {
+        chassis_control_tick(&input, 0.002f, tick * 2U);
+    }
+
+    chassis_control_get_status(&status);
+    TEST_ASSERT_NEAR(status.stand_height_m,
+                     GAIT_PARAMS_STAND_DEFAULT.body_height_m,
+                     1e-5f);
+}
+
 static void test_attitude_comp_applies_leg_height_offsets(void) {
     chassis_control_input_t input;
     imu_bmi088_data_t imu;
@@ -625,6 +655,7 @@ int main(void) {
     test_gravity_comp_disabled_keeps_zero_tau_ff();
     test_gravity_comp_enabled_sends_joint_tau_ff();
     test_chassis_control_end_to_end();
+    test_chassis_control_ramps_stand_height();
     test_attitude_comp_applies_leg_height_offsets();
     test_usb_protocol_to_chassis_task_end_to_end();
     test_usb_gait_action_can_start_walk();

@@ -39,6 +39,7 @@ typedef struct {
     uint8_t online;
     uint8_t moving;
     float effective_wz_rad_s;
+    float stand_height_m;
     float wheel_rads[GAIT_LEG_NUM];
     gait_params_t gait_params;
 } chassis_control_status_t;
