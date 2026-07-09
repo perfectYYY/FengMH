@@ -2,6 +2,7 @@
 Debug/
 Release/
 build/
+build-*/
 cmake-build-*/
 
 # IDE and editor files
@@ -43,3 +44,4 @@ __pycache__/
 build_host/
 build_host_tests/
 build_arm/
+host_tests/build-*/

@@ -62,6 +62,7 @@ set(APP_INCLUDE_DIRS
         bsp/include
         device/include
         control/include
+        control/include/arm
         control/include/attitude
         control/include/chassis
         control/include/gait
@@ -78,6 +79,7 @@ set(APP_SOURCE_DIRS
         common/src
         bsp/src
         device/src
+        control/src/arm
         control/src/attitude
         control/src/chassis
         control/src/gait

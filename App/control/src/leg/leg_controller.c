@@ -2,6 +2,7 @@
  * leg_controller.c
  */
 #include "leg_controller.h"
+#include "config.h"
 #include "leg_ik.h"
 #include "leg_params.h"
 #include "motor_m3508.h"
@@ -15,6 +16,15 @@ static const motor_logical_id_t HIP[GAIT_LEG_NUM]   = { MOTOR_ID_FL_HIP, MOTOR_I
 static const motor_logical_id_t KNEE[GAIT_LEG_NUM]  = { MOTOR_ID_FL_KNEE,MOTOR_ID_FR_KNEE,MOTOR_ID_RL_KNEE,MOTOR_ID_RR_KNEE };
 static const motor_logical_id_t WHEEL[GAIT_LEG_NUM] = { MOTOR_ID_FL_WHEEL,MOTOR_ID_FR_WHEEL,MOTOR_ID_RL_WHEEL,MOTOR_ID_RR_WHEEL };
 
+#define LEG_PAYLOAD_DEFAULT_HALF_LENGTH_M 0.25f
+#define LEG_PAYLOAD_DEFAULT_HALF_TRACK_M  0.15f
+#define LEG_PAYLOAD_EPS                   1e-6f
+#define LEG_WHEEL_MIT_DEFAULT_KP          20.0f
+#define LEG_WHEEL_MIT_DEFAULT_KD          0.6f
+#define LEG_WHEEL_MIT_DEFAULT_TAU_LIMIT_NM M3508_MIT_TAU_MAX_NM
+#define LEG_WHEEL_MIT_DEFAULT_STANCE_FF_N 1.0f
+#define LEG_WHEEL_MIT_FF_DEADBAND_RADS    0.05f
+
 /* IK z 偏置沿用老工程语义：足端在髋关节下方时 z 为负。 */
 static float s_stand_height = -0.18f;
 static uint8_t s_leg_mask = 0x0Fu;
@@ -25,6 +35,10 @@ static float s_joint_kd = 0.1f;
 volatile leg_wheel_mit_debug_t g_leg_wheel_mit;
 volatile leg_gravity_comp_debug_t g_leg_gravity_comp;
 
+static float wheel_mit_default_stance_tau_ff_nm(void) {
+    return LEG_WHEEL_MIT_DEFAULT_STANCE_FF_N * LEG_DIM_DEFAULT.wheel_diameter * 0.5f;
+}
+
 void leg_controller_init(leg_controller_t* lc) {
     if (!lc) return;
     memset(lc, 0, sizeof(*lc));
@@ -32,14 +46,33 @@ void leg_controller_init(leg_controller_t* lc) {
     memset((void*)&g_leg_gravity_comp, 0, sizeof(g_leg_gravity_comp));
     g_leg_wheel_mit.enable = 1U;
     g_leg_wheel_mit.hold_swing = 1U;
-    g_leg_wheel_mit.kp = 20.0f;
-    g_leg_wheel_mit.kd = 0.6f;
-    g_leg_wheel_mit.tau_limit_nm = M3508_MIT_TAU_MAX_NM;
+    g_leg_wheel_mit.kp = LEG_WHEEL_MIT_DEFAULT_KP;
+    g_leg_wheel_mit.kd = LEG_WHEEL_MIT_DEFAULT_KD;
+    g_leg_wheel_mit.tau_limit_nm = LEG_WHEEL_MIT_DEFAULT_TAU_LIMIT_NM;
     g_leg_wheel_mit.pos_err_limit_rad = M3508_MIT_POS_ERR_MAX_RAD;
-    g_leg_gravity_comp.compensate_leg_mass = 1U;
-    g_leg_gravity_comp.compensate_payload = 1U;
+    g_leg_wheel_mit.stance_tau_ff_nm = wheel_mit_default_stance_tau_ff_nm();
+    g_leg_gravity_comp.enable = 0U;
+    g_leg_gravity_comp.compensate_leg_mass = 0U;
+    g_leg_gravity_comp.compensate_payload = 0U;
+    g_leg_gravity_comp.use_payload_com = 0U;
+    g_leg_gravity_comp.compensate_balance = 0U;
+    g_leg_gravity_comp.payload_active_mask = 0U;
+    g_leg_gravity_comp.balance_active_mask = 0U;
     g_leg_gravity_comp.scale = 1.0f;
     g_leg_gravity_comp.payload_mass_kg = 0.0f;
+    g_leg_gravity_comp.payload_com_x_m = 0.0f;
+    g_leg_gravity_comp.payload_com_y_m = 0.0f;
+    g_leg_gravity_comp.support_half_length_m = LEG_PAYLOAD_DEFAULT_HALF_LENGTH_M;
+    g_leg_gravity_comp.support_half_track_m = LEG_PAYLOAD_DEFAULT_HALF_TRACK_M;
+    g_leg_gravity_comp.max_leg_payload_kg = 0.0f;
+    g_leg_gravity_comp.payload_applied_mass_kg = 0.0f;
+    g_leg_gravity_comp.balance_fz_n = 0.0f;
+    g_leg_gravity_comp.balance_mx_nm = 0.0f;
+    g_leg_gravity_comp.balance_my_nm = 0.0f;
+    g_leg_gravity_comp.max_balance_leg_force_n = 0.0f;
+    g_leg_gravity_comp.balance_applied_fz_n = 0.0f;
+    g_leg_gravity_comp.balance_applied_mx_nm = 0.0f;
+    g_leg_gravity_comp.balance_applied_my_nm = 0.0f;
     g_leg_gravity_comp.max_tau_nm = 3.0f;
 }
 
@@ -90,10 +123,11 @@ static int try_set_wheel_mit(motor_dev_t* d,
                              float vel,
                              float kp,
                              float kd,
+                             float tau_ff,
                              float tau_limit,
                              float pos_err_limit) {
     if (!d || !d->ops || !d->ops->set_position) return APP_ERR_UNSUPPORTED;
-    int ret = d->ops->set_position(d, pos, vel, kp, kd, 0.0f);
+    int ret = d->ops->set_position(d, pos, vel, kp, kd, tau_ff);
     if (ret == APP_OK) {
         (void)motor_m3508_set_mit_limits(d, tau_limit, pos_err_limit);
     }
@@ -113,17 +147,26 @@ typedef struct {
     float kd;
     float tau_limit_nm;
     float pos_err_limit_rad;
+    float stance_tau_ff_nm;
 } wheel_mit_cfg_t;
 
 static wheel_mit_cfg_t wheel_mit_read_cfg(const volatile leg_wheel_mit_debug_t* dbg) {
     wheel_mit_cfg_t cfg;
-    cfg.kp = isfinite(dbg->kp) && dbg->kp > 0.0f ? dbg->kp : 20.0f;
-    cfg.kd = isfinite(dbg->kd) && dbg->kd >= 0.0f ? dbg->kd : 0.6f;
+    cfg.kp = isfinite(dbg->kp) && dbg->kp > 0.0f
+           ? dbg->kp : LEG_WHEEL_MIT_DEFAULT_KP;
+    cfg.kd = isfinite(dbg->kd) && dbg->kd >= 0.0f
+           ? dbg->kd : LEG_WHEEL_MIT_DEFAULT_KD;
     cfg.tau_limit_nm = isfinite(dbg->tau_limit_nm) && dbg->tau_limit_nm > 0.0f
-                     ? dbg->tau_limit_nm : M3508_MIT_TAU_MAX_NM;
+                     ? dbg->tau_limit_nm : LEG_WHEEL_MIT_DEFAULT_TAU_LIMIT_NM;
     cfg.pos_err_limit_rad = isfinite(dbg->pos_err_limit_rad) &&
                             dbg->pos_err_limit_rad > 0.0f
                           ? dbg->pos_err_limit_rad : M3508_MIT_POS_ERR_MAX_RAD;
+    cfg.stance_tau_ff_nm = isfinite(dbg->stance_tau_ff_nm)
+                         ? fabsf(dbg->stance_tau_ff_nm)
+                         : wheel_mit_default_stance_tau_ff_nm();
+    if (cfg.stance_tau_ff_nm > cfg.tau_limit_nm) {
+        cfg.stance_tau_ff_nm = cfg.tau_limit_nm;
+    }
     return cfg;
 }
 
@@ -145,6 +188,7 @@ static void wheel_mit_latch_ref_if_needed(volatile leg_wheel_mit_debug_t* dbg,
 static int wheel_mit_command(motor_dev_t* wheel,
                              int leg_idx,
                              float wheel_rads,
+                             float tau_ff_nm,
                              const wheel_mit_cfg_t* cfg) {
     volatile leg_wheel_mit_debug_t* dbg = &g_leg_wheel_mit;
     return try_set_wheel_mit(wheel,
@@ -152,6 +196,7 @@ static int wheel_mit_command(motor_dev_t* wheel,
                              wheel_rads,
                              cfg->kp,
                              cfg->kd,
+                             tau_ff_nm,
                              cfg->tau_limit_nm,
                              cfg->pos_err_limit_rad);
 }
@@ -164,7 +209,11 @@ static int wheel_mit_apply_stance(motor_dev_t* wheel,
     volatile leg_wheel_mit_debug_t* dbg = &g_leg_wheel_mit;
     dbg->theta_ref_rad[leg_idx] += t->wheel_rads * dt_s;
     dbg->active_mask |= (uint8_t)(1U << leg_idx);
-    return wheel_mit_command(wheel, leg_idx, t->wheel_rads, cfg);
+    float tau_ff = 0.0f;
+    if (fabsf(t->wheel_rads) > LEG_WHEEL_MIT_FF_DEADBAND_RADS) {
+        tau_ff = copysignf(cfg->stance_tau_ff_nm, t->wheel_rads);
+    }
+    return wheel_mit_command(wheel, leg_idx, t->wheel_rads, tau_ff, cfg);
 }
 
 static int wheel_mit_apply_swing(motor_dev_t* wheel,
@@ -174,7 +223,7 @@ static int wheel_mit_apply_swing(motor_dev_t* wheel,
     dbg->theta_ref_rad[leg_idx] = wheel->state.angle_rad;
     dbg->active_mask &= (uint8_t)~(1U << leg_idx);
     dbg->hold_swing = 1U;
-    return wheel_mit_command(wheel, leg_idx, 0.0f, cfg);
+    return wheel_mit_command(wheel, leg_idx, 0.0f, 0.0f, cfg);
 }
 
 static int try_set_wheel(motor_dev_t* wheel,
@@ -238,27 +287,269 @@ static float gravity_comp_scale(void) {
     return isfinite(scale) ? scale : 0.0f;
 }
 
-static float gravity_comp_payload_share(uint8_t in_stance, uint32_t stance_count) {
-    if (!g_leg_gravity_comp.compensate_payload || !in_stance || stance_count == 0U) {
-        return 0.0f;
+static float gravity_comp_valid_positive_or_default(float value, float fallback) {
+    return (isfinite(value) && value > 0.0f) ? value : fallback;
+}
+
+static float gravity_comp_leg_x_m(int leg_idx) {
+    float half_length = gravity_comp_valid_positive_or_default(
+        g_leg_gravity_comp.support_half_length_m,
+        LEG_PAYLOAD_DEFAULT_HALF_LENGTH_M);
+    return (leg_idx == GAIT_LEG_FL || leg_idx == GAIT_LEG_FR) ? half_length : -half_length;
+}
+
+static float gravity_comp_leg_y_m(int leg_idx) {
+    float half_track = gravity_comp_valid_positive_or_default(
+        g_leg_gravity_comp.support_half_track_m,
+        LEG_PAYLOAD_DEFAULT_HALF_TRACK_M);
+    return (leg_idx == GAIT_LEG_FL || leg_idx == GAIT_LEG_RL) ? half_track : -half_track;
+}
+
+static void gravity_comp_clear_payload_debug(void) {
+    g_leg_gravity_comp.payload_active_mask = 0U;
+    g_leg_gravity_comp.payload_applied_mass_kg = 0.0f;
+    for (int i = 0; i < GAIT_LEG_NUM; i++) {
+        g_leg_gravity_comp.payload_leg_mass_kg[i] = 0.0f;
+    }
+}
+
+static void gravity_comp_clear_balance_debug(void) {
+    g_leg_gravity_comp.balance_active_mask = 0U;
+    g_leg_gravity_comp.balance_applied_fz_n = 0.0f;
+    g_leg_gravity_comp.balance_applied_mx_nm = 0.0f;
+    g_leg_gravity_comp.balance_applied_my_nm = 0.0f;
+    for (int i = 0; i < GAIT_LEG_NUM; i++) {
+        g_leg_gravity_comp.balance_leg_force_n[i] = 0.0f;
+    }
+}
+
+static void gravity_comp_store_payload_shares(const float share_kg[GAIT_LEG_NUM],
+                                              uint8_t active_mask) {
+    float applied_mass = 0.0f;
+    float max_leg_payload = g_leg_gravity_comp.max_leg_payload_kg;
+    uint8_t use_leg_limit =
+        (isfinite(max_leg_payload) && max_leg_payload > 0.0f) ? 1U : 0U;
+
+    g_leg_gravity_comp.payload_active_mask = active_mask;
+    for (int i = 0; i < GAIT_LEG_NUM; i++) {
+        float share = share_kg ? share_kg[i] : 0.0f;
+        if (!isfinite(share) || share < 0.0f) share = 0.0f;
+        if (use_leg_limit) {
+            share = leg_clampf(share, 0.0f, max_leg_payload);
+        }
+        g_leg_gravity_comp.payload_leg_mass_kg[i] = share;
+        applied_mass += share;
+    }
+    g_leg_gravity_comp.payload_applied_mass_kg = applied_mass;
+}
+
+static void gravity_comp_prepare_equal_payload(const gait_output_t* target,
+                                               uint32_t stance_count,
+                                               float payload_mass_kg) {
+    float share_kg[GAIT_LEG_NUM] = {0};
+    uint8_t active_mask = 0U;
+    float per_leg = payload_mass_kg / (float)stance_count;
+
+    for (int i = 0; i < GAIT_LEG_NUM; i++) {
+        if (!target->leg[i].in_stance) continue;
+        share_kg[i] = per_leg;
+        active_mask |= (uint8_t)(1U << i);
+    }
+    gravity_comp_store_payload_shares(share_kg, active_mask);
+}
+
+static void gravity_comp_prepare_com_payload(const gait_output_t* target,
+                                             uint32_t stance_count,
+                                             float payload_mass_kg) {
+    float raw_kg[GAIT_LEG_NUM] = {0};
+    float share_kg[GAIT_LEG_NUM] = {0};
+    uint8_t active_mask = 0U;
+    float sum_x2 = 0.0f;
+    float sum_y2 = 0.0f;
+    float raw_sum = 0.0f;
+    float com_x = g_leg_gravity_comp.payload_com_x_m;
+    float com_y = g_leg_gravity_comp.payload_com_y_m;
+
+    if (!isfinite(com_x)) com_x = 0.0f;
+    if (!isfinite(com_y)) com_y = 0.0f;
+
+    for (int i = 0; i < GAIT_LEG_NUM; i++) {
+        if (!target->leg[i].in_stance) continue;
+        float x = gravity_comp_leg_x_m(i);
+        float y = gravity_comp_leg_y_m(i);
+        sum_x2 += x * x;
+        sum_y2 += y * y;
+        active_mask |= (uint8_t)(1U << i);
+    }
+
+    for (int i = 0; i < GAIT_LEG_NUM; i++) {
+        if (!target->leg[i].in_stance) continue;
+        float x = gravity_comp_leg_x_m(i);
+        float y = gravity_comp_leg_y_m(i);
+        float share = payload_mass_kg / (float)stance_count;
+
+        if (sum_x2 > LEG_PAYLOAD_EPS) {
+            share += payload_mass_kg * com_x * x / sum_x2;
+        }
+        if (sum_y2 > LEG_PAYLOAD_EPS) {
+            share += payload_mass_kg * com_y * y / sum_y2;
+        }
+
+        raw_kg[i] = (share > 0.0f && isfinite(share)) ? share : 0.0f;
+        raw_sum += raw_kg[i];
+    }
+
+    if (raw_sum <= LEG_PAYLOAD_EPS) {
+        gravity_comp_prepare_equal_payload(target, stance_count, payload_mass_kg);
+        return;
+    }
+
+    float normalize = payload_mass_kg / raw_sum;
+    for (int i = 0; i < GAIT_LEG_NUM; i++) {
+        share_kg[i] = raw_kg[i] * normalize;
+    }
+    gravity_comp_store_payload_shares(share_kg, active_mask);
+}
+
+static void gravity_comp_prepare_payload_shares(const gait_output_t* target,
+                                                uint32_t stance_count) {
+    gravity_comp_clear_payload_debug();
+
+    if (!g_leg_gravity_comp.compensate_payload || !target || stance_count == 0U) {
+        return;
     }
 
     float payload_mass = g_leg_gravity_comp.payload_mass_kg;
-    if (!isfinite(payload_mass) || payload_mass <= 0.0f) return 0.0f;
-    return payload_mass / (float)stance_count;
+    if (!isfinite(payload_mass) || payload_mass <= 0.0f) {
+        return;
+    }
+
+    if (g_leg_gravity_comp.use_payload_com) {
+        gravity_comp_prepare_com_payload(target, stance_count, payload_mass);
+    } else {
+        gravity_comp_prepare_equal_payload(target, stance_count, payload_mass);
+    }
+}
+
+static float gravity_comp_limited_balance_force(float fz_n) {
+    float limit = g_leg_gravity_comp.max_balance_leg_force_n;
+    if (!isfinite(fz_n)) return 0.0f;
+    if (!isfinite(limit) || limit <= 0.0f) return fz_n;
+    return leg_clampf(fz_n, -limit, limit);
+}
+
+static void gravity_comp_store_balance_forces(const gait_output_t* target,
+                                              const float force_n[GAIT_LEG_NUM],
+                                              uint8_t active_mask) {
+    float applied_fz = 0.0f;
+    float applied_mx = 0.0f;
+    float applied_my = 0.0f;
+
+    g_leg_gravity_comp.balance_active_mask = active_mask;
+    for (int i = 0; i < GAIT_LEG_NUM; i++) {
+        float force = force_n ? force_n[i] : 0.0f;
+        force = gravity_comp_limited_balance_force(force);
+        g_leg_gravity_comp.balance_leg_force_n[i] = force;
+        if (!target || !target->leg[i].in_stance) continue;
+
+        float x = gravity_comp_leg_x_m(i);
+        float y = gravity_comp_leg_y_m(i);
+        applied_fz += force;
+        applied_mx += y * force;
+        applied_my += -x * force;
+    }
+
+    g_leg_gravity_comp.balance_applied_fz_n = applied_fz;
+    g_leg_gravity_comp.balance_applied_mx_nm = applied_mx;
+    g_leg_gravity_comp.balance_applied_my_nm = applied_my;
+}
+
+static void gravity_comp_prepare_balance_forces(const gait_output_t* target,
+                                                uint32_t stance_count) {
+    float force_n[GAIT_LEG_NUM] = {0};
+    uint8_t active_mask = 0U;
+    float sum_x2 = 0.0f;
+    float sum_y2 = 0.0f;
+    float fz = g_leg_gravity_comp.balance_fz_n;
+    float mx = g_leg_gravity_comp.balance_mx_nm;
+    float my = g_leg_gravity_comp.balance_my_nm;
+
+    gravity_comp_clear_balance_debug();
+
+    if (!g_leg_gravity_comp.compensate_balance || !target || stance_count == 0U) {
+        return;
+    }
+
+    if (!isfinite(fz)) fz = 0.0f;
+    if (!isfinite(mx)) mx = 0.0f;
+    if (!isfinite(my)) my = 0.0f;
+
+    for (int i = 0; i < GAIT_LEG_NUM; i++) {
+        if (!target->leg[i].in_stance) continue;
+        float x = gravity_comp_leg_x_m(i);
+        float y = gravity_comp_leg_y_m(i);
+        sum_x2 += x * x;
+        sum_y2 += y * y;
+        active_mask |= (uint8_t)(1U << i);
+    }
+
+    for (int i = 0; i < GAIT_LEG_NUM; i++) {
+        if (!target->leg[i].in_stance) continue;
+        float x = gravity_comp_leg_x_m(i);
+        float y = gravity_comp_leg_y_m(i);
+        float force = fz / (float)stance_count;
+
+        if (sum_y2 > LEG_PAYLOAD_EPS) {
+            force += mx * y / sum_y2;
+        }
+        if (sum_x2 > LEG_PAYLOAD_EPS) {
+            force += -my * x / sum_x2;
+        }
+        force_n[i] = force;
+    }
+
+    gravity_comp_store_balance_forces(target, force_n, active_mask);
+}
+
+static float gravity_comp_payload_share(int leg_idx, uint8_t in_stance) {
+    if (!g_leg_gravity_comp.compensate_payload || !in_stance ||
+        leg_idx < 0 || leg_idx >= GAIT_LEG_NUM) {
+        return 0.0f;
+    }
+
+    float share = g_leg_gravity_comp.payload_leg_mass_kg[leg_idx];
+    return (isfinite(share) && share > 0.0f) ? share : 0.0f;
+}
+
+static float gravity_comp_balance_force(int leg_idx, uint8_t in_stance) {
+    if (!g_leg_gravity_comp.compensate_balance || !in_stance ||
+        leg_idx < 0 || leg_idx >= GAIT_LEG_NUM) {
+        return 0.0f;
+    }
+
+    float force = g_leg_gravity_comp.balance_leg_force_n[leg_idx];
+    return isfinite(force) ? force : 0.0f;
 }
 
 static void gravity_comp_compute(int leg_idx,
                                  const gait_leg_target_t* target,
-                                 uint32_t stance_count,
                                  float* hip_tau_nm,
                                  float* knee_tau_nm) {
+    if (!target || !hip_tau_nm || !knee_tau_nm) return;
+
+#if !APP_LEG_TAU_FF_COMP_ENABLE
+    g_leg_gravity_comp.hip_tau_ff_nm[leg_idx] = 0.0f;
+    g_leg_gravity_comp.knee_tau_ff_nm[leg_idx] = 0.0f;
+    *hip_tau_nm = 0.0f;
+    *knee_tau_nm = 0.0f;
+    return;
+#endif
+
     const leg_dim_t* dim = &LEG_DIM_DEFAULT;
     float hip_tau = 0.0f;
     float knee_tau = 0.0f;
     float payload_share_kg;
-
-    if (!target || !hip_tau_nm || !knee_tau_nm) return;
+    float vertical_force_n = 0.0f;
 
     if (g_leg_gravity_comp.compensate_leg_mass) {
         hip_tau += dim->g *
@@ -273,10 +564,15 @@ static void gravity_comp_compute(int leg_idx,
                     cosf(target->knee_rad);
     }
 
-    payload_share_kg = gravity_comp_payload_share(target->in_stance, stance_count);
+    payload_share_kg = gravity_comp_payload_share(leg_idx, target->in_stance);
     if (payload_share_kg > 0.0f) {
-        hip_tau += payload_share_kg * dim->g * dim->thigh_length * cosf(target->hip_rad);
-        knee_tau += payload_share_kg * dim->g * dim->shin_length * cosf(target->knee_rad);
+        vertical_force_n += payload_share_kg * dim->g;
+    }
+    vertical_force_n += gravity_comp_balance_force(leg_idx, target->in_stance);
+
+    if (fabsf(vertical_force_n) > 1e-6f) {
+        hip_tau += vertical_force_n * dim->thigh_length * cosf(target->hip_rad);
+        knee_tau += vertical_force_n * dim->shin_length * cosf(target->knee_rad);
     }
 
     hip_tau = gravity_comp_limit(hip_tau * gravity_comp_scale());
@@ -296,13 +592,12 @@ static void gravity_comp_compute(int leg_idx,
 
 static void send_joint_targets(const leg_actuators_t* leg,
                                const gait_leg_target_t* target,
-                               int leg_idx,
-                               uint32_t stance_count) {
+                               int leg_idx) {
     if (!s_enable_joints) return;
 
     float hip_tau = 0.0f;
     float knee_tau = 0.0f;
-    gravity_comp_compute(leg_idx, target, stance_count, &hip_tau, &knee_tau);
+    gravity_comp_compute(leg_idx, target, &hip_tau, &knee_tau);
 
     try_set_pos(leg->hip, target->hip_rad, hip_tau);
     try_set_pos(leg->knee, target->knee_rad, knee_tau);
@@ -319,9 +614,8 @@ static void send_wheel_target(const leg_actuators_t* leg,
 static void send_leg_targets(const leg_actuators_t* leg,
                              const gait_leg_target_t* target,
                              int leg_idx,
-                             float dt_s,
-                             uint32_t stance_count) {
-    send_joint_targets(leg, target, leg_idx, stance_count);
+                             float dt_s) {
+    send_joint_targets(leg, target, leg_idx);
     send_wheel_target(leg, target, leg_idx, dt_s);
 }
 
@@ -332,6 +626,8 @@ app_err_t leg_controller_apply_dt(leg_controller_t* lc, const gait_output_t* o, 
     gait_output_t ik_out;
     leg_ik_solve_all(o, &LEG_DIM_DEFAULT, s_stand_height, &ik_out);
     uint32_t stance_count = count_stance_legs(&ik_out);
+    gravity_comp_prepare_payload_shares(&ik_out, stance_count);
+    gravity_comp_prepare_balance_forces(&ik_out, stance_count);
 
     for (int i = 0; i < GAIT_LEG_NUM; i++) {
         const gait_leg_target_t* t = &ik_out.leg[i];
@@ -343,7 +639,7 @@ app_err_t leg_controller_apply_dt(leg_controller_t* lc, const gait_output_t* o, 
             lc->miss_cnt++;
             continue;
         }
-        send_leg_targets(leg, t, i, dt_s, stance_count);
+        send_leg_targets(leg, t, i, dt_s);
         lc->send_cnt++;
     }
     return APP_OK;

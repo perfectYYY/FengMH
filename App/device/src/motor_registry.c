@@ -4,6 +4,7 @@
  * 改动硬件映射只需改本文件，不需要动算法
  */
 #include "motor_registry.h"
+#include "bsp_fdcan.h"
 #include "bsp_uart.h"
 #include "log.h"
 
@@ -36,12 +37,12 @@ static const motor_cfg_t s_cfg[MOTOR_ID_MAX] = {
     { MOTOR_ID_FR_KNEE,  MOTOR_GO,    BSP_UART_4, 0x00A, -1, 0.0f, GO_GEAR_RATIO, BOOT_ORIG_KNEE,    -0.5f * PI_F, 0.0f, "FR_KNEE" },
     { MOTOR_ID_FR_WHEEL, MOTOR_M3508, 1, 0x204, +1, 0.0f, 1.0f,          0.0f,               0.0f,        0.0f, "FR_WHEEL" },
     /* ARM */
-    { MOTOR_ID_ARM_J1,   MOTOR_DAMIAO, 3, 0x000, +1, 0.0f, 1.0f, 0.0f, -PI_F, +PI_F, "ARM_J1" },
-    { MOTOR_ID_ARM_J2,   MOTOR_DAMIAO, 3, 0x000, +1, 0.0f, 1.0f, 0.0f, -PI_F, +PI_F, "ARM_J2" },
-    { MOTOR_ID_ARM_J3,   MOTOR_DAMIAO, 3, 0x000, +1, 0.0f, 1.0f, 0.0f, -PI_F, +PI_F, "ARM_J3" },
-    { MOTOR_ID_ARM_J4,   MOTOR_DAMIAO, 3, 0x000, +1, 0.0f, 1.0f, 0.0f, -PI_F, +PI_F, "ARM_J4" },
-    { MOTOR_ID_ARM_J5,   MOTOR_M3508,  3, 0x205, +1, 0.0f, 1.0f, 0.0f,  0.0f,  0.0f, "ARM_J5" },
-    { MOTOR_ID_ARM_J6,   MOTOR_M3508,  3, 0x206, +1, 0.0f, 1.0f, 0.0f,  0.0f,  0.0f, "ARM_J6" },
+    { MOTOR_ID_ARM_J1,   MOTOR_DAMIAO, BSP_FDCAN_3, 0x001, +1, 0.0f, 1.0f, 0.0f, -PI_F, +PI_F, "ARM_J1" },
+    { MOTOR_ID_ARM_J2,   MOTOR_DAMIAO, BSP_FDCAN_3, 0x002, +1, 0.0f, 1.0f, 0.0f, -PI_F, +PI_F, "ARM_J2" },
+    { MOTOR_ID_ARM_J3,   MOTOR_DAMIAO, BSP_FDCAN_3, 0x003, +1, 0.0f, 1.0f, 0.0f, -PI_F, +PI_F, "ARM_J3" },
+    { MOTOR_ID_ARM_J4,   MOTOR_DAMIAO, BSP_FDCAN_3, 0x004, +1, 0.0f, 1.0f, 0.0f, -PI_F, +PI_F, "ARM_J4" },
+    { MOTOR_ID_ARM_J5,   MOTOR_UNKNOWN, 0, 0x000, +1, 0.0f, 1.0f, 0.0f,  0.0f,  0.0f, "ARM_J5_UNUSED" },
+    { MOTOR_ID_ARM_J6,   MOTOR_UNKNOWN, 0, 0x000, +1, 0.0f, 1.0f, 0.0f,  0.0f,  0.0f, "ARM_J6_UNUSED" },
 };
 
 static motor_dev_t* s_devs[MOTOR_ID_MAX];

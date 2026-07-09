@@ -6,8 +6,11 @@
 
 1. [`ARCHITECTURE.md`](ARCHITECTURE.md)：固件分层、职责边界和依赖方向。
 2. [`firmware_control_flow.md`](firmware_control_flow.md)：从上位机命令到电机输出的运行链路。
-3. [`app_code_map.md`](app_code_map.md)：App 层重要文件职责地图。
-4. [`app_function_index.md`](app_function_index.md)：函数查找索引。
+3. [`full_control_deep_dive.md`](full_control_deep_dive.md)：上下位机整合后的代码级控制链路、算法、反馈、运动学、补偿和上机定位手册。
+4. [`integration_migration_plan.md`](integration_migration_plan.md)：底盘、机械臂和 ROS 系统整合迁移方案。
+5. [`arm_porting_plan.md`](arm_porting_plan.md)：机械臂从 `damiao_new1` 移植到 FengMH 的分阶段计划。
+6. [`app_code_map.md`](app_code_map.md)：App 层重要文件职责地图。
+7. [`app_function_index.md`](app_function_index.md)：函数查找索引。
 
 ## 文档维护规则
 
@@ -38,6 +41,8 @@ USB 命令
 - `vy` 会被传给 planner，并参与 moving 判断，但还不是完整的横向控制实现。
 - `wz` 使用每腿运动学转向，planner 按 `y_leg = 0.15 m` 写入 `leg_step_length_m[]`，同时给每个支撑轮匹配局部滚动速度。
 - 轮毂电机默认使用 MIT 模式，控制层不再向轮毂发送速度模式命令。
+
+整合规划见 [`integration_migration_plan.md`](integration_migration_plan.md)。该文档描述将机械臂下位机、机械臂识别、底盘导航合入当前工程的分阶段方案；其中还没有实现的内容以迁移计划形式维护。
 
 ## 常用验证
 

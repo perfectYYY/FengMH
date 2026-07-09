@@ -77,7 +77,29 @@ extern UART_HandleTypeDef huart3;
 extern TIM_HandleTypeDef htim1;
 
 /* USER CODE BEGIN EV */
-extern FDCAN_HandleTypeDef hfdcan2;
+extern FDCAN_HandleTypeDef hfdcan3;
+
+/* Fault 现场保留区，可直接加入 CubeIDE 现场表达式。 */
+volatile uint32_t debug_fault_type;
+volatile uint32_t debug_fault_cfsr;
+volatile uint32_t debug_fault_hfsr;
+volatile uint32_t debug_fault_mmfar;
+volatile uint32_t debug_fault_bfar;
+volatile uint32_t debug_fault_afsr;
+volatile uint32_t debug_fault_icsr;
+
+static void capture_fault(uint32_t type)
+{
+  debug_fault_type  = type;
+  debug_fault_cfsr  = SCB->CFSR;
+  debug_fault_hfsr  = SCB->HFSR;
+  debug_fault_mmfar = SCB->MMFAR;
+  debug_fault_bfar  = SCB->BFAR;
+  debug_fault_afsr  = SCB->AFSR;
+  debug_fault_icsr  = SCB->ICSR;
+  __DSB();
+  __ISB();
+}
 
 /* USER CODE END EV */
 
@@ -105,7 +127,7 @@ void NMI_Handler(void)
 void HardFault_Handler(void)
 {
   /* USER CODE BEGIN HardFault_IRQn 0 */
-
+  capture_fault(1U);
   /* USER CODE END HardFault_IRQn 0 */
   while (1)
   {
@@ -120,7 +142,7 @@ void HardFault_Handler(void)
 void MemManage_Handler(void)
 {
   /* USER CODE BEGIN MemoryManagement_IRQn 0 */
-
+  capture_fault(2U);
   /* USER CODE END MemoryManagement_IRQn 0 */
   while (1)
   {
@@ -135,7 +157,7 @@ void MemManage_Handler(void)
 void BusFault_Handler(void)
 {
   /* USER CODE BEGIN BusFault_IRQn 0 */
-
+  capture_fault(3U);
   /* USER CODE END BusFault_IRQn 0 */
   while (1)
   {
@@ -150,7 +172,7 @@ void BusFault_Handler(void)
 void UsageFault_Handler(void)
 {
   /* USER CODE BEGIN UsageFault_IRQn 0 */
-
+  capture_fault(4U);
   /* USER CODE END UsageFault_IRQn 0 */
   while (1)
   {
@@ -303,6 +325,34 @@ void FDCAN2_IT0_IRQHandler(void)
   /* USER CODE BEGIN FDCAN2_IT0_IRQn 1 */
 
   /* USER CODE END FDCAN2_IT0_IRQn 1 */
+}
+
+/**
+  * @brief This function handles FDCAN3 interrupt 0.
+  */
+void FDCAN3_IT0_IRQHandler(void)
+{
+  /* USER CODE BEGIN FDCAN3_IT0_IRQn 0 */
+
+  /* USER CODE END FDCAN3_IT0_IRQn 0 */
+  HAL_FDCAN_IRQHandler(&hfdcan3);
+  /* USER CODE BEGIN FDCAN3_IT0_IRQn 1 */
+
+  /* USER CODE END FDCAN3_IT0_IRQn 1 */
+}
+
+/**
+  * @brief This function handles FDCAN3 interrupt 1.
+  */
+void FDCAN3_IT1_IRQHandler(void)
+{
+  /* USER CODE BEGIN FDCAN3_IT1_IRQn 0 */
+
+  /* USER CODE END FDCAN3_IT1_IRQn 0 */
+  HAL_FDCAN_IRQHandler(&hfdcan3);
+  /* USER CODE BEGIN FDCAN3_IT1_IRQn 1 */
+
+  /* USER CODE END FDCAN3_IT1_IRQn 1 */
 }
 
 /**

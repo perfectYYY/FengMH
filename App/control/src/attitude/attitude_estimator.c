@@ -105,6 +105,10 @@ app_err_t attitude_estimator_update(const float gyro[3], const float accel[3], f
     if (!gyro) return APP_ERR_INVALID_ARG;
     if (dt_s <= 0.0f || dt_s > 1.0f) return APP_ERR_INVALID_ARG;
 
+    s_state.roll_rate = gyro[0];
+    s_state.pitch_rate = gyro[1];
+    s_state.yaw_rate = gyro[2];
+
     s_state.roll = wrap_pi(s_state.roll + gyro[0] * dt_s);
     s_state.pitch = wrap_pi(s_state.pitch + gyro[1] * dt_s);
 

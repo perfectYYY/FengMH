@@ -10,9 +10,17 @@ add_executable(fengmh_host_tests
     stubs.c
     ../App/app/src/task_chassis.c
     ../App/app/src/task_comm.c
+    ../App/app/src/task_arm.c
     ../App/app/src/task_safety.c
+    ../App/bsp/src/bsp_gpio.c
     ../App/bsp/src/bsp_usb_cdc.c
     ../App/common/src/log.c
+    ../App/control/src/arm/arm_control.c
+    ../App/control/src/arm/arm_gravity_comp.c
+    ../App/control/src/arm/arm_kinematics.c
+    ../App/control/src/arm/arm_legacy_compat.c
+    ../App/control/src/arm/arm_motion.c
+    ../App/control/src/arm/arm_vision_transform.c
     ../App/control/src/attitude/attitude_estimator.c
     ../App/control/src/attitude/steer_controller.c
     ../App/control/src/chassis/chassis_control.c
@@ -31,7 +39,12 @@ add_executable(fengmh_host_tests
     ../App/control/src/script/script_builtin.c
     ../App/control/src/script/script_player.c
     ../App/device/src/motor_registry.c
+    ../App/device/src/motor_damiao.c
+    ../App/device/src/arm_pump.c
+    ../App/device/src/dm4310_posvel.c
+    ../App/device/src/pump_control.c
     ../App/service/src/pid/pid.c
+    ../App/service/src/protocol/arm_serial_protocol.c
     ../App/service/src/protocol/proto_dispatch.c
     ../App/service/src/protocol/proto_frame.c
 )
@@ -47,6 +60,7 @@ target_include_directories(fengmh_host_tests PRIVATE
     ../App/bsp/include
     ../App/common/include
     ../App/control/include
+    ../App/control/include/arm
     ../App/control/include/attitude
     ../App/control/include/chassis
     ../App/control/include/gait

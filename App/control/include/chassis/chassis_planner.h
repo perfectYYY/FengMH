@@ -25,6 +25,7 @@ typedef struct {
     gait_params_t gait_params;
     float wheel_rads[GAIT_LEG_NUM];
     uint8_t moving;
+    uint8_t low_speed_turn;
 } chassis_plan_t;
 
 typedef struct {
@@ -40,9 +41,9 @@ typedef struct {
 } chassis_turn_cfg_t;
 
 typedef struct {
-    uint8_t enable;              /* 1=按速度联合调度周期和步幅 */
+    uint8_t enable;              /* 1=按速度小范围调度周期，步长仍由局部速度计算 */
     uint8_t reserved[3];
-    float slow_period_s;         /* 低速移动周期，防止低速步频过低 */
+    float slow_period_s;         /* 低速移动周期 */
     float fast_period_s;         /* 高速移动周期 */
     float fast_speed_m_s;        /* 达到该速度后使用 fast_period_s */
 } chassis_stride_cfg_t;
@@ -51,6 +52,7 @@ extern volatile chassis_turn_cfg_t g_chassis_turn_cfg;
 extern volatile chassis_stride_cfg_t g_chassis_stride_cfg;
 
 void chassis_planner_init(void);
+uint8_t chassis_planner_is_low_speed_turn(const chassis_cmd_plan_t* cmd);
 app_err_t chassis_planner_update(const chassis_cmd_plan_t* cmd,
                                   const gait_params_t* base_gait,
                                   chassis_plan_t* out);

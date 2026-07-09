@@ -37,6 +37,7 @@ typedef void (*bsp_fdcan_rx_cb_t)(bsp_fdcan_bus_t bus,
 app_err_t bsp_fdcan_init(void);
 app_err_t bsp_fdcan_attach_rx(bsp_fdcan_bus_t bus, bsp_fdcan_rx_cb_t cb, void* user);
 app_err_t bsp_fdcan_send(bsp_fdcan_bus_t bus, const bsp_fdcan_frame_t* f);
+uint32_t  bsp_fdcan_get_bus_err_cnt(bsp_fdcan_bus_t bus);
 
 /* host 单测辅助 */
 uint32_t  bsp_fdcan_test_tx_count(bsp_fdcan_bus_t bus);

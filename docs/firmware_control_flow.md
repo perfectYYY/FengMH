@@ -43,7 +43,7 @@ task_comm 缓存的命令
 6. 选择 stand、trot 或 script gait。
 7. 更新 gait machine。
 8. 在线时只给支撑相腿应用 planner 的每轮局部滚动速度。
-9. 可选地将 roll/pitch 转成四腿足端 `foot_z_m` 高度补偿。
+9. 可选地将 roll/pitch 转成机身虚拟力矩，并写入腿部 `tau_ff` 前馈分配层。
 10. 派发腿部命令。
 11. 在 MCU 构建中刷新电机输出。
 
@@ -55,10 +55,10 @@ task_comm 缓存的命令
 当前姿态行为：
 
 - `attitude_estimator` 使用陀螺仪积分 yaw，同时用加速度计估计 roll/pitch。
-- `g_chassis_attitude_comp.enable == 0` 为默认状态，不改变足端轨迹。
-- 打开后，`chassis_control` 在 gait 输出后、IK 前，根据 roll/pitch 和每条腿相对机体中心的位置给 `foot_z_m` 叠加小幅补偿。
-- `half_track_m` 默认 `0.15 m`，对应腿/轮接触点到机体中心线的横向距离；`half_length_m` 目前默认 `0.15 m`，上机后应按实际前后半距校准。
-- `scale` 可用于逐步放大或反向验证符号，`max_foot_z_m` 限制单腿高度补偿幅度。
+- `g_chassis_attitude_comp.enable == 0` 为默认状态，不写入姿态平衡前馈。
+- 打开后，`chassis_control` 根据 roll/pitch 和 roll/pitch rate 生成虚拟机身力矩 `Mx/My`，写入 `g_leg_gravity_comp.balance_mx_nm / balance_my_nm`。
+- `half_track_m` 默认 `0.15 m`，对应 `0.30 m` 左右轮距；`half_length_m` 默认 `0.25 m`，对应 `0.50 m` 前后轮距。
+- `scale` 可用于逐步放大或反向验证符号，`max_moment_nm` 和 `max_leg_force_n` 分别限制姿态力矩和单腿补偿力。
 
 ## Planner 阶段
 
@@ -78,10 +78,11 @@ task_comm 缓存的命令
 
 当前步频/步幅调度：
 
-- `g_chassis_stride_cfg.enable == 1` 时，planner 会按运动速度同时调度 gait 周期和每腿步长。
-- 低速时保持较稳定的周期，缩小步幅，避免低速命令把步频拖到很低导致明显颠簸。
-- 速度升高时周期从 `slow_period_s` 平滑过渡到 `fast_period_s`，每腿步长仍由局部速度、周期和 duty 计算并受 `max_leg_step_m` 限制。
-- 低速原地/小半径转向仍使用 `g_chassis_turn_cfg` 的转向周期、抬脚高度和支撑占空比。
+- 在线行走采用轮足分工：轮子按 `v_leg_x / wheel_radius` 跟踪地面速度，腿保持 walk gait，不能退化成纯轮模式。
+- 轮速只在支撑相写入；摆动相轮速清零，避免空中轮子继续按地面速度转。
+- `g_chassis_stride_cfg.enable == 1` 时，planner 只在 `slow_period_s` 到 `fast_period_s` 之间小范围调度 gait 周期；默认是 `0.60 s -> 0.50 s`。
+- 每腿步长由 `v_leg_x * period_s * duty` 计算并受 `max_leg_step_m` 限制，因此速度变化主要体现在轮速和步长上，步频只轻微变化。
+- 低速原地/小半径转向仍使用 `g_chassis_turn_cfg` 的转向周期、抬脚高度和支撑占空比；默认转向抬腿高度也是 `0.055 m`。
 
 当前限制：`vy` 会传入 planner，并参与 moving 判断，但 2DOF 腿不能生成真实横向足端轨迹，因此暂不进入运动学控制。
 
@@ -96,7 +97,7 @@ task_comm 缓存的命令
 
 在线移动时，planner 的每轮局部滚动速度只应用到支撑相腿；摆动相腿轮速置零。
 
-姿态补偿不会改变 gait 相位或 planner 决策，只在 `gait_output_t` 进入 IK 之前修正 `foot_z_m`。
+姿态补偿不会改变 gait 相位、planner 决策或 `foot_z_m`，只在腿控制器中按当前支撑腿集合分配垂向力并转换成髋/膝 `tau_ff`。
 
 ## 腿和电机阶段
 

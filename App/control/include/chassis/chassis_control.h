@@ -45,19 +45,64 @@ typedef struct {
 } chassis_control_status_t;
 
 typedef struct {
-    uint8_t enable;             /* 1=把 roll/pitch 补偿叠加到足端 z 目标 */
-    uint8_t stance_only;        /* 1=只修正支撑腿，摆动腿保持步态高度 */
+    uint8_t enable;             /* 1=把 roll/pitch 姿态误差转换为腿部 tau_ff */
+    uint8_t stance_only;        /* 兼容字段；力矩补偿始终只分配到支撑腿 */
     uint8_t reserved[2];
     float scale;                /* 总体比例，必要时可用 -1 反向验证符号 */
     float half_length_m;        /* 腿接触点到机体中心的前后距离 */
     float half_track_m;         /* 腿接触点到机体中心线的横向距离 */
-    float max_foot_z_m;         /* 单腿 foot_z 补偿限幅 */
+    float max_foot_z_m;         /* 旧 foot_z 模式字段；力矩模式不再使用 */
+    float roll_kp_nm_per_rad;
+    float pitch_kp_nm_per_rad;
+    float roll_kd_nm_per_rads;
+    float pitch_kd_nm_per_rads;
+    float deadband_rad;
+    float max_moment_nm;
+    float max_leg_force_n;
+    float smooth_tau_s;
     float roll_rad;
     float pitch_rad;
+    float roll_rate_rad_s;
+    float pitch_rate_rad_s;
+    float target_mx_nm;
+    float target_my_nm;
+    float filtered_mx_nm;
+    float filtered_my_nm;
     float foot_z_delta_m[GAIT_LEG_NUM];
 } chassis_attitude_comp_debug_t;
 
 extern volatile chassis_attitude_comp_debug_t g_chassis_attitude_comp;
+
+typedef struct {
+    uint8_t enable;             /* 1=根据机械臂末端位置更新腿部 payload 补偿 */
+    uint8_t enable_leg_tau_ff;  /* 1=同步打开 g_leg_gravity_comp.enable */
+    uint8_t prefer_measured;    /* 1=优先使用电机反馈 FK 得到的末端位置 */
+    uint8_t include_link_mass;  /* 1=等效载荷包含 L2/L3 连杆质量 */
+    uint8_t source_valid;
+    uint8_t source_measured;
+    uint8_t reserved[2];
+    float scale;                /* 载荷质量比例，用于现场调参 */
+    float end_to_com_ratio;     /* 末端点映射到等效质心的比例 */
+    float arm_mount_x_m;        /* 机械臂基座相对机体中心偏置，+x=前 */
+    float arm_mount_y_m;        /* 机械臂基座相对机体中心偏置，+y=左 */
+    float support_half_length_m;
+    float support_half_track_m;
+    float smooth_tau_s;         /* 载荷/质心一阶滤波时间常数 */
+    float max_leg_payload_kg;   /* 写入 leg 补偿的单腿载荷限幅 */
+    float max_tau_nm;           /* 写入 leg 补偿的关节 tau_ff 限幅 */
+    float source_end_x_m;
+    float source_end_y_m;
+    float source_end_z_m;
+    float end_mass_kg;
+    float target_total_mass_kg;
+    float filtered_total_mass_kg;
+    float target_com_x_m;
+    float target_com_y_m;
+    float filtered_com_x_m;
+    float filtered_com_y_m;
+} chassis_arm_load_comp_debug_t;
+
+extern volatile chassis_arm_load_comp_debug_t g_chassis_arm_load_comp;
 
 void chassis_control_init(void);
 void chassis_control_tick(const chassis_control_input_t* input,

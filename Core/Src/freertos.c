@@ -52,7 +52,8 @@
 osThreadId_t defaultTaskHandle;
 const osThreadAttr_t defaultTask_attributes = {
   .name = "defaultTask",
-  .stack_size = 128 * 4,
+  /* MX_USB_DEVICE_Init() 会经过较深的 HAL/USB 调用链，512B 不足。 */
+  .stack_size = 1024 * 4,
   .priority = (osPriority_t) osPriorityNormal,
 };
 
@@ -97,7 +98,11 @@ void MX_FREERTOS_Init(void) {
   defaultTaskHandle = osThreadNew(StartDefaultTask, NULL, &defaultTask_attributes);
 
   /* USER CODE BEGIN RTOS_THREADS */
-  /* app_init() runs in main.c before osKernelInitialize(); create only threads here. */
+  /*
+   * app_init() runs in main.c before osKernelInitialize(); create threads here.
+   * bsp_time_delay_ms() uses a DWT fallback while the kernel is ready but not
+   * running, so migrated init code can still use short hardware settle delays.
+   */
   app_tasks_create();
   /* USER CODE END RTOS_THREADS */
 

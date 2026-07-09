@@ -54,6 +54,7 @@ void bsp_time_test_advance_ms(uint32_t ms) {
 #else  /* APP_TARGET_MCU */
 
 #include "stm32h7xx_hal.h"
+#include "cmsis_os.h"
 
 void bsp_time_init(void) { /* HAL_Init 已负责 SysTick */ }
 
@@ -64,13 +65,50 @@ uint64_t bsp_time_now_us(void) {
     return (uint64_t)HAL_GetTick() * 1000ULL;
 }
 
-void bsp_time_delay_ms(uint32_t ms) { HAL_Delay(ms); }
+static void dwt_delay_us(uint32_t us) {
+    if (us == 0U) return;
+
+    CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
+    DWT->CTRL |= DWT_CTRL_CYCCNTENA_Msk;
+
+    uint32_t cycles_per_us = SystemCoreClock / 1000000U;
+    if (cycles_per_us == 0U) {
+        cycles_per_us = 1U;
+    }
+
+    while (us > 0U) {
+        uint32_t chunk_us = (us > 1000U) ? 1000U : us;
+        uint32_t wait_cycles = chunk_us * cycles_per_us;
+        uint32_t start = DWT->CYCCNT;
+        while ((uint32_t)(DWT->CYCCNT - start) < wait_cycles) {
+            /* busy wait */
+        }
+        us -= chunk_us;
+    }
+}
+
+void bsp_time_delay_ms(uint32_t ms) {
+    osKernelState_t state = osKernelGetState();
+    if (state == osKernelRunning) {
+        (void)osDelay(ms);
+        return;
+    }
+
+    if (state == osKernelReady ||
+        state == osKernelLocked ||
+        state == osKernelSuspended) {
+        while (ms > 0U) {
+            dwt_delay_us(1000U);
+            ms--;
+        }
+        return;
+    }
+
+    HAL_Delay(ms);
+}
 
 void bsp_time_delay_us(uint32_t us) {
-    uint64_t start = bsp_time_now_us();
-    while ((bsp_time_now_us() - start) < (uint64_t)us) {
-        /* busy wait */
-    }
+    dwt_delay_us(us);
 }
 
 void bsp_time_test_advance_ms(uint32_t ms) { (void)ms; }

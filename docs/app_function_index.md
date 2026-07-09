@@ -11,7 +11,8 @@
 - `app_tasks_create()`: 初始化通信和底盘控制，并在 MCU 构建中启动 FreeRTOS 任务。
 
 ### `task_chassis.c`
-- `read_chassis_input()`: 将 `task_comm` 缓存的命令复制为 `chassis_control_input_t`。
+- `chassis_mode_allows_motion()`: 根据 `ROBOT_MODE_CMD` 判断底盘速度是否允许输出；无 mode 帧时保留旧调试兼容。
+- `read_chassis_input()`: 将 `task_comm` 缓存的命令复制为 `chassis_control_input_t`，并按整机模式清零被 gate 的底盘速度。
 - `task_chassis_init()`: 初始化底盘行为模块。
 - `task_chassis_set_mode()`: 将底盘模式修改转发给 `chassis_control`。
 - `task_chassis_get_mode()`: 读取当前底盘模式。
@@ -31,6 +32,15 @@
 - `task_chassis_step_for_test()`: 运行一个底盘控制周期。
 - `task_chassis_entry()`: 500 Hz MCU 任务包装，包含急停保护。
 
+### `task_arm.c`
+- `arm_usb_commands_allowed()`: 判断是否允许消费新的机械臂 USB 目标/气泵命令；只有 `ROBOT_MODE_ARM` 允许。
+- `consume_new_commands()`: 读取机械臂目标和气泵缓存；非 ARM 模式同步 seq 并丢弃，ARM 模式才排进 `Arm_Serial_Protocol_QueueTarget()` / `Arm_Serial_Protocol_QueuePump()`。
+- `build_integrated_feedback()`: 用旧机械臂 API 读取当前关节、末端位姿和运动状态，构造新整机协议反馈。
+- `send_feedback_if_due()`: 按 50 Hz 节流发送 `0x86 ARM_FEEDBACK`。
+- `task_arm_init()`: 按原工程顺序初始化 `Pump_Control`、`Arm_Control`、`Arm_Serial_Protocol`。
+- `task_arm_step_for_test()`: 运行一个机械臂任务周期：USB gate -> 旧工程三连 process -> 新协议反馈。
+- `task_arm_entry()`: 机械臂 MCU 任务 1ms 循环。
+
 ### `task_comm.c`
 - `mark_valid_rx()`: 更新最近一次有效接收时间戳。
 - `cache_chassis_base_command()`: 缓存底盘命令中的 `vx/vy/wz`。
@@ -40,6 +50,9 @@
 - `gait_params_from_payload()`: 将协议中的 gait payload 转换为 `gait_params_t`。
 - `handle_gait()`: 解码 `0x12` stand/trot/set-params 命令。
 - `handle_mit_cmd()`: 解码 `0x13` 单电机 MIT 调试命令。
+- `handle_arm_target()`: 解码 `0x11` 机械臂 `target_type + arm_base xyz` 目标命令。
+- `handle_arm_pump()`: 解码 `0x14` 机械臂气泵开关命令。
+- `handle_mode_cmd()`: 解码 `0x15` 上位机请求的整机模式命令。
 - `on_usb_rx()`: 将 USB 字节流送入协议帧解析器。
 - `task_comm_init()`: 重置命令状态并安装协议分发表。
 - `task_comm_good_cnt()`: 返回有效帧计数。
@@ -48,6 +61,10 @@
 - `task_comm_dispatch_miss()`: 返回未命中分发表的计数。
 - `task_comm_last_rx_ms()`: 返回最近一次有效命令时间戳。
 - `task_comm_get_chassis()`: 复制最近一次底盘命令。
+- `task_comm_get_arm_target()`: 复制最近一次机械臂目标命令。
+- `task_comm_get_arm_pump()`: 复制最近一次机械臂气泵命令。
+- `task_comm_get_mode_cmd()`: 复制最近一次上位机模式命令。
+- `task_comm_send_arm_feedback()`: 将机械臂反馈封装为 `0x86` 上行帧并通过 USB CDC 发送。
 - `build_state_payload()`: 构造 `0x80` 整机状态遥测 payload。
 - `send_proto_payload()`: 将一个 payload 封装成协议帧并通过 USB CDC 发送。
 - `send_state_frame()`: 构造并发送 `0x80` 整机状态遥测帧。
@@ -68,6 +85,13 @@
 
 ## `App/bsp`
 
+### `bsp_gpio.c`
+- `enable_port_clock()`: MCU 构建中按 GPIO port 打开外设时钟。
+- `bsp_gpio_output_init()`: 初始化指定 App GPIO 输出，默认拉低。
+- `bsp_gpio_write()`: 写指定 GPIO 输出 latch，并在 MCU 上同步 HAL GPIO。
+- `bsp_gpio_read_latch()`: 读取 host/MCU 共用的软件 latch。
+- `bsp_gpio_test_reset()`: host 测试辅助，清空 GPIO latch 和初始化状态。
+
 ### `bsp_fdcan.c`
 - `fdcan_dwt_enable()`: 在 MCU 上启用 DWT cycle counter。
 - `fdcan_cycles_per_us()`: 将 MCU 时钟换算为 cycles/us。
@@ -76,8 +100,9 @@
 - `bsp_fdcan_init()`: 初始化 host mock 队列或 MCU FDCAN 滤波/中断。
 - `bsp_fdcan_attach_rx()`: 注册某条总线的 RX 回调。
 - `bsp_fdcan_send()`: 发送一帧 CAN，或在 host 中压入 TX 队列。
+- `bsp_fdcan_get_bus_err_cnt()`: 返回指定 FDCAN 总线累计错误计数。
 - `bsp_fdcan_hal_rxfifo0_cb()`: 将 HAL RX FIFO 回调桥接到 BSP 回调。
-- `bsp_fdcan_hal_error_cb()`: 记录 FDCAN 错误中断状态。
+- `bsp_fdcan_hal_error_cb()`: 记录 FDCAN 错误中断状态，并在 `BUS_OFF` 时触发恢复和通知重注册。
 - `bsp_fdcan_test_tx_count()`: host 测试辅助，返回 TX 队列帧数。
 - `bsp_fdcan_test_pop_tx()`: host 测试辅助，弹出一帧 TX。
 - `bsp_fdcan_test_inject_rx()`: host 测试辅助，注入一帧 RX。
@@ -138,6 +163,86 @@
 - `log_emit()`: 格式化并分发一行日志。
 - `log_last_line()`: 返回最近格式化的一行日志。
 
+## `App/control/arm`
+
+### `arm_control.c`
+- `enforce_t4_coupling()`: 按 J3/J4 固定和关系修正 4 号关节位置、速度和加速度。
+- `init_planned_home_sample()`: 初始化 dry-run 阶段使用的 planned home sample。
+- `reset_feedback()`: 清空协议 feedback 并回到 `IDLE`。
+- `sample_to_angles()`: 将轨迹 sample 转换为几何角和电机角。
+- `angles_to_positions()`: 将关节角转换为轨迹生成器使用的四轴位置数组。
+- `reset_settle_tracking()`: 重置 settling 计时、误差和 reached 状态。
+- `current_reference_angles()`: 优先取真实反馈作为当前参考角，反馈缺失时回退 planned sample。
+- `target_delta_inside_fine_window()`: 判断新目标相对参考姿态是否可直接小范围微调。
+- `target_is_inside_fine_window()`: 用当前反馈/规划参考判断目标是否可进入 fine tracking。
+- `joint_targets_match()`: 以前三轴为准判断两个关节目标是否落在更新死区内。
+- `normalize_theta1_to_reference()`: 将 1 号轴目标角归一到离当前参考最近的等效角。
+- `make_safe_joint_target()`: 构造三段式使用的安全收臂/旋转姿态。
+- `max_joint_error_to_target()`: 计算真实反馈相对当前阶段目标的最大关节误差。
+- `max_measured_speed()`: 计算真实反馈前三轴最大速度。
+- `settle_tolerance_for_stage()`: 根据当前安全阶段选择 settling 位置阈值。
+- `bind_arm_motors_from_registry()`: 从 `motor_registry` 绑定 ARM_J1-J4 达妙电机句柄。
+- `motor_state_is_fresh()`: 根据 online、rx 计数和反馈时间戳判断单个电机反馈是否新鲜。
+- `read_measured_angles()`: 读取 J1-J4 电机状态，按 J2/J3 方向映射生成 measured angles/sample。
+- `refresh_measured_feedback()`: 刷新真实末端位姿和 feedback 新鲜度诊断。
+- `update_pose_feedback_from_sample()`: 根据指定 sample 计算末端位姿；planned sample 同时更新重力补偿力矩，measured sample 更新真实 feedback。
+- `update_feedback()`: 优先使用 measured sample 生成 `0x86 ARM_FEEDBACK`；反馈缺失时回退 planned sample。
+- `set_stage_target()`: 设置当前三段式阶段目标并标记待启动轨迹。
+- `start_safe_retract_stage()`: 从当前参考角启动安全收臂阶段，并退出 fine tracking。
+- `start_safe_rotate_stage()`: 使用最新 active target 的底座角启动安全旋转阶段。
+- `start_safe_extend_stage()`: 使用最新 active target 启动展开阶段。
+- `plan_final_target()`: 根据最新反馈判断直接微调或进入 `RETRACT` 阶段。
+- `advance_safe_stage()`: 在阶段 reached 后推进到 `ROTATE_BASE`、`EXTEND` 或最终 `REACHED`。
+- `recover_from_settle_timeout()`: 按旧工程策略处理安全阶段/fine tracking 超时恢复。
+- `update_settle_state()`: 根据轨迹状态、真实反馈误差、速度和 fine tracking 阈值判定 `MOVING/REACHED/ERROR`。
+- `stop_motion_and_target()`: 停止轨迹并清空当前目标。
+- `start_pending_target()`: 用最新 IK 目标启动五次轨迹；运动中重规划会先采样当前轨迹，输出 gate 打开时要求 J1-J4 反馈新鲜并以真实反馈作为轨迹起点。
+- `command_joint()`: 调用单个达妙电机 vtable 的 `set_position()`。
+- `command_arm_motors()`: 在输出 gate 打开后发送 J1-J4 位置、速度、增益和重力前馈命令。
+- `command_idle_gravity_hold_motors()`: 无目标时使用当前反馈角和重力补偿保持机械臂，对齐原工程 gravity 模式。
+- `arm_control_init()`: 初始化机械臂控制门面、planned home sample、轨迹生成器、feedback 状态和输出 gate 默认值；MCU 固件默认启用控制器。
+- `arm_control_set_enabled()`: 设置机械臂硬运行开关；正常 `IDLE/NAV/ARM` 不由 mode 调用。
+- `arm_control_set_motor_output_enabled()`: 显式打开或关闭达妙输出 gate；默认由 `APP_ARM_MOTOR_OUTPUT_DEFAULT_ENABLE` 控制。
+- `arm_control_set_gravity_mode()`: 停止当前目标/轨迹并回到当前位置重力保持，不关泵。
+- `arm_control_set_target()`: 校验 `ARM_TARGET`，运行 IK，选择底座最近等效角，并按当前阶段执行目标更新、重触发或 fine tracking 重规划。
+- `arm_control_set_pump()`: 缓存合法气泵命令，驱动主气泵 `PD11`，并同步空载/带载重力补偿质量。
+- `arm_control_tick()`: 运行一个机械臂控制周期；刷新达妙反馈、在输出 gate 打开时运行达妙自动 enable、启动/更新五次轨迹、刷新 feedback，并发送达妙命令。
+- `arm_control_get_feedback()`: 复制当前 `0x86 ARM_FEEDBACK` payload。
+- `arm_control_get_status()`: 复制 host test 和诊断用的机械臂状态。
+
+### `arm_kinematics.c`
+- `arm_clampf()`: 限幅 float。
+- `wrap_to_2pi()`: 将角度包裹到 `[0, 2pi)`。
+- `normalize_theta1_motor()`: 归一化 1 号底座电机角。
+- `arm_kinematics_compute_t4_from_t3()`: 根据 J3/J4 固定和关系计算 4 号关节角。
+- `arm_kinematics_forward()`: 根据几何关节角计算末端 `xyz` 位姿。
+- `arm_kinematics_inverse()`: 根据末端 `xyz` 目标求 J1-J4 目标角，并检查 J2/J3 实测物理限位。
+
+### `arm_motion.c`
+- `motion_clampf()`: 限幅 float。
+- `calculate_coefficients()`: 根据起点、目标和时长计算五次多项式系数。
+- `evaluate()`: 在指定轨迹时间采样位置、速度和加速度。
+- `initial_duration()`: 根据每轴速度/加速度限制估算同步轨迹初始时长。
+- `trajectory_within_limits()`: 离散采样检查轨迹是否超过速度/加速度限制。
+- `arm_motion_init()`: 初始化轨迹生成器和默认运动限制。
+- `arm_motion_set_limits()`: 更新有效的速度、加速度和时长限制。
+- `arm_motion_start()`: 启动四关节同步五次轨迹。
+- `arm_motion_update()`: 根据 `now_ms` 更新并返回当前轨迹 sample。
+- `arm_motion_stop()`: 停止轨迹并保持指定 sample。
+- `arm_motion_get_state()`: 返回当前轨迹状态。
+- `arm_motion_get_sample()`: 复制当前轨迹 sample。
+- `arm_motion_get_duration()`: 返回当前轨迹总时长。
+- `arm_motion_get_progress()`: 返回当前轨迹进度 `[0, 1]`。
+
+### `arm_gravity_comp.c`
+- `update_mass_transition()`: 将 active end mass 平滑逼近当前 payload 目标质量。
+- `arm_gravity_comp_init()`: 初始化 payload 状态和末端 active/target 质量。
+- `arm_gravity_comp_set_payload_state()`: 切换空载/带载目标质量。
+- `arm_gravity_comp_get_payload_state()`: 返回当前 payload 状态。
+- `arm_gravity_comp_get_active_end_mass()`: 返回当前用于计算的末端 active 质量。
+- `arm_gravity_comp_get_target_end_mass()`: 返回当前 payload 对应的目标末端质量。
+- `arm_gravity_comp_calculate()`: 根据 J2/J3/J4 几何角计算 tau2/tau3/tau4 重力补偿力矩。
+
 ## `App/control/attitude`
 
 ### `attitude_estimator.c`
@@ -180,12 +285,14 @@
 - `chassis_control_tick()`: 运行一个完整的命令到电机控制周期。
 - `chassis_clampf()`: 底盘控制内部 float 限幅。
 - `attitude_comp_valid_or_default()`: 读取姿态补偿尺寸/限幅参数，非法时使用默认值。
-- `attitude_comp_leg_x_m()`: 返回单腿相对机体中心的前后位置。
-- `attitude_comp_leg_y_m()`: 返回单腿相对机体中心线的横向位置。
+- `attitude_comp_param_or_default()`: 读取允许为 0 的姿态补偿增益/滤波参数。
 - `attitude_comp_scale()`: 读取姿态补偿比例，非法时回退为 0。
-- `attitude_comp_limit()`: 限制单腿 foot z 补偿幅度。
+- `attitude_comp_apply_deadband()`: 对 roll/pitch 姿态误差应用死区。
+- `attitude_comp_limit_moment()`: 限制姿态虚拟力矩。
+- `attitude_comp_filter_update()`: 对姿态虚拟力矩做一阶滤波。
+- `attitude_comp_write_leg_balance()`: 将姿态虚拟力矩写入 `g_leg_gravity_comp.balance_*`。
 - `attitude_comp_clear_debug()`: 清空姿态补偿诊断输出。
-- `apply_attitude_compensation()`: 将 roll/pitch 姿态误差转换为四腿 `foot_z_m` 高度补偿。
+- `apply_attitude_compensation()`: 将 roll/pitch 姿态误差转换为支撑腿 `tau_ff` 前馈补偿。
 - `chassis_control_set_mode()`: 设置底盘模式。
 - `chassis_control_get_mode()`: 读取底盘模式。
 - `chassis_control_get_gait_active()`: 读取当前激活步态枚举。
@@ -214,13 +321,11 @@
 - `planner_leg_local_vx()`: 按 `v_leg_x = vx - wz * y_leg` 计算单腿局部前后速度。
 - `planner_apply_turn_gait()`: 覆盖转向场景的 gait 参数。
 - `planner_safe_duty()`: 清理 duty，避免步长/周期计算除以零。
-- `planner_safe_base_step()`: 清理基准步长，防止周期计算使用非法或过小步长。
-- `planner_base_period_for_speed()`: 根据基准步长、速度和 duty 计算 gait 周期。
 - `planner_configured_slow_period()`: 读取低速步态周期配置，非法时使用默认值。
 - `planner_configured_fast_period()`: 读取高速步态周期配置，非法时使用默认值。
 - `planner_configured_fast_speed()`: 读取进入高速周期的速度阈值，非法时使用默认值。
 - `planner_period_from_speed()`: 根据运动速度在低速周期和高速周期之间插值。
-- `planner_apply_stride_schedule()`: 联合调度 gait 周期和步幅，低速缩小步幅并避免步频过低。
+- `planner_apply_stride_schedule()`: 轮足行走周期调度；周期只小范围变化，速度主要进入轮速和每腿步长。
 - `planner_step_from_vx()`: 将单腿局部前后速度转换成单腿步长，并应用步长限幅。
 - `planner_mean_step()`: 计算四腿步长均值，写入 `step_length_m` 作为诊断摘要。
 - `planner_right_left_turn_step()`: 计算右侧均值和左侧均值的半差，写入 `turn_step_m` 作为诊断摘要。
@@ -336,6 +441,14 @@
 
 ## `App/device`
 
+### `arm_pump.c`
+- `aux_to_gpio()`: 将气泵辅助通道枚举映射到 BSP GPIO 输出。
+- `arm_pump_init()`: 初始化主气泵输出并默认关闭。
+- `arm_pump_set()`: 打开或关闭主气泵。
+- `arm_pump_is_enabled()`: 返回主气泵当前状态。
+- `arm_pump_set_aux()`: 打开或关闭一个保留辅助通道。
+- `arm_pump_aux_is_enabled()`: 返回保留辅助通道当前状态。
+
 ### `imu_bmi088.c`
 - `make_i16()`: 将 LSB/MSB 合成为有符号 16 位值。
 - `diag_reset()`: 清空 IMU 诊断状态。
@@ -447,6 +560,30 @@
 - `m3508_send_probe_frame()`: 发送零电流 `0x1FF` 探测帧。
 - `m3508_run_bus_controls()`: 运行分配到一条 FDCAN 总线上的所有电机。
 - `motor_m3508_send_all()`: 运行控制环并发送 CAN 电流帧。
+
+### `motor_damiao.c`
+- `damiao_clampf()`: 限幅 float。
+- `damiao_float_to_uint()`: 将物理量按达妙协议量程压缩为无符号整数。
+- `damiao_uint_to_centered_float()`: 将反馈 raw 值按中心零点解码为物理量。
+- `damiao_model_ranges()`: 根据 DM4310/DM4340 选择速度和力矩量程。
+- `damiao_model_v_abs()`: 返回模型反馈速度绝对量程。
+- `damiao_model_t_abs()`: 返回模型反馈力矩绝对量程。
+- `motor_damiao_pack_mit()`: 打包达妙 MIT 位置、速度、刚度、阻尼和前馈力矩帧。
+- `motor_damiao_parse_feedback()`: 解码达妙 8 字节反馈并更新 `motor_state_t` 和驱动上下文。
+- `damiao_send()`: 通过 `bsp_fdcan_send()` 在目标 FDCAN 总线上发送一帧达妙命令。
+- `damiao_set_position()`: 通过 MIT 帧发送位置/速度/增益/力矩命令。
+- `damiao_set_torque()`: 以当前角度为保持点发送力矩前馈命令。
+- `damiao_set_velocity()`: 以当前角度为保持点发送速度命令。
+- `damiao_enable()`: 发送达妙 enable 特殊帧。
+- `damiao_disable()`: 发送达妙 disable 特殊帧并清除在线状态。
+- `damiao_reset_fault()`: 清除错误计数并发送 enable 特殊帧。
+- `damiao_feed_rx()`: 将 RX payload 交给达妙反馈解析器。
+- `damiao_feedback_needs_enable()`: 判断无反馈、未使能或长时间无反馈的达妙关节是否需要重发 enable。
+- `motor_damiao_process()`: 按 200ms 周期和 500ms 单电机间隔运行达妙自动 enable 恢复。
+- `motor_damiao_auto_enable_count()`: 返回自动 enable 成功发送计数。
+- `damiao_index_for_can_id()`: 按 FDCAN bus 和 CAN ID 查找 J1-J4 驱动实例。
+- `motor_damiao_fdcan_rx_cb()`: 将 FDCAN3 反馈路由到匹配的达妙电机实例。
+- `motor_damiao_init_all()`: 创建 J1-J4 达妙实例、绑定 registry，并注册 FDCAN3 RX 回调。
 
 ### `motor_registry.c`
 - `motor_registry_init()`: 清空 logical motor registry。

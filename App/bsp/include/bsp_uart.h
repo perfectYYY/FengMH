@@ -5,7 +5,7 @@
  *   - 所有上层（GO-8010 电机驱动）只调用 bsp_uart_send()/bsp_uart_attach_rx()
  *   - 板上：包 HAL_UART + RS485 DE 控制 + DMA；host 单测：内存回环
  *
- * USART1: 调试串口 115200 (暂不使用)
+ * USART1: generated debug placeholder, not initialized by default (PA9 kept free)
  * USART2: RS485-FL 左前 GO 电机, 4Mbps, DE=PD4
  * USART3: RS485-RL 左后 GO 电机, 4Mbps, DE=PB14
  * UART4:  RS485-FR 右前 GO 电机, 4Mbps, DE=PA15
@@ -22,7 +22,7 @@ extern "C" {
 #endif
 
 typedef enum {
-    BSP_UART_1 = 0,   /* 调试串口 115200 */
+    BSP_UART_1 = 0,   /* reserved placeholder; do not use in App path */
     BSP_UART_2 = 1,   /* RS485-FL 左前 GO 电机, 4Mbps, DE=PD4 */
     BSP_UART_3 = 2,   /* RS485-RL 左后 GO 电机, 4Mbps, DE=PB14 */
     BSP_UART_4 = 3,   /* RS485-FR 右前 GO 电机, 4Mbps, DE=PA15 */

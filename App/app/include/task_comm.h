@@ -5,6 +5,7 @@
 #define APP_TASK_COMM_H_
 
 #include <stdint.h>
+#include "proto_defs.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -28,6 +29,43 @@ typedef struct {
 } task_comm_chassis_cmd_t;
 
 void task_comm_get_chassis(task_comm_chassis_cmd_t* out);
+
+/* 当前最近一次的 arm target 指令；后续 task_arm 读取 */
+typedef struct {
+    uint8_t target_type;      /* 0=grasp, 1=place */
+    float x_m, y_m, z_m;      /* arm_base, m */
+    uint32_t seq;
+} task_comm_arm_target_t;
+
+/* ARM_TARGET 接收点调试快照：在 mode gate 和机械臂状态机之前更新。 */
+extern volatile uint8_t  debug_comm_arm_target_raw[sizeof(payload_arm_target_t)];
+extern volatile uint8_t  debug_comm_arm_target_type;
+extern volatile float    debug_comm_arm_target_x_m;
+extern volatile float    debug_comm_arm_target_y_m;
+extern volatile float    debug_comm_arm_target_z_m;
+extern volatile uint32_t debug_comm_arm_target_accept_count;
+extern volatile uint32_t debug_comm_arm_target_reject_count;
+
+void task_comm_get_arm_target(task_comm_arm_target_t* out);
+
+/* 当前最近一次的 pump 指令；后续 task_arm 读取 */
+typedef struct {
+    uint8_t pump_on;          /* 1=vacuum on, 0=release */
+    uint32_t seq;
+} task_comm_arm_pump_t;
+
+void task_comm_get_arm_pump(task_comm_arm_pump_t* out);
+
+/* 上位机请求的整机模式；后续 safety/mode manager 读取并做本地互锁 */
+typedef struct {
+    uint8_t mode;             /* PROTO_ROBOT_MODE_* */
+    uint32_t seq;
+} task_comm_mode_cmd_t;
+
+void task_comm_get_mode_cmd(task_comm_mode_cmd_t* out);
+
+/* 机械臂 feedback 上行；后续 task_arm 以此发送 PROTO_FUNC_ARM_FEEDBACK */
+int task_comm_send_arm_feedback(const payload_arm_feedback_t* feedback);
 
 /* 最近一次"任何有效帧"的 ms 时戳；用于心跳超时判定 */
 uint32_t task_comm_last_rx_ms(void);

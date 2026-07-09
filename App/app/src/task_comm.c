@@ -22,13 +22,25 @@
 #endif
 
 #include <string.h>
+#include <math.h>
 
 static const char* TAG = "COMM";
 
 static proto_frame_parser_t  s_parser;
 static proto_dispatcher_t    s_disp;
 static task_comm_chassis_cmd_t s_chassis;
+static task_comm_arm_target_t s_arm_target;
+static task_comm_arm_pump_t   s_arm_pump;
+static task_comm_mode_cmd_t   s_mode_cmd;
 static volatile uint32_t     s_last_rx_ms = 0;
+
+volatile uint8_t  debug_comm_arm_target_raw[sizeof(payload_arm_target_t)];
+volatile uint8_t  debug_comm_arm_target_type;
+volatile float    debug_comm_arm_target_x_m;
+volatile float    debug_comm_arm_target_y_m;
+volatile float    debug_comm_arm_target_z_m;
+volatile uint32_t debug_comm_arm_target_accept_count;
+volatile uint32_t debug_comm_arm_target_reject_count;
 
 /* 上行帧发送周期控制 */
 static uint32_t s_last_state_tx_ms  = 0;  /* 0x80 上次发送时间 */
@@ -42,6 +54,7 @@ static void mark_valid_rx(void) {
     s_last_rx_ms = (uint32_t)bsp_time_now_ms();
 }
 
+#if APP_CHASSIS_ENABLE
 static void cache_chassis_base_command(const uint8_t* p) {
     payload_chassis_cmd_t cmd;
     memcpy(&cmd, p, sizeof(cmd));
@@ -65,8 +78,16 @@ static void mark_chassis_command_rx(void) {
     s_chassis.seq++;
     mark_valid_rx();
 }
+#endif
+
+static int send_proto_payload(uint8_t func_id, const void* payload, uint8_t len);
 
 static int handle_chassis(const uint8_t* p, uint8_t len) {
+#if !APP_CHASSIS_ENABLE
+    (void)p;
+    (void)len;
+    return APP_ERR_UNSUPPORTED;
+#else
     /*
      * 兼容两种帧长:
      *   12 bytes: 旧协议 {vx, vy, wz}
@@ -78,8 +99,10 @@ static int handle_chassis(const uint8_t* p, uint8_t len) {
     cache_chassis_steering_extension(p, len);
     mark_chassis_command_rx();
     return 0;
+#endif
 }
 
+#if APP_CHASSIS_ENABLE
 static void gait_params_from_payload(const payload_gait_cmd_t* in, gait_params_t* out) {
     memset(out, 0, sizeof(*out));
     out->body_height_m = in->body_height_m;
@@ -92,8 +115,14 @@ static void gait_params_from_payload(const payload_gait_cmd_t* in, gait_params_t
     }
     out->touchdown_thresh = in->touchdown_thresh;
 }
+#endif
 
 static int handle_gait(const uint8_t* p, uint8_t len) {
+#if !APP_CHASSIS_ENABLE
+    (void)p;
+    (void)len;
+    return APP_ERR_UNSUPPORTED;
+#else
     if (len != sizeof(payload_gait_cmd_t)) return -1;
 
     payload_gait_cmd_t cmd;
@@ -132,6 +161,7 @@ static int handle_gait(const uint8_t* p, uint8_t len) {
         return 0;
     }
     return ret;
+#endif
 }
 
 static int handle_mit_cmd(const uint8_t* p, uint8_t len) {
@@ -139,6 +169,12 @@ static int handle_mit_cmd(const uint8_t* p, uint8_t len) {
 
     payload_mit_cmd_t cmd;
     memcpy(&cmd, p, sizeof(cmd));
+
+    /* 机械臂只有task_arm可以写电机；调试统一使用纯重补测试态。 */
+    if (cmd.motor_id >= MOTOR_ID_ARM_J1 &&
+        cmd.motor_id <= MOTOR_ID_ARM_J6) {
+        return APP_ERR_UNSUPPORTED;
+    }
 
     motor_dev_t* dev = motor_get((motor_logical_id_t)cmd.motor_id);
     if (!dev || !dev->ops || !dev->ops->set_position) return -1;
@@ -153,10 +189,88 @@ static int handle_mit_cmd(const uint8_t* p, uint8_t len) {
     return ret;
 }
 
+static int handle_arm_target(const uint8_t* p, uint8_t len) {
+    if (len != sizeof(payload_arm_target_t)) return -1;
+
+    payload_arm_target_t cmd;
+    for (uint32_t i = 0U; i < sizeof(payload_arm_target_t); i++) {
+        debug_comm_arm_target_raw[i] = p[i];
+    }
+    memcpy(&cmd, p, sizeof(cmd));
+    debug_comm_arm_target_type = cmd.target_type;
+    debug_comm_arm_target_x_m = cmd.x_m;
+    debug_comm_arm_target_y_m = cmd.y_m;
+    debug_comm_arm_target_z_m = cmd.z_m;
+
+    if (cmd.target_type != PROTO_ARM_TARGET_GRASP &&
+        cmd.target_type != PROTO_ARM_TARGET_PLACE) {
+        debug_comm_arm_target_reject_count++;
+        return APP_ERR_INVALID_ARG;
+    }
+
+    /* 机械臂两连杆总长 0.65 m；在通信入口拦截错字节序/错单位的有限异常值。 */
+    const float distance_sq = cmd.x_m * cmd.x_m +
+                              cmd.y_m * cmd.y_m +
+                              cmd.z_m * cmd.z_m;
+    const float min_reach_m = 0.045f;
+    const float max_reach_m = 0.655f;
+    if (!isfinite(cmd.x_m) || !isfinite(cmd.y_m) || !isfinite(cmd.z_m) ||
+        !isfinite(distance_sq) ||
+        distance_sq < min_reach_m * min_reach_m ||
+        distance_sq > max_reach_m * max_reach_m) {
+        debug_comm_arm_target_reject_count++;
+        return APP_ERR_INVALID_ARG;
+    }
+
+    s_arm_target.target_type = cmd.target_type;
+    s_arm_target.x_m = cmd.x_m;
+    s_arm_target.y_m = cmd.y_m;
+    s_arm_target.z_m = cmd.z_m;
+    s_arm_target.seq++;
+    debug_comm_arm_target_accept_count++;
+    mark_valid_rx();
+    return 0;
+}
+
+static int handle_arm_pump(const uint8_t* p, uint8_t len) {
+    if (len != sizeof(payload_arm_pump_t)) return -1;
+
+    payload_arm_pump_t cmd;
+    memcpy(&cmd, p, sizeof(cmd));
+    if (cmd.pump_on > 1U) {
+        return APP_ERR_INVALID_ARG;
+    }
+
+    s_arm_pump.pump_on = cmd.pump_on;
+    s_arm_pump.seq++;
+    mark_valid_rx();
+    return 0;
+}
+
+static int handle_mode_cmd(const uint8_t* p, uint8_t len) {
+    if (len != sizeof(payload_mode_cmd_t)) return -1;
+
+    payload_mode_cmd_t cmd;
+    memcpy(&cmd, p, sizeof(cmd));
+    if (cmd.mode > PROTO_ROBOT_MODE_ERROR) {
+        return APP_ERR_INVALID_ARG;
+    }
+
+    s_mode_cmd.mode = cmd.mode;
+    s_mode_cmd.seq++;
+    task_safety_estop_set(cmd.mode == PROTO_ROBOT_MODE_ESTOP ||
+                          cmd.mode == PROTO_ROBOT_MODE_ERROR);
+    mark_valid_rx();
+    return 0;
+}
+
 static const proto_entry_t s_tbl[] = {
     { PROTO_FUNC_CHASSIS_CMD, 0, handle_chassis, "chassis" },  /* expect_len=0: 由 handler 内自行校验 */
+    { PROTO_FUNC_ARM_TARGET, sizeof(payload_arm_target_t), handle_arm_target, "arm_target" },
     { PROTO_FUNC_GAIT_CMD, sizeof(payload_gait_cmd_t), handle_gait, "gait" },
     { PROTO_FUNC_MIT_CMD, sizeof(payload_mit_cmd_t), handle_mit_cmd, "mit" },
+    { PROTO_FUNC_ARM_PUMP, sizeof(payload_arm_pump_t), handle_arm_pump, "arm_pump" },
+    { PROTO_FUNC_MODE_CMD, sizeof(payload_mode_cmd_t), handle_mode_cmd, "mode" },
 };
 
 static void on_usb_rx(const uint8_t* d, uint32_t n, void* user) {
@@ -166,6 +280,16 @@ static void on_usb_rx(const uint8_t* d, uint32_t n, void* user) {
 
 void task_comm_init(void) {
     memset(&s_chassis, 0, sizeof(s_chassis));
+    memset(&s_arm_target, 0, sizeof(s_arm_target));
+    memset(&s_arm_pump, 0, sizeof(s_arm_pump));
+    memset(&s_mode_cmd, 0, sizeof(s_mode_cmd));
+    memset((void*)debug_comm_arm_target_raw, 0, sizeof(debug_comm_arm_target_raw));
+    debug_comm_arm_target_type = 0U;
+    debug_comm_arm_target_x_m = 0.0f;
+    debug_comm_arm_target_y_m = 0.0f;
+    debug_comm_arm_target_z_m = 0.0f;
+    debug_comm_arm_target_accept_count = 0U;
+    debug_comm_arm_target_reject_count = 0U;
     s_last_rx_ms = 0;
     s_last_state_tx_ms = 0;
     s_last_motor_tx_ms = 0;
@@ -184,6 +308,21 @@ uint32_t task_comm_last_rx_ms(void)      { return s_last_rx_ms; }
 void task_comm_get_chassis(task_comm_chassis_cmd_t* out) {
     if (!out) return;
     *out = s_chassis;
+}
+
+void task_comm_get_arm_target(task_comm_arm_target_t* out) {
+    if (!out) return;
+    *out = s_arm_target;
+}
+
+void task_comm_get_arm_pump(task_comm_arm_pump_t* out) {
+    if (!out) return;
+    *out = s_arm_pump;
+}
+
+void task_comm_get_mode_cmd(task_comm_mode_cmd_t* out) {
+    if (!out) return;
+    *out = s_mode_cmd;
 }
 
 /* ─── 上行帧构造 ─── */
@@ -216,8 +355,10 @@ typedef struct {
 static payload_state_t build_state_payload(void) {
     payload_state_t p;
     memset(&p, 0, sizeof(p));
+#if APP_CHASSIS_ENABLE
     p.mode        = (uint8_t)task_chassis_get_mode();
     p.gait_active = (uint8_t)task_chassis_get_gait_active();
+#endif
     p.estop       = task_safety_estop_active() ? 1 : 0;
     p.vx_cmd      = s_chassis.vx;
     p.vy_cmd      = s_chassis.vy;
@@ -230,9 +371,17 @@ static int send_proto_payload(uint8_t func_id, const void* payload, uint8_t len)
     uint8_t buf[64];
     int n = proto_frame_build(func_id, (const uint8_t*)payload, len, buf, sizeof(buf));
     if (n > 0) {
-        bsp_usb_cdc_send(buf, (uint32_t)n);
+        app_err_t err = bsp_usb_cdc_send(buf, (uint32_t)n);
+        if (err != APP_OK) return (int)err;
     }
     return n;
+}
+
+int task_comm_send_arm_feedback(const payload_arm_feedback_t* feedback) {
+    if (!feedback) return APP_ERR_INVALID_ARG;
+    return send_proto_payload(PROTO_FUNC_ARM_FEEDBACK,
+                              feedback,
+                              (uint8_t)sizeof(*feedback));
 }
 
 /* 发送上行帧 */

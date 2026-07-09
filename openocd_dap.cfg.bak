@@ -1,0 +1,17 @@
+source [find interface/cmsis-dap.cfg]
+transport select swd
+
+set CLOCK_FREQ 100
+set AP_NUM 0
+set GDB_PORT 3333
+set CONNECT_UNDER_RESET 0
+set CORE_RESET 0
+
+source [find target/stm32h7x.cfg]
+
+reset_config none
+
+proc first_gdb_attach_hook {} {
+    halt
+    wait_halt 5000
+}

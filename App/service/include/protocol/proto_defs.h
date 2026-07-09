@@ -19,9 +19,12 @@ extern "C" {
 
 /* 下行（上位机 → 下位机） */
 #define PROTO_FUNC_CHASSIS_CMD  0x10
-#define PROTO_FUNC_ARM_CMD      0x11
+#define PROTO_FUNC_ARM_TARGET   0x11
+#define PROTO_FUNC_ARM_CMD      PROTO_FUNC_ARM_TARGET  /* 兼容旧命名: 实际语义为 ARM_TARGET */
 #define PROTO_FUNC_GAIT_CMD     0x12
 #define PROTO_FUNC_MIT_CMD      0x13   /* MIT 阻抗控制单个电机 (调试用) */
+#define PROTO_FUNC_ARM_PUMP     0x14
+#define PROTO_FUNC_MODE_CMD     0x15
 #define PROTO_FUNC_STATUS_REQ   0x20
 #define PROTO_FUNC_USB_CDC_PING 0x21
 
@@ -32,7 +35,14 @@ extern "C" {
 #define PROTO_FUNC_IMU_STATE    0x83
 #define PROTO_FUNC_USB_CDC_STATE 0x84
 #define PROTO_FUNC_USB_CDC_PONG 0x85
+#define PROTO_FUNC_ARM_FEEDBACK 0x86
 #define PROTO_FUNC_EVENT        0x8F
+
+#define PROTO_ROBOT_MODE_IDLE   0u
+#define PROTO_ROBOT_MODE_NAV    1u
+#define PROTO_ROBOT_MODE_ARM    2u
+#define PROTO_ROBOT_MODE_ESTOP  3u
+#define PROTO_ROBOT_MODE_ERROR  4u
 
 typedef struct __attribute__((packed)) {
     float vx;   /* m/s  前后 */
@@ -72,6 +82,37 @@ typedef struct __attribute__((packed)) {
     float   kd;          /* 阻尼增益 (N·m·s/rad) */
     float   tau_ff_nm;   /* 力矩前馈 (输出轴 N·m) */
 } payload_mit_cmd_t;   /* FuncID 0x13, len=21 */
+
+typedef struct __attribute__((packed)) {
+    uint8_t target_type;  /* 0=grasp, 1=place */
+    float   x_m;          /* arm_base x, m */
+    float   y_m;          /* arm_base y, m */
+    float   z_m;          /* arm_base z, m */
+} payload_arm_target_t; /* FuncID 0x11, len=13 */
+
+#define PROTO_ARM_TARGET_GRASP 0u
+#define PROTO_ARM_TARGET_PLACE 1u
+
+typedef struct __attribute__((packed)) {
+    uint8_t pump_on;      /* 1=vacuum on, 0=release */
+} payload_arm_pump_t;    /* FuncID 0x14, len=1 */
+
+typedef struct __attribute__((packed)) {
+    uint8_t mode;         /* PROTO_ROBOT_MODE_* */
+} payload_mode_cmd_t;    /* FuncID 0x15, len=1 */
+
+#define PROTO_ARM_STATE_IDLE    0u
+#define PROTO_ARM_STATE_MOVING  1u
+#define PROTO_ARM_STATE_REACHED 2u
+#define PROTO_ARM_STATE_ERROR   3u
+
+typedef struct __attribute__((packed)) {
+    uint8_t arm_state;    /* PROTO_ARM_STATE_* */
+    float   end_x_m;      /* current end-effector x in arm_base, m */
+    float   end_y_m;      /* current end-effector y in arm_base, m */
+    float   end_z_m;      /* current end-effector z in arm_base, m */
+    float   theta1_rad;   /* base joint angle, rad */
+} payload_arm_feedback_t; /* FuncID 0x86, len=17 */
 
 typedef struct __attribute__((packed)) {
     uint8_t req_kind;  /* 0=state, 1=motor, 2=stats */

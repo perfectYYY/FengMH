@@ -17,9 +17,16 @@
 #include <string.h>
 #include <time.h>
 
+#define STUB_FDCAN_TXQ_LEN 64U
+
 static app_tick_t s_now_ms;
 static imu_bmi088_data_t s_imu_data;
 static uint8_t s_imu_ready = 1U;
+static bsp_fdcan_rx_cb_t s_fdcan_rx_cb[BSP_FDCAN_BUS_MAX];
+static void* s_fdcan_rx_user[BSP_FDCAN_BUS_MAX];
+static bsp_fdcan_frame_t s_fdcan_txq[BSP_FDCAN_BUS_MAX][STUB_FDCAN_TXQ_LEN];
+static uint32_t s_fdcan_tx_head[BSP_FDCAN_BUS_MAX];
+static uint32_t s_fdcan_tx_tail[BSP_FDCAN_BUS_MAX];
 
 void bsp_time_init(void) {
     s_now_ms = 0;
@@ -102,39 +109,63 @@ void bsp_uart_test_inject_rx(bsp_uart_bus_t bus, const uint8_t* data, uint32_t l
 void bsp_uart_test_reset(void) {}
 
 app_err_t bsp_fdcan_init(void) {
+    memset(s_fdcan_rx_cb, 0, sizeof(s_fdcan_rx_cb));
+    memset(s_fdcan_rx_user, 0, sizeof(s_fdcan_rx_user));
+    memset(s_fdcan_txq, 0, sizeof(s_fdcan_txq));
+    memset(s_fdcan_tx_head, 0, sizeof(s_fdcan_tx_head));
+    memset(s_fdcan_tx_tail, 0, sizeof(s_fdcan_tx_tail));
     return APP_OK;
 }
 
 app_err_t bsp_fdcan_attach_rx(bsp_fdcan_bus_t bus, bsp_fdcan_rx_cb_t cb, void* user) {
-    (void)bus;
-    (void)cb;
-    (void)user;
+    if (bus >= BSP_FDCAN_BUS_MAX) return APP_ERR_INVALID_ARG;
+    s_fdcan_rx_cb[bus] = cb;
+    s_fdcan_rx_user[bus] = user;
     return APP_OK;
 }
 
 app_err_t bsp_fdcan_send(bsp_fdcan_bus_t bus, const bsp_fdcan_frame_t* frame) {
-    (void)bus;
-    (void)frame;
+    if (bus >= BSP_FDCAN_BUS_MAX || !frame) return APP_ERR_INVALID_ARG;
+    uint32_t head = s_fdcan_tx_head[bus];
+    uint32_t next = (head + 1U) % STUB_FDCAN_TXQ_LEN;
+    if (next == s_fdcan_tx_tail[bus]) return APP_ERR_OVERFLOW;
+    s_fdcan_txq[bus][head] = *frame;
+    s_fdcan_tx_head[bus] = next;
     return APP_OK;
 }
 
-uint32_t bsp_fdcan_test_tx_count(bsp_fdcan_bus_t bus) {
+uint32_t bsp_fdcan_get_bus_err_cnt(bsp_fdcan_bus_t bus) {
     (void)bus;
-    return 0;
+    return 0U;
+}
+
+uint32_t bsp_fdcan_test_tx_count(bsp_fdcan_bus_t bus) {
+    if (bus >= BSP_FDCAN_BUS_MAX) return 0;
+    uint32_t head = s_fdcan_tx_head[bus];
+    uint32_t tail = s_fdcan_tx_tail[bus];
+    return (head >= tail) ? (head - tail) : (STUB_FDCAN_TXQ_LEN - tail + head);
 }
 
 app_err_t bsp_fdcan_test_pop_tx(bsp_fdcan_bus_t bus, bsp_fdcan_frame_t* out) {
-    (void)bus;
-    (void)out;
-    return APP_ERR_NOT_FOUND;
+    if (bus >= BSP_FDCAN_BUS_MAX || !out) return APP_ERR_INVALID_ARG;
+    if (s_fdcan_tx_tail[bus] == s_fdcan_tx_head[bus]) return APP_ERR_NOT_FOUND;
+    *out = s_fdcan_txq[bus][s_fdcan_tx_tail[bus]];
+    s_fdcan_tx_tail[bus] = (s_fdcan_tx_tail[bus] + 1U) % STUB_FDCAN_TXQ_LEN;
+    return APP_OK;
 }
 
 void bsp_fdcan_test_inject_rx(bsp_fdcan_bus_t bus, const bsp_fdcan_frame_t* frame) {
-    (void)bus;
-    (void)frame;
+    if (bus >= BSP_FDCAN_BUS_MAX || !frame) return;
+    if (s_fdcan_rx_cb[bus]) {
+        s_fdcan_rx_cb[bus](bus, frame, s_fdcan_rx_user[bus]);
+    }
 }
 
-void bsp_fdcan_test_reset(void) {}
+void bsp_fdcan_test_reset(void) {
+    memset(s_fdcan_txq, 0, sizeof(s_fdcan_txq));
+    memset(s_fdcan_tx_head, 0, sizeof(s_fdcan_tx_head));
+    memset(s_fdcan_tx_tail, 0, sizeof(s_fdcan_tx_tail));
+}
 
 app_err_t imu_bmi088_init(void) {
     memset(&s_imu_data, 0, sizeof(s_imu_data));

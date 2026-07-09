@@ -42,6 +42,15 @@
 #define USE_LEGACY_MAIN 0
 #endif
 
+/*
+ * USART1 on PA9/PA10 was a generated debug UART placeholder and is not used by
+ * the App control path. Keep it off by default so PA9 remains available for the
+ * migrated pump/valve GPIO from the arm project.
+ */
+#ifndef APP_ENABLE_UNUSED_USART1
+#define APP_ENABLE_UNUSED_USART1 0
+#endif
+
 #if USE_LEGACY_MAIN
 #include "GO-motor.h"
 #include "gait_plan.h"
@@ -49,6 +58,7 @@
 #include "3508_motor.h"
 #else
 #include "app_init.h"
+#include "config.h"
 #endif
 /* USER CODE END Includes */
 
@@ -210,7 +220,10 @@ int main(void)
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
   MX_DMA_Init();
+#if APP_ENABLE_UNUSED_USART1
   MX_USART1_UART_Init();
+#endif
+#if APP_CHASSIS_ENABLE
   MX_USART2_UART_Init();
   MX_USART3_UART_Init();
   MX_FDCAN1_Init();
@@ -219,6 +232,7 @@ int main(void)
   MX_TIM2_Init();
   MX_UART7_Init();
   MX_UART4_Init();
+#endif
   MX_FDCAN3_Init();
   /* USER CODE BEGIN 2 */
 #if USE_LEGACY_MAIN

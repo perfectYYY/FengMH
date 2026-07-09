@@ -15,6 +15,9 @@ typedef struct {
     float yaw;      /* 偏航角 (rad), 正方向: 逆时针 (Z-up) */
     float pitch;    /* 俯仰角 (rad), 预留 */
     float roll;     /* 横滚角 (rad), 预留 */
+    float yaw_rate;   /* rad/s */
+    float pitch_rate; /* rad/s */
+    float roll_rate;  /* rad/s */
 } attitude_state_t;
 
 #ifdef __cplusplus

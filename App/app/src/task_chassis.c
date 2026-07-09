@@ -11,6 +11,7 @@
 #include "chassis_control.h"
 #include "config.h"
 #include "log.h"
+#include "proto_defs.h"
 #include "task_comm.h"
 #include "task_safety.h"
 
@@ -20,17 +21,27 @@
 
 static const char* TAG = "CHASSIS_TASK";
 
+static uint8_t chassis_mode_allows_motion(void) {
+    task_comm_mode_cmd_t mode;
+    task_comm_get_mode_cmd(&mode);
+    if (mode.seq == 0U) {
+        return 1U;  /* Legacy host path before the unified mode manager starts. */
+    }
+    return (mode.mode == PROTO_ROBOT_MODE_NAV) ? 1U : 0U;
+}
+
 static void read_chassis_input(chassis_control_input_t* input) {
     if (!input) return;
 
     task_comm_chassis_cmd_t command;
     task_comm_get_chassis(&command);
 
-    input->command.vx_m_s = command.vx;
-    input->command.vy_m_s = command.vy;
-    input->command.wz_rad_s = command.wz;
-    input->command.target_yaw_rad = command.target_yaw;
-    input->command.steer_mode = command.steer_mode;
+    const uint8_t allow_motion = chassis_mode_allows_motion();
+    input->command.vx_m_s = allow_motion ? command.vx : 0.0f;
+    input->command.vy_m_s = allow_motion ? command.vy : 0.0f;
+    input->command.wz_rad_s = allow_motion ? command.wz : 0.0f;
+    input->command.target_yaw_rad = allow_motion ? command.target_yaw : 0.0f;
+    input->command.steer_mode = allow_motion ? command.steer_mode : 0U;
     input->command.seq = command.seq;
     input->valid_frame_count = task_comm_dispatch_hit();
     input->last_rx_ms = task_comm_last_rx_ms();

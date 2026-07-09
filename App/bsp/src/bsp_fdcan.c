@@ -17,8 +17,8 @@
 static const char* TAG = "FDCAN";
 
 #define BSP_FDCAN_TXQ_LEN 64
-#define BSP_FDCAN_TX_ROOM_TIMEOUT_US   300U
-#define BSP_FDCAN_TX_DRAIN_TIMEOUT_US  300U
+#define BSP_FDCAN_TX_ROOM_TIMEOUT_US  2000U
+#define BSP_FDCAN_TX_DRAIN_TIMEOUT_US 2000U
 #define BSP_FDCAN_TX_ABORT_TIMEOUT_US  100U
 #define BSP_FDCAN_WARN_INTERVAL_MS     100U
 #define BSP_FDCAN2_MSG_RAM_OFFSET_WORDS 64U
@@ -111,6 +111,10 @@ app_err_t bsp_fdcan_init(void) {
 
     /* MCU: 初始化 FDCAN + 配置滤波器 + 启动 + 注册 RX/错误中断通知 */
     for (int i = 0; i < BSP_FDCAN_BUS_MAX; i++) {
+#if !APP_CHASSIS_ENABLE
+        /* 仅机械臂调试时只启动达妙所在的 FDCAN3。 */
+        if (i != BSP_FDCAN_3) continue;
+#endif
         if (!s_hfdcan[i]) continue;
 
         /* HAL_FDCAN_Init() 会清空该实例占用的 message RAM，所以必须先 Init，
@@ -250,6 +254,15 @@ app_err_t bsp_fdcan_send(bsp_fdcan_bus_t bus, const bsp_fdcan_frame_t* f) {
     }
 
     return APP_OK;
+#endif
+}
+
+uint32_t bsp_fdcan_get_bus_err_cnt(bsp_fdcan_bus_t bus) {
+    if (bus >= BSP_FDCAN_BUS_MAX) return 0U;
+#if APP_TARGET_HOST
+    return 0U;
+#else
+    return s_bus_err_cnt[bus];
 #endif
 }
 
