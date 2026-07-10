@@ -82,6 +82,20 @@ static void mark_chassis_command_rx(void) {
 
 static int send_proto_payload(uint8_t func_id, const void* payload, uint8_t len);
 
+#if APP_CHASSIS_ENABLE
+static void request_mode_safe_stand(void) {
+    s_chassis.vx = 0.0f;
+    s_chassis.vy = 0.0f;
+    s_chassis.wz = 0.0f;
+    s_chassis.target_yaw = 0.0f;
+    s_chassis.steer_mode = 0U;
+    s_chassis.seq++;
+
+    task_chassis_set_mode(CHASSIS_MODE_STANDALONE);
+    (void)task_chassis_start_stand(0.3f);
+}
+#endif
+
 static int handle_chassis(const uint8_t* p, uint8_t len) {
 #if !APP_CHASSIS_ENABLE
     (void)p;
@@ -258,8 +272,15 @@ static int handle_mode_cmd(const uint8_t* p, uint8_t len) {
 
     s_mode_cmd.mode = cmd.mode;
     s_mode_cmd.seq++;
-    task_safety_estop_set(cmd.mode == PROTO_ROBOT_MODE_ESTOP ||
-                          cmd.mode == PROTO_ROBOT_MODE_ERROR);
+
+    /* Host ESTOP/ERROR are soft safe-stand requests in this field workflow. */
+    task_safety_estop_set(false);
+#if APP_CHASSIS_ENABLE
+    if (cmd.mode == PROTO_ROBOT_MODE_ESTOP ||
+        cmd.mode == PROTO_ROBOT_MODE_ERROR) {
+        request_mode_safe_stand();
+    }
+#endif
     mark_valid_rx();
     return 0;
 }
