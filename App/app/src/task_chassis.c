@@ -21,6 +21,29 @@
 
 static const char* TAG = "CHASSIS_TASK";
 
+/*
+ * Keep this as a global volatile symbol so it can be changed from the debugger.
+ * It deliberately defaults to stand; USB commands never write this variable.
+ */
+volatile uint8_t g_task_chassis_field_trot_enable = 0U;
+static uint8_t s_field_trot_commanded = 0U;
+
+static void apply_field_trot_test_request(void) {
+    const uint8_t request_trot = (g_task_chassis_field_trot_enable != 0U) ? 1U : 0U;
+
+    if (request_trot == s_field_trot_commanded) return;
+
+    if (request_trot) {
+        /* Manual gait hold keeps the selected trot independent of USB commands. */
+        (void)task_chassis_start_trot(NULL, 0.3f);
+        LOGI("field gait test: trot requested");
+    } else {
+        (void)task_chassis_start_stand(0.3f);
+        LOGI("field gait test: stand requested");
+    }
+    s_field_trot_commanded = request_trot;
+}
+
 static uint8_t chassis_mode_allows_motion(void) {
     task_comm_mode_cmd_t mode;
     task_comm_get_mode_cmd(&mode);
@@ -48,6 +71,8 @@ static void read_chassis_input(chassis_control_input_t* input) {
 }
 
 void task_chassis_init(void) {
+    g_task_chassis_field_trot_enable = 0U;
+    s_field_trot_commanded = 0U;
     chassis_control_init();
 }
 
@@ -148,6 +173,7 @@ void task_chassis_entry(void* arg) {
         }
         uint32_t now = (uint32_t)bsp_time_now_ms();
         task_chassis_step_for_test(dt, now);
+        apply_field_trot_test_request();
         osDelay(2);
     }
 #endif

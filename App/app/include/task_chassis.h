@@ -29,6 +29,12 @@ extern "C" {
 void  task_chassis_entry(void* arg);
 void  task_chassis_init(void);
 
+/*
+ * 现场步态调试开关（默认 0）：调试器表达式写 1 后开始默认 trot，写回 0 后站立。
+ * 该开关不经过 USB/上位机协议，只供现场调试使用。
+ */
+extern volatile uint8_t g_task_chassis_field_trot_enable;
+
 void           task_chassis_set_mode(chassis_mode_t m);
 chassis_mode_t task_chassis_get_mode(void);
 chassis_gait_active_t task_chassis_get_gait_active(void);
