@@ -33,6 +33,7 @@
 - `handle_arm_target()`: 解码和预校验 `0x11 ARM_TARGET`。
 - `handle_arm_pump()`: 解码 `0x14 ARM_PUMP`。
 - `handle_mode_cmd()`: 解码 `0x15 MODE_CMD`，同步 ESTOP/ERROR 到 safety。
+- `handle_wheel_test()`: 解码 `0x16 WHEEL_TEST`，清普通底盘速度并更新独立轮驱测试。
 - `on_usb_rx()`: USB RX 回调，喂给 `proto_frame_feed()`。
 - `task_comm_init()`: 重置缓存、安装分发表、注册 USB RX 回调。
 - `task_comm_good_cnt()` / `task_comm_bad_cnt()`: 返回协议 parser 统计。
@@ -186,8 +187,8 @@
 - `request_gait()`: 封装 gait machine set/request。
 - `is_offline()`: AUTO/ONLINE/STANDALONE 心跳判定。
 - `online_decide()`: online 下 moving 走 trot，低速 yaw 走 walk，停止走 stand。
-- `gait_motion_scale()`: 计算 gait blend 过程中的轮速缩放。
-- `apply_plan_wheel_speed()`: 只给支撑相应用 planner 轮速。
+- `gait_motion_scale()`: 计算 stand/motion blend 的轮速缩放；motion gait 之间切换保持 1。
+- `apply_plan_wheel_speed()`: 给运动 gait 的四轮连续应用 planner 轮速并设置 DRIVE/HOLD。
 - `apply_attitude_compensation()`: roll/pitch 转支撑腿 balance `tau_ff`。
 - `update_arm_load_compensation()`: 机械臂姿态和 payload 转底盘载荷补偿。
 - `update_steering()`: IMU 更新和目标 yaw 转实际 `wz`。
@@ -200,8 +201,11 @@
 - `update_online_state()`: 更新 online 缓存。
 - `decide_gait_for_link_state()`: online/offline gait 策略分发。
 - `apply_gait_output_to_motors()`: gait、轮速、补偿、腿控制器整体派发。
+- `wheel_test_active_at()`: 检查独立轮驱测试心跳并在 500 ms 超时后退出。
+- `apply_direct_wheel_test()`: 固定 stand 足端目标并绕过 planner/gait 应用四轮测试速度。
 - `update_boot_stand()`: 上电站起阶段。
 - `chassis_control_init()`: 初始化 gait、leg、planner、姿态和补偿默认值。
+- `chassis_control_set_wheel_test()`: 校验/缓存 `0x16` 测试目标并控制 M3508 trace。
 - `chassis_control_tick()`: 底盘 500 Hz 完整周期。
 - `chassis_control_set_mode()` / `chassis_control_get_mode()`: 读写底盘模式。
 - `chassis_control_get_gait_active()`: 当前 gait 枚举。
@@ -214,11 +218,12 @@
 - `chassis_planner_init()`: planner 初始化钩子。
 - `chassis_planner_is_low_speed_turn()`: 判断低速/原地 yaw 转向。
 - `planner_leg_local_vx()`: 按 `v_leg_x = vx - wz * y_leg` 计算单腿局部速度。
+- `planner_leg_turn_vx()`: 计算不含 `vx` 的单腿 yaw 足端速度。
 - `planner_apply_turn_gait()`: 低速转向 gait 参数覆盖。
 - `planner_period_from_speed()`: 根据速度插值周期。
-- `planner_step_height_from_speed()`: 低速降低抬脚高度。
-- `planner_apply_stride_schedule()`: 轮足周期/抬脚高度调度。
-- `planner_fill_leg_steps()`: 填充每腿步长和摘要字段。
+- `planner_configured_travel_step_height()` / `planner_configured_travel_duty()`: 读取普通行驶原地踏步高度和 duty。
+- `planner_apply_stride_schedule()`: 调度 4-5 Hz 普通行驶周期并固定 `0.055 m` 抬脚高度。
+- `planner_fill_leg_steps()`: 按轮驱模式或旧模式填充每腿步长和摘要字段。
 - `chassis_planner_update()`: 输出 moving、low_speed_turn、每腿步长和轮速。
 
 ## `App/control/gait`
@@ -261,9 +266,10 @@
 - `leg_controller_set_stand_height()`: 设置 IK 站立高度。
 - `leg_controller_set_output_options()`: 配置启用腿、关节、轮子、关节增益。
 - `try_set_pos()`: 髋/膝位置命令。
-- `try_set_wheel_mit()`: M3508 MIT 命令和限幅。
-- `wheel_mit_apply_stance()`: 支撑相积分轮角并发送 MIT。
-- `wheel_mit_apply_swing()`: 摆动相保持当前轮角。
+- `try_set_wheel_mit()`: M3508 DRIVE/HOLD MIT 命令和限幅。
+- `wheel_mit_should_integrate()`: 根据未限幅力矩和速度误差执行条件积分抗饱和。
+- `wheel_mit_apply_drive()`: 跨支撑/摆动相维护有界速度误差积分并发送 MIT。
+- `wheel_mit_apply_hold()`: 进入 HOLD 时一次锁存实际轮角，随后通过 MIT 保持固定位置和零速。
 - `gravity_comp_prepare_payload_shares()`: 按支撑腿分配 payload 质量。
 - `gravity_comp_prepare_balance_forces()`: 按支撑腿分配姿态虚拟力。
 - `gravity_comp_compute()`: 计算单腿髋/膝 `tau_ff`。

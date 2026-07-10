@@ -65,6 +65,7 @@ static int trot_update(gait_if_t* self, float dt_s, gait_output_t* out) {
     memset(out, 0, sizeof(*out));
     out->phase = c->phase;
     out->tick_count = 1; /* 由调用方累加；这里仅占位 */
+    out->wheel_mode = GAIT_WHEEL_DRIVE;
 
     for (int i = 0; i < GAIT_LEG_NUM; i++) {
         float lp = gait_wrap01(c->phase + p->phase_offset[i]);
@@ -77,8 +78,8 @@ static int trot_update(gait_if_t* self, float dt_s, gait_output_t* out) {
         /* 兼容旧调试工具；IK 当前读取 foot_x_m/foot_z_m。 */
         out->leg[i].hip_rad    = dx;
         out->leg[i].knee_rad   = dz;
-        /* 轮速：支撑相用 dx 方向（不在本层做完整里程，只给一个粗略前向轮速） */
-        out->leg[i].wheel_rads = (st ? (-leg_step / (p->period_s * p->duty + 1e-9f)) : 0.0f);
+        /* 手动 gait 的粗略轮速也跨相位连续；在线模式会由 planner 覆盖。 */
+        out->leg[i].wheel_rads = -leg_step / (p->period_s * p->duty + 1e-9f);
     }
     return APP_OK;
 }

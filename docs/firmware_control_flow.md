@@ -21,6 +21,7 @@ flowchart TD
     DISP --> H13["0x13 MIT debug"]
     DISP --> H14["0x14 pump"]
     DISP --> H15["0x15 mode"]
+    DISP --> H16["0x16 direct wheel test"]
 
     H10 --> CH_CACHE["s_chassis"]
     H11 --> ARM_CACHE["s_arm_target"]
@@ -36,7 +37,7 @@ flowchart TD
     GAIT --> LEG["leg_controller_apply_dt"]
     LEG --> IK["leg_ik_solve_all"]
     LEG --> GO["GO hip/knee position"]
-    LEG --> WHEEL["M3508 wheel MIT"]
+    LEG --> WHEEL["M3508 bounded-integral MIT"]
     GO --> UART["bsp_uart"]
     WHEEL --> FDCAN12["bsp_fdcan CAN1/CAN2"]
 
@@ -74,6 +75,7 @@ flowchart TD
 | `0x13 MIT_CMD` | 单电机 MIT 调试；拒绝 ARM_J1-J6 旁路，防止抢机械臂 task。 |
 | `0x14 ARM_PUMP` | 校验 `pump_on` 后写 `s_arm_pump`。 |
 | `0x15 MODE_CMD` | 写 `s_mode_cmd`；`ESTOP/ERROR` 同步置位 `task_safety` 急停。 |
+| `0x16 WHEEL_TEST` | 腿固定 stand，按 FL/FR/RL/RR 掩码直接测试轮毂 MIT；500 ms 超时锁轮。 |
 
 上行：
 
@@ -97,20 +99,21 @@ task_comm_get_chassis/mode
 2. 上电 stand height ramp 从 `0.12 m` 平滑到目标站高。
 3. 读取 BMI088，更新 yaw/roll/pitch；`steer_mode=1` 时用目标 yaw 生成实际 `wz`。
 4. 对 `vx/vy/wz` 做斜率限制：`0.80 m/s^2`、`0.60 m/s^2`、`1.50 rad/s^2`。
-5. `chassis_planner_update()` 生成 moving、walk/trot 参数、每腿步长、每轮局部滚动速度。
+5. `chassis_planner_update()` 生成 moving、walk/trot 参数、足端转向步长和每轮局部滚动速度。
 6. 根据心跳和 mode 判断 online/offline。
 7. online 且普通移动选择 `trot`；低速/原地 yaw 转向选择 `walk`；停止选择 `stand`。
 8. `gait_machine_update()` 输出足端目标，过渡时混合输出。
-9. 支撑相腿应用 planner 轮速；摆动相轮速清零。
+9. 运动 gait 的四轮跨支撑/摆动相连续应用 planner 轮速；腿相位不参与轮毂驱动控制。
 10. 姿态补偿和机械臂载荷补偿按编译期开关和 debug 开关写入 `g_leg_gravity_comp`。
-11. `leg_controller_apply_dt()` 做 IK、支撑腿载荷分配、髋/膝位置命令和轮毂 MIT 命令。
+11. `leg_controller_apply_dt()` 做 IK、支撑腿载荷分配、髋/膝位置命令，以及轮毂 DRIVE/HOLD MIT 命令。
 12. MCU 构建 `motor_go_send_all()`、`motor_m3508_send_all()` 刷新总线输出。
 
 当前 planner 约束：
 
-- `vx/wz` 进入每腿局部前后速度：`v_leg_x = vx - wz * y_leg`，默认 `|y_leg| = 0.15 m`。
+- 轮速使用完整局部速度：`v_wheel_x = vx - wz * y_leg`，默认 `|y_leg| = 0.15 m`。
+- 普通行驶默认启用 `wheel_only_travel`：足端不使用 `vx`，直行时三个步长字段全部为 0；边行驶边转向时只保留 `-wz * y_leg` 的左右步差。
 - `vy` 只参与 moving 判断，不进入 2DOF 足端横向轨迹。
-- `g_chassis_stride_cfg` 默认把周期从 `0.60 s` 小范围调到 `0.50 s`；速度主要进入轮速和每腿步长。
+- `g_chassis_stride_cfg` 默认把普通行驶周期从 `0.25 s` 调到 `0.20 s`，固定抬脚高度 `0.055 m`、duty `0.60`；可用 `wheel_only_travel=0` 回退旧平移步长。
 - `g_chassis_turn_cfg` 控制低速转向的 walk 周期、抬脚高度、duty 和轮速/步长限幅。
 
 ## 腿和轮输出
@@ -123,14 +126,17 @@ gait_output
   -> gravity_comp_prepare_payload_shares()
   -> gravity_comp_prepare_balance_forces()
   -> hip/knee motor->ops->set_position(... tau_ff)
-  -> wheel MIT reference
+  -> wheel bounded-integral MIT or stand MIT hold
 ```
 
-轮毂 M3508 默认使用 MIT 路径：
+轮毂 M3508 统一使用 MIT 路径：
 
-- 支撑相：`theta_ref += wheel_rads * dt`，发送位置/速度/kp/kd/tau_ff。
-- 摆动相：参考角锁到当前轮角，速度和力矩前馈为 0。
-- `g_leg_wheel_mit` 提供增益、力矩限幅、位置误差限幅和 debug reset。
+- `GAIT_WHEEL_DRIVE`：所有轮子不受腿相位门控；`velocity_i += (wheel_rads - measured_rads) * dt`，再令 `theta_ref = theta_actual + velocity_i`。
+- `velocity_i` 同时受位置误差/力矩上限约束；力矩饱和且误差继续推向饱和时暂停积分，误差反向时允许退饱和。
+- `GAIT_WHEEL_HOLD`：进入 stand/保守保持时清 DRIVE 积分、一次锁存实际轮角，随后发送固定位置和零速度。
+- `g_leg_wheel_mit` 提供 drive/hold mask、速度积分、增益、力矩限幅、位置误差限幅和 debug reset。
+
+`0x16 WHEEL_TEST` payload 为 `enable:u8, wheel_mask:u8, reserved[2], wheel_rads[4]:f32`，轮序固定 `FL/FR/RL/RR`。测试状态绕过 planner/gait，但仍由 500 Hz chassis task 下发并自动启用 `g_m3508_trace`；命令必须在 500 ms 内持续刷新。
 
 ## 机械臂控制周期
 

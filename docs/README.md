@@ -38,7 +38,7 @@ USB CDC bytes
 
 mode=NAV:
   task_chassis -> chassis_control -> planner -> gait -> leg IK
-    -> GO hip/knee + M3508 wheel MIT -> UART/FDCAN BSP
+    -> GO hip/knee + M3508 wheel velocity/MIT hold -> UART/FDCAN BSP
 
 mode=ARM:
   task_arm -> fixed wait pose -> Arm_Serial_Protocol queue
@@ -53,9 +53,10 @@ mode=ARM:
 - `task_comm` 是唯一 USB CDC 下行解析入口，旧机械臂串口协议不自动接管 USB。
 - `ROBOT_MODE_NAV` 才允许底盘速度进入 `chassis_control`；没有 mode 帧时保留旧调试兼容。
 - `ROBOT_MODE_ARM` 只允许机械臂消费新的 USB 目标/泵命令；机械臂 task 本身常驻保持姿态。
-- 底盘普通移动使用 `trot`，低速/原地 yaw 转向使用 `walk`。
+- 底盘普通移动使用 4-5 Hz、`0.055 m` 抬腿的零平移步长 `trot`，由四轮连续推进；低速/原地 yaw 转向继续使用原有 `walk`。
 - `vy` 参与 moving 判断，但当前 2DOF 腿不生成真实横向足端轨迹。
-- 轮毂默认走 M3508 MIT 位置/速度参考：支撑相积分轮角，摆动相保持当前轮角。
+- 轮毂统一走 M3508 MIT：DRIVE 使用有界速度误差积分生成位置偏差，跨支撑/摆动相连续驱动；stand 锁存实际轮角并保持零速。
+- `0x16 WHEEL_TEST` 可让腿固定 stand、绕过 planner/gait 直接测试四轮；500 ms 未刷新会自动退出并锁轮。
 - MCU 上 `APP_CHASSIS_COMP_FORCE_DISABLE` 默认会关闭底盘姿态和机械臂载荷前馈；host 单测仍覆盖这些算法路径。
 - 机械臂达妙输出在 MCU 默认开启，host 单测默认关闭。
 

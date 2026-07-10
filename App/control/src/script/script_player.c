@@ -46,6 +46,7 @@ static void blend_kf(const script_keyframe_t* a, const script_keyframe_t* b,
 app_err_t script_sample(const script_t* s, float t_s, gait_output_t* out) {
     if (!s || !out || !s->frames || s->n_frames == 0) return APP_ERR_INVALID_ARG;
     memset(out, 0, sizeof(*out));
+    out->wheel_mode = GAIT_WHEEL_DRIVE;
 
     float total = s->frames[s->n_frames - 1].t_s;
     if (s->loop && total > 1e-6f) {

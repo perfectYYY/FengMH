@@ -45,7 +45,6 @@ void leg_controller_init(leg_controller_t* lc) {
     memset((void*)&g_leg_wheel_mit, 0, sizeof(g_leg_wheel_mit));
     memset((void*)&g_leg_gravity_comp, 0, sizeof(g_leg_gravity_comp));
     g_leg_wheel_mit.enable = 1U;
-    g_leg_wheel_mit.hold_swing = 1U;
     g_leg_wheel_mit.kp = LEG_WHEEL_MIT_DEFAULT_KP;
     g_leg_wheel_mit.kd = LEG_WHEEL_MIT_DEFAULT_KD;
     g_leg_wheel_mit.tau_limit_nm = LEG_WHEEL_MIT_DEFAULT_TAU_LIMIT_NM;
@@ -137,9 +136,11 @@ static int try_set_wheel_mit(motor_dev_t* d,
 static void wheel_mit_reset_refs(void) {
     for (int i = 0; i < GAIT_LEG_NUM; i++) {
         g_leg_wheel_mit.theta_ref_rad[i] = 0.0f;
+        g_leg_wheel_mit.velocity_i_rad[i] = 0.0f;
         g_leg_wheel_mit.ref_valid[i] = 0U;
     }
-    g_leg_wheel_mit.active_mask = 0U;
+    g_leg_wheel_mit.drive_mask = 0U;
+    g_leg_wheel_mit.hold_mask = 0U;
 }
 
 typedef struct {
@@ -176,15 +177,6 @@ static float wheel_mit_limit_dt(float dt_s) {
     return dt_s;
 }
 
-static void wheel_mit_latch_ref_if_needed(volatile leg_wheel_mit_debug_t* dbg,
-                                          int leg_idx,
-                                          const motor_dev_t* wheel) {
-    if (!dbg->ref_valid[leg_idx]) {
-        dbg->theta_ref_rad[leg_idx] = wheel->state.angle_rad;
-        dbg->ref_valid[leg_idx] = 1U;
-    }
-}
-
 static int wheel_mit_command(motor_dev_t* wheel,
                              int leg_idx,
                              float wheel_rads,
@@ -201,35 +193,78 @@ static int wheel_mit_command(motor_dev_t* wheel,
                              cfg->pos_err_limit_rad);
 }
 
-static int wheel_mit_apply_stance(motor_dev_t* wheel,
-                                  const gait_leg_target_t* t,
-                                  int leg_idx,
-                                  float dt_s,
-                                  const wheel_mit_cfg_t* cfg) {
+static float wheel_mit_velocity_i_limit(const wheel_mit_cfg_t* cfg) {
+    if (!cfg || cfg->kp <= 1e-6f) return 0.0f;
+    float limit_from_tau = cfg->tau_limit_nm / cfg->kp;
+    return fminf(cfg->pos_err_limit_rad, limit_from_tau);
+}
+
+static uint8_t wheel_mit_should_integrate(float velocity_error,
+                                          float tau_unsat,
+                                          float tau_limit) {
+    if (fabsf(tau_unsat) < tau_limit) return 1U;
+    if (tau_unsat >= tau_limit && velocity_error < 0.0f) return 1U;
+    if (tau_unsat <= -tau_limit && velocity_error > 0.0f) return 1U;
+    return 0U;
+}
+
+static int wheel_mit_apply_drive(motor_dev_t* wheel,
+                                 const gait_leg_target_t* t,
+                                 int leg_idx,
+                                 float dt_s,
+                                 const wheel_mit_cfg_t* cfg) {
     volatile leg_wheel_mit_debug_t* dbg = &g_leg_wheel_mit;
-    dbg->theta_ref_rad[leg_idx] += t->wheel_rads * dt_s;
-    dbg->active_mask |= (uint8_t)(1U << leg_idx);
+    uint8_t bit = (uint8_t)(1U << leg_idx);
+    if ((dbg->drive_mask & bit) == 0U || !dbg->ref_valid[leg_idx]) {
+        dbg->velocity_i_rad[leg_idx] = 0.0f;
+        dbg->theta_ref_rad[leg_idx] = wheel->state.angle_rad;
+        dbg->ref_valid[leg_idx] = 1U;
+    }
+
     float tau_ff = 0.0f;
-    if (fabsf(t->wheel_rads) > LEG_WHEEL_MIT_FF_DEADBAND_RADS) {
+    if (t->in_stance && fabsf(t->wheel_rads) > LEG_WHEEL_MIT_FF_DEADBAND_RADS) {
         tau_ff = copysignf(cfg->stance_tau_ff_nm, t->wheel_rads);
     }
+
+    float velocity_error = t->wheel_rads - wheel->state.velocity_rads;
+    float tau_unsat = cfg->kp * dbg->velocity_i_rad[leg_idx]
+                    + cfg->kd * velocity_error
+                    + tau_ff;
+    if (wheel_mit_should_integrate(velocity_error, tau_unsat, cfg->tau_limit_nm)) {
+        dbg->velocity_i_rad[leg_idx] += velocity_error * dt_s;
+    }
+
+    float i_limit = wheel_mit_velocity_i_limit(cfg);
+    dbg->velocity_i_rad[leg_idx] = fminf(fmaxf(dbg->velocity_i_rad[leg_idx],
+                                              -i_limit),
+                                              i_limit);
+    dbg->theta_ref_rad[leg_idx] = wheel->state.angle_rad
+                                + dbg->velocity_i_rad[leg_idx];
+    dbg->drive_mask |= bit;
+    dbg->hold_mask &= (uint8_t)~bit;
     return wheel_mit_command(wheel, leg_idx, t->wheel_rads, tau_ff, cfg);
 }
 
-static int wheel_mit_apply_swing(motor_dev_t* wheel,
-                                 int leg_idx,
-                                 const wheel_mit_cfg_t* cfg) {
+static int wheel_mit_apply_hold(motor_dev_t* wheel,
+                                int leg_idx,
+                                const wheel_mit_cfg_t* cfg) {
     volatile leg_wheel_mit_debug_t* dbg = &g_leg_wheel_mit;
-    dbg->theta_ref_rad[leg_idx] = wheel->state.angle_rad;
-    dbg->active_mask &= (uint8_t)~(1U << leg_idx);
-    dbg->hold_swing = 1U;
+    uint8_t bit = (uint8_t)(1U << leg_idx);
+    if ((dbg->hold_mask & bit) == 0U || !dbg->ref_valid[leg_idx]) {
+        dbg->velocity_i_rad[leg_idx] = 0.0f;
+        dbg->theta_ref_rad[leg_idx] = wheel->state.angle_rad;
+        dbg->ref_valid[leg_idx] = 1U;
+    }
+    dbg->drive_mask &= (uint8_t)~bit;
+    dbg->hold_mask |= bit;
     return wheel_mit_command(wheel, leg_idx, 0.0f, 0.0f, cfg);
 }
 
 static int try_set_wheel(motor_dev_t* wheel,
                          const gait_leg_target_t* t,
                          int leg_idx,
-                         float dt_s) {
+                         float dt_s,
+                         gait_wheel_mode_t wheel_mode) {
     if (!wheel || !t) return APP_ERR_UNSUPPORTED;
     volatile leg_wheel_mit_debug_t* dbg = &g_leg_wheel_mit;
 
@@ -242,12 +277,11 @@ static int try_set_wheel(motor_dev_t* wheel,
 
     wheel_mit_cfg_t cfg = wheel_mit_read_cfg(dbg);
     dt_s = wheel_mit_limit_dt(dt_s);
-    wheel_mit_latch_ref_if_needed(dbg, leg_idx, wheel);
 
-    if (t->in_stance) {
-        return wheel_mit_apply_stance(wheel, t, leg_idx, dt_s, &cfg);
+    if (wheel_mode == GAIT_WHEEL_DRIVE) {
+        return wheel_mit_apply_drive(wheel, t, leg_idx, dt_s, &cfg);
     }
-    return wheel_mit_apply_swing(wheel, leg_idx, &cfg);
+    return wheel_mit_apply_hold(wheel, leg_idx, &cfg);
 }
 
 static uint8_t leg_output_enabled(int leg_idx) {
@@ -606,17 +640,19 @@ static void send_joint_targets(const leg_actuators_t* leg,
 static void send_wheel_target(const leg_actuators_t* leg,
                               const gait_leg_target_t* target,
                               int leg_idx,
-                              float dt_s) {
+                              float dt_s,
+                              gait_wheel_mode_t wheel_mode) {
     if (!s_enable_wheels) return;
-    try_set_wheel(leg->wheel, target, leg_idx, dt_s);
+    try_set_wheel(leg->wheel, target, leg_idx, dt_s, wheel_mode);
 }
 
 static void send_leg_targets(const leg_actuators_t* leg,
                              const gait_leg_target_t* target,
                              int leg_idx,
-                             float dt_s) {
+                             float dt_s,
+                             gait_wheel_mode_t wheel_mode) {
     send_joint_targets(leg, target, leg_idx);
-    send_wheel_target(leg, target, leg_idx, dt_s);
+    send_wheel_target(leg, target, leg_idx, dt_s, wheel_mode);
 }
 
 app_err_t leg_controller_apply_dt(leg_controller_t* lc, const gait_output_t* o, float dt_s) {
@@ -639,7 +675,7 @@ app_err_t leg_controller_apply_dt(leg_controller_t* lc, const gait_output_t* o, 
             lc->miss_cnt++;
             continue;
         }
-        send_leg_targets(leg, t, i, dt_s);
+        send_leg_targets(leg, t, i, dt_s, ik_out.wheel_mode);
         lc->send_cnt++;
     }
     return APP_OK;

@@ -9,7 +9,8 @@
 
 #define PLANNER_MOTION_EPSILON_M_S      0.01f
 #define PLANNER_YAW_EPSILON_RAD_S       0.05f
-#define PLANNER_MIN_PERIOD_S            0.35f
+#define PLANNER_TURN_MIN_PERIOD_S       0.35f
+#define PLANNER_TRAVEL_MIN_PERIOD_S     0.15f
 #define PLANNER_MAX_PERIOD_S            3.00f
 #define PLANNER_MAX_STEP_M              0.20f
 #define PLANNER_DEFAULT_LOW_VX_THRESH_M_S 0.05f
@@ -19,12 +20,11 @@
 #define PLANNER_DEFAULT_TURN_STEP_HEIGHT_M 0.035f
 #define PLANNER_DEFAULT_TURN_PERIOD_S   0.80f
 #define PLANNER_DEFAULT_TURN_DUTY       0.75f
-#define PLANNER_DEFAULT_SLOW_PERIOD_S   0.60f
-#define PLANNER_DEFAULT_FAST_PERIOD_S   0.50f
+#define PLANNER_DEFAULT_SLOW_PERIOD_S   0.25f
+#define PLANNER_DEFAULT_FAST_PERIOD_S   0.20f
 #define PLANNER_DEFAULT_FAST_SPEED_M_S  0.35f
-#define PLANNER_LOW_SPEED_STEP_HEIGHT_M 0.035f
-#define PLANNER_LOW_HEIGHT_SPEED_M_S    0.10f
-#define PLANNER_FULL_HEIGHT_SPEED_M_S   0.25f
+#define PLANNER_DEFAULT_TRAVEL_STEP_HEIGHT_M 0.055f
+#define PLANNER_DEFAULT_TRAVEL_DUTY     0.60f
 
 volatile chassis_turn_cfg_t g_chassis_turn_cfg = {
     .enable_gait_turn = 1U,
@@ -40,10 +40,13 @@ volatile chassis_turn_cfg_t g_chassis_turn_cfg = {
 
 volatile chassis_stride_cfg_t g_chassis_stride_cfg = {
     .enable = 1U,
-    .reserved = {0U, 0U, 0U},
+    .wheel_only_travel = 1U,
+    .reserved = {0U, 0U},
     .slow_period_s = PLANNER_DEFAULT_SLOW_PERIOD_S,
     .fast_period_s = PLANNER_DEFAULT_FAST_PERIOD_S,
     .fast_speed_m_s = PLANNER_DEFAULT_FAST_SPEED_M_S,
+    .step_height_m = PLANNER_DEFAULT_TRAVEL_STEP_HEIGHT_M,
+    .duty = PLANNER_DEFAULT_TRAVEL_DUTY,
 };
 
 static float clampf_local(float v, float min_v, float max_v) {
@@ -98,6 +101,11 @@ static float planner_leg_local_vx(const chassis_cmd_plan_t* cmd, int leg_idx) {
     return cmd->vx_m_s - yaw_v;
 }
 
+static float planner_leg_turn_vx(const chassis_cmd_plan_t* cmd, int leg_idx) {
+    float yaw_v = g_chassis_turn_cfg.enable_gait_turn ? (cmd->wz_rad_s * planner_leg_y_m(leg_idx)) : 0.0f;
+    return -yaw_v;
+}
+
 static void planner_apply_turn_gait(gait_params_t* p) {
     if (!p) return;
 
@@ -121,7 +129,7 @@ static void planner_apply_turn_gait(gait_params_t* p) {
 
     p->step_length_m = 0.0f;
     p->step_height_m = clampf_local(turn_height, 0.0f, 0.08f);
-    p->period_s = clampf_local(turn_period, PLANNER_MIN_PERIOD_S, PLANNER_MAX_PERIOD_S);
+    p->period_s = clampf_local(turn_period, PLANNER_TURN_MIN_PERIOD_S, PLANNER_MAX_PERIOD_S);
     p->duty = clampf_local(turn_duty, 0.30f, 0.80f);
 }
 
@@ -133,13 +141,13 @@ static float planner_safe_duty(float duty) {
 static float planner_configured_slow_period(void) {
     float period = g_chassis_stride_cfg.slow_period_s;
     if (!isfinite(period) || period <= 0.0f) period = PLANNER_DEFAULT_SLOW_PERIOD_S;
-    return clampf_local(period, PLANNER_MIN_PERIOD_S, PLANNER_MAX_PERIOD_S);
+    return clampf_local(period, PLANNER_TRAVEL_MIN_PERIOD_S, PLANNER_MAX_PERIOD_S);
 }
 
 static float planner_configured_fast_period(void) {
     float period = g_chassis_stride_cfg.fast_period_s;
     if (!isfinite(period) || period <= 0.0f) period = PLANNER_DEFAULT_FAST_PERIOD_S;
-    return clampf_local(period, PLANNER_MIN_PERIOD_S, PLANNER_MAX_PERIOD_S);
+    return clampf_local(period, PLANNER_TRAVEL_MIN_PERIOD_S, PLANNER_MAX_PERIOD_S);
 }
 
 static float planner_configured_fast_speed(void) {
@@ -158,23 +166,20 @@ static float planner_period_from_speed(float speed_abs) {
     return slow_period + (fast_period - slow_period) * t;
 }
 
-static float planner_step_height_from_speed(float base_height_m,
-                                            float speed_abs) {
-    if (!isfinite(base_height_m) || base_height_m <= 0.0f) {
-        return base_height_m;
+static float planner_configured_travel_step_height(void) {
+    float height = g_chassis_stride_cfg.step_height_m;
+    if (!isfinite(height) || height <= 0.0f) {
+        height = PLANNER_DEFAULT_TRAVEL_STEP_HEIGHT_M;
     }
+    return clampf_local(height, 0.0f, 0.12f);
+}
 
-    float low_height = fminf(base_height_m, PLANNER_LOW_SPEED_STEP_HEIGHT_M);
-    if (speed_abs <= PLANNER_LOW_HEIGHT_SPEED_M_S) {
-        return low_height;
+static float planner_configured_travel_duty(void) {
+    float duty = g_chassis_stride_cfg.duty;
+    if (!isfinite(duty) || duty <= 0.0f) {
+        duty = PLANNER_DEFAULT_TRAVEL_DUTY;
     }
-    if (speed_abs >= PLANNER_FULL_HEIGHT_SPEED_M_S) {
-        return base_height_m;
-    }
-
-    float t = (speed_abs - PLANNER_LOW_HEIGHT_SPEED_M_S) /
-              (PLANNER_FULL_HEIGHT_SPEED_M_S - PLANNER_LOW_HEIGHT_SPEED_M_S);
-    return low_height + (base_height_m - low_height) * t;
+    return clampf_local(duty, 0.30f, 0.80f);
 }
 
 static void planner_apply_stride_schedule(gait_params_t* params, float motion_speed) {
@@ -182,13 +187,12 @@ static void planner_apply_stride_schedule(gait_params_t* params, float motion_sp
     if (motion_speed <= PLANNER_MOTION_EPSILON_M_S) return;
 
     /*
-     * Wheel-legged mode: wheels track the requested ground speed while the
-     * legs keep a visible walking cadence.  Keep cadence in a narrow range and
-     * let leg_step_length_m absorb most speed changes.
+     * Wheel-only travel: wheels track ground speed while the legs keep a
+     * high-frequency in-place cadence at the configured lift height.
      */
     params->period_s = planner_period_from_speed(motion_speed);
-    params->step_height_m =
-        planner_step_height_from_speed(params->step_height_m, motion_speed);
+    params->step_height_m = planner_configured_travel_step_height();
+    params->duty = planner_configured_travel_duty();
 }
 
 static float planner_step_from_vx(float local_vx, float period_s, float duty) {
@@ -217,10 +221,11 @@ static float planner_right_left_turn_step(const gait_params_t* p) {
 static void planner_fill_leg_steps(const chassis_cmd_plan_t* cmd,
                                    gait_params_t* params,
                                    float period_s,
-                                   float* local_vx_out) {
+                                   uint8_t include_translation) {
     for (int i = 0; i < GAIT_LEG_NUM; i++) {
-        float local_vx = planner_leg_local_vx(cmd, i);
-        if (local_vx_out) local_vx_out[i] = local_vx;
+        float local_vx = include_translation
+                       ? planner_leg_local_vx(cmd, i)
+                       : planner_leg_turn_vx(cmd, i);
         params->leg_step_length_m[i] = planner_step_from_vx(local_vx, period_s, params->duty);
     }
     params->step_length_m = planner_mean_step(params);
@@ -246,7 +251,6 @@ app_err_t chassis_planner_update(const chassis_cmd_plan_t* cmd,
     uint8_t low_speed_turn = chassis_planner_is_low_speed_turn(cmd);
     out->low_speed_turn = low_speed_turn;
 
-    float local_vx[GAIT_LEG_NUM] = {0.0f, 0.0f, 0.0f, 0.0f};
     if (low_speed_turn) {
         planner_apply_turn_gait(&out->gait_params);
     } else if (motion_speed > PLANNER_MOTION_EPSILON_M_S) {
@@ -255,15 +259,18 @@ app_err_t chassis_planner_update(const chassis_cmd_plan_t* cmd,
         out->gait_params.step_length_m = 0.0f;
     }
 
+    uint8_t include_translation = (low_speed_turn || !g_chassis_stride_cfg.wheel_only_travel)
+                                ? 1U : 0U;
     planner_fill_leg_steps(cmd,
                            &out->gait_params,
                            out->gait_params.period_s,
-                           local_vx);
+                           include_translation);
 
     float wheel_radius = LEG_DIM_DEFAULT.wheel_diameter * 0.5f;
     if (out->moving && wheel_radius > 1e-6f) {
         for (int i = 0; i < GAIT_LEG_NUM; i++) {
-            out->wheel_rads[i] = planner_limit_wheel(local_vx[i] / wheel_radius);
+            float wheel_vx = planner_leg_local_vx(cmd, i);
+            out->wheel_rads[i] = planner_limit_wheel(wheel_vx / wheel_radius);
         }
     }
 

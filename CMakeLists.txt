@@ -18,10 +18,10 @@ project(FengMH C CXX ASM)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_C_STANDARD 11)
 
-#Uncomment for hardware floating point
-#add_compile_definitions(ARM_MATH_CM4;ARM_MATH_MATRIX_CHECK;ARM_MATH_ROUNDING)
-#add_compile_options(-mfloat-abi=hard -mfpu=fpv4-sp-d16)
-#add_link_options(-mfloat-abi=hard -mfpu=fpv4-sp-d16)
+# STM32H723 Cortex-M7 uses the FPv5 double-precision FPU. Keep these flags
+# aligned with the STM32CubeIDE-generated build.
+add_compile_options(-mfloat-abi=hard -mfpu=fpv5-d16)
+add_link_options(-mfloat-abi=hard -mfpu=fpv5-d16)
 
 #Uncomment for software floating point
 #add_compile_options(-mfloat-abi=soft)
@@ -49,7 +49,7 @@ else ()
     add_compile_options(-Og -g)
 endif ()
 
-include_directories(Core/Inc App/common/include App/bsp/include App/device/include App/control/include App/control/include/arm App/control/include/attitude App/control/include/chassis App/control/include/gait App/control/include/kinematics App/control/include/leg App/control/include/script App/service/include App/service/include/pid App/service/include/protocol App/app/include "E:\IDE_workplace\FengMH\App" USB_DEVICE/App USB_DEVICE/Target Drivers/STM32H7xx_HAL_Driver/Inc Drivers/STM32H7xx_HAL_Driver/Inc/Legacy Middlewares/Third_Party/FreeRTOS/Source/include Middlewares/Third_Party/FreeRTOS/Source/CMSIS_RTOS_V2 Middlewares/Third_Party/FreeRTOS/Source/portable/GCC/ARM_CM4F Middlewares/ST/STM32_USB_Device_Library/Core/Inc Middlewares/ST/STM32_USB_Device_Library/Class/CDC/Inc Drivers/CMSIS/Device/ST/STM32H7xx/Include Drivers/CMSIS/Include Middlewares/ST/ARM/DSP/Inc App App/common App/bsp App/device App/service/pid App/service/protocol App/service/gait App/service/chassis App/service/leg App/service/kinematics App/service/script App/service/attitude App/app)
+include_directories(Core/Inc App/common/include App/bsp/include App/device/include App/control/include App/control/include/arm App/control/include/attitude App/control/include/chassis App/control/include/gait App/control/include/kinematics App/control/include/leg App/control/include/script App/service/include App/service/include/pid App/service/include/protocol App/app/include USB_DEVICE/App USB_DEVICE/Target Drivers/STM32H7xx_HAL_Driver/Inc Drivers/STM32H7xx_HAL_Driver/Inc/Legacy Middlewares/Third_Party/FreeRTOS/Source/include Middlewares/Third_Party/FreeRTOS/Source/CMSIS_RTOS_V2 Middlewares/Third_Party/FreeRTOS/Source/portable/GCC/ARM_CM4F Middlewares/ST/STM32_USB_Device_Library/Core/Inc Middlewares/ST/STM32_USB_Device_Library/Class/CDC/Inc Drivers/CMSIS/Device/ST/STM32H7xx/Include Drivers/CMSIS/Include Middlewares/ST/ARM/DSP/Inc App App/common App/bsp App/device App/service/pid App/service/protocol App/service/gait App/service/chassis App/service/leg App/service/kinematics App/service/script App/service/attitude App/app)
 
 add_definitions(-DDEBUG -DUSE_PWR_LDO_SUPPLY -DUSE_HAL_DRIVER -DSTM32H723xx -DAPP_TARGET_HOST=0)
 

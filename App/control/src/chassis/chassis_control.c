@@ -53,6 +53,8 @@ static const char* TAG = "CHASSIS";
 #define CHASSIS_CMD_SLEW_VX_MPS2               0.80f
 #define CHASSIS_CMD_SLEW_VY_MPS2               0.60f
 #define CHASSIS_CMD_SLEW_WZ_RADPS2             1.50f
+#define CHASSIS_WHEEL_TEST_TIMEOUT_MS           500U
+#define CHASSIS_WHEEL_TEST_MAX_RADS             4.0f
 
 typedef enum {
     ACTIVE_STAND = 0,
@@ -87,6 +89,8 @@ static chassis_plan_t s_chassis_plan;
 static uint8_t s_last_online = 0U;
 volatile chassis_attitude_comp_debug_t g_chassis_attitude_comp;
 volatile chassis_arm_load_comp_debug_t g_chassis_arm_load_comp;
+volatile chassis_wheel_test_debug_t g_chassis_wheel_test;
+static uint8_t s_wheel_test_was_active = 0U;
 static uint8_t s_attitude_balance_filter_valid = 0U;
 static uint8_t s_attitude_balance_was_enabled = 0U;
 static float s_attitude_filtered_mx_nm = 0.0f;
@@ -278,10 +282,16 @@ static float gait_motion_scale(void) {
                 : 1.0f;
         t = chassis_clampf(t, 0.0f, 1.0f);
 
-        if (is_motion_gait(s_gait_machine.target)) {
+        uint8_t current_is_motion = is_motion_gait(s_gait_machine.current);
+        uint8_t target_is_motion = is_motion_gait(s_gait_machine.target);
+        if (current_is_motion && target_is_motion) {
+            return 1.0f;
+        }
+
+        if (target_is_motion) {
             return t;
         }
-        if (is_motion_gait(s_gait_machine.current)) {
+        if (current_is_motion) {
             return 1.0f - t;
         }
     }
@@ -289,14 +299,14 @@ static float gait_motion_scale(void) {
     return 0.0f;
 }
 
-/* Wheels are active only with a motion gait and while their leg is in stance. */
+/* Motion gaits drive all wheels continuously; leg phase only controls contact feedforward. */
 static void apply_plan_wheel_speed(gait_output_t* output, const chassis_plan_t* plan) {
     if (!output || !plan) return;
-    float scale = plan->moving ? gait_motion_scale() : 0.0f;
+    float motion_scale = gait_motion_scale();
+    float speed_scale = plan->moving ? motion_scale : 0.0f;
+    output->wheel_mode = (motion_scale > 0.0f) ? GAIT_WHEEL_DRIVE : GAIT_WHEEL_HOLD;
     for (int i = 0; i < GAIT_LEG_NUM; i++) {
-        output->leg[i].wheel_rads = (scale > 0.0f && output->leg[i].in_stance)
-                                  ? (plan->wheel_rads[i] * scale)
-                                  : 0.0f;
+        output->leg[i].wheel_rads = plan->wheel_rads[i] * speed_scale;
     }
 }
 
@@ -676,6 +686,8 @@ static void apply_rl_single_leg_debug(uint8_t online, const chassis_plan_t* plan
     gait_machine_update(&s_gait_machine, dt_s, &output);
 
     float scale = (online && plan && plan->moving) ? gait_motion_scale() : 0.0f;
+    output.wheel_mode = (online && gait_motion_scale() > 0.0f)
+                      ? GAIT_WHEEL_DRIVE : GAIT_WHEEL_HOLD;
     output.leg[GAIT_LEG_RL].wheel_rads = (scale > 0.0f)
                                        ? (plan->wheel_rads[GAIT_LEG_RL] * scale)
                                        : 0.0f;
@@ -924,6 +936,45 @@ static void apply_gait_output_to_motors(uint8_t online, float dt_s) {
     leg_controller_apply_dt(&s_leg_controller, &gait_output, dt_s);
 }
 
+static void wheel_test_force_stand_state(void) {
+    (void)request_gait(s_stand_gait, &GAIT_PARAMS_STAND_DEFAULT, 0.0f);
+    apply_controller_height(&GAIT_PARAMS_STAND_DEFAULT);
+    s_active = ACTIVE_STAND;
+    s_manual_gait_hold = 1U;
+}
+
+static uint8_t wheel_test_active_at(uint32_t now_ms) {
+    if (!g_chassis_wheel_test.active) return 0U;
+    if ((now_ms - g_chassis_wheel_test.last_cmd_ms) <= CHASSIS_WHEEL_TEST_TIMEOUT_MS) {
+        return 1U;
+    }
+
+    g_chassis_wheel_test.active = 0U;
+    g_chassis_wheel_test.wheel_mask = 0U;
+    for (int i = 0; i < GAIT_LEG_NUM; i++) {
+        g_chassis_wheel_test.wheel_rads[i] = 0.0f;
+    }
+    g_chassis_wheel_test.timeout_count++;
+    motor_m3508_trace_enable(0U);
+    return 0U;
+}
+
+static void apply_direct_wheel_test(float dt_s) {
+    gait_output_t output;
+    memset(&output, 0, sizeof(output));
+    output.wheel_mode = GAIT_WHEEL_DRIVE;
+
+    uint8_t mask = (uint8_t)(g_chassis_wheel_test.wheel_mask & 0x0FU);
+    for (int i = 0; i < GAIT_LEG_NUM; i++) {
+        output.leg[i].in_stance = 1U;
+        output.leg[i].wheel_rads = (mask & (uint8_t)(1U << i))
+                                 ? g_chassis_wheel_test.wheel_rads[i]
+                                 : 0.0f;
+    }
+
+    leg_controller_apply_dt(&s_leg_controller, &output, dt_s);
+}
+
 static uint8_t update_boot_stand(float dt_s) {
     if (s_boot_stand_done) return 1U;
 
@@ -962,6 +1013,7 @@ void chassis_control_init(void) {
     leg_controller_bind_from_registry(&s_leg_controller);
     memset((void*)&g_chassis_attitude_comp, 0, sizeof(g_chassis_attitude_comp));
     memset((void*)&g_chassis_arm_load_comp, 0, sizeof(g_chassis_arm_load_comp));
+    memset((void*)&g_chassis_wheel_test, 0, sizeof(g_chassis_wheel_test));
     g_chassis_attitude_comp.stance_only = 1U;
     g_chassis_attitude_comp.scale = 1.0f;
     g_chassis_attitude_comp.half_length_m = ATTITUDE_COMP_DEFAULT_HALF_LENGTH_M;
@@ -1028,6 +1080,7 @@ void chassis_control_init(void) {
     s_offline_seq_done = 0U;
     s_offline_seq_start_ms = 0U;
     s_last_online = 0U;
+    s_wheel_test_was_active = 0U;
 
     LOGI("chassis init: mode=AUTO active=stand timeout=%ums",
          (unsigned)s_online_timeout_ms);
@@ -1045,6 +1098,26 @@ void chassis_control_tick(const chassis_control_input_t* input,
     }
 
     if (!update_boot_stand(dt_s)) {
+        return;
+    }
+
+    uint8_t wheel_test_active = wheel_test_active_at(now_ms);
+    if (wheel_test_active) {
+        if (!s_wheel_test_was_active) {
+            wheel_test_force_stand_state();
+            s_wheel_test_was_active = 1U;
+        }
+        update_stand_height_ramp(dt_s);
+        apply_direct_wheel_test(dt_s);
+        flush_motor_outputs();
+        return;
+    }
+    if (s_wheel_test_was_active) {
+        s_wheel_test_was_active = 0U;
+        wheel_test_force_stand_state();
+        update_stand_height_ramp(dt_s);
+        apply_gait_output_to_motors(0U, dt_s);
+        flush_motor_outputs();
         return;
     }
 
@@ -1094,6 +1167,49 @@ void chassis_control_set_online_timeout_ms(uint32_t timeout_ms) {
 
 uint32_t chassis_control_get_online_timeout_ms(void) {
     return s_online_timeout_ms;
+}
+
+int chassis_control_set_wheel_test(uint8_t enable,
+                                   uint8_t wheel_mask,
+                                   const float wheel_rads[GAIT_LEG_NUM],
+                                   uint32_t now_ms) {
+    if (enable > 1U) return APP_ERR_INVALID_ARG;
+
+    if (!enable) {
+        g_chassis_wheel_test.active = 0U;
+        g_chassis_wheel_test.wheel_mask = 0U;
+        for (int i = 0; i < GAIT_LEG_NUM; i++) {
+            g_chassis_wheel_test.wheel_rads[i] = 0.0f;
+        }
+        motor_m3508_trace_enable(0U);
+        return APP_OK;
+    }
+
+    if (!wheel_rads || (wheel_mask & 0x0FU) == 0U || (wheel_mask & 0xF0U) != 0U) {
+        return APP_ERR_INVALID_ARG;
+    }
+    for (int i = 0; i < GAIT_LEG_NUM; i++) {
+        if (!isfinite(wheel_rads[i]) || fabsf(wheel_rads[i]) > CHASSIS_WHEEL_TEST_MAX_RADS) {
+            return APP_ERR_INVALID_ARG;
+        }
+    }
+
+    uint8_t was_active = g_chassis_wheel_test.active;
+    if (!was_active) {
+        g_chassis_wheel_test.active = 0U;
+    }
+    g_chassis_wheel_test.wheel_mask = (uint8_t)(wheel_mask & 0x0FU);
+    for (int i = 0; i < GAIT_LEG_NUM; i++) {
+        g_chassis_wheel_test.wheel_rads[i] = wheel_rads[i];
+    }
+    g_chassis_wheel_test.last_cmd_ms = now_ms;
+    g_chassis_wheel_test.command_count++;
+    if (!was_active) {
+        motor_m3508_trace_reset(1U);
+        motor_m3508_trace_enable(1U);
+    }
+    g_chassis_wheel_test.active = 1U;
+    return APP_OK;
 }
 
 int chassis_control_play_script(const script_t* script, float blend_dur_s) {

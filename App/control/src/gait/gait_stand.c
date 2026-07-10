@@ -32,6 +32,7 @@ static int stand_update(gait_if_t* self, float dt_s, gait_output_t* out) {
     (void)dt_s;
     memset(out, 0, sizeof(*out));
     out->phase = 0.0f;
+    out->wheel_mode = GAIT_WHEEL_HOLD;
     for (int i = 0; i < GAIT_LEG_NUM; i++) {
         out->leg[i].in_stance  = 1u;
         out->leg[i].wheel_rads = 0.0f;

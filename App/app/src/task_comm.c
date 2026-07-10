@@ -84,6 +84,7 @@ static int send_proto_payload(uint8_t func_id, const void* payload, uint8_t len)
 
 #if APP_CHASSIS_ENABLE
 static void request_mode_safe_stand(void) {
+    (void)task_chassis_set_wheel_test(0U, 0U, NULL, (uint32_t)bsp_time_now_ms());
     s_chassis.vx = 0.0f;
     s_chassis.vy = 0.0f;
     s_chassis.wz = 0.0f;
@@ -95,6 +96,34 @@ static void request_mode_safe_stand(void) {
     (void)task_chassis_start_stand(0.3f);
 }
 #endif
+
+static int handle_wheel_test(const uint8_t* p, uint8_t len) {
+#if !APP_CHASSIS_ENABLE
+    (void)p;
+    (void)len;
+    return APP_ERR_UNSUPPORTED;
+#else
+    if (len != sizeof(payload_wheel_test_t)) return APP_ERR_INVALID_ARG;
+
+    payload_wheel_test_t cmd;
+    float wheel_rads[GAIT_LEG_NUM];
+    memcpy(&cmd, p, sizeof(cmd));
+    memcpy(wheel_rads, cmd.wheel_rads, sizeof(wheel_rads));
+    int ret = task_chassis_set_wheel_test(cmd.enable,
+                                          cmd.wheel_mask,
+                                          wheel_rads,
+                                          (uint32_t)bsp_time_now_ms());
+    if (ret != APP_OK) return ret;
+
+    s_chassis.vx = 0.0f;
+    s_chassis.vy = 0.0f;
+    s_chassis.wz = 0.0f;
+    s_chassis.target_yaw = 0.0f;
+    s_chassis.steer_mode = 0U;
+    s_chassis.seq++;
+    return APP_OK;
+#endif
+}
 
 static int handle_chassis(const uint8_t* p, uint8_t len) {
 #if !APP_CHASSIS_ENABLE
@@ -292,6 +321,7 @@ static const proto_entry_t s_tbl[] = {
     { PROTO_FUNC_MIT_CMD, sizeof(payload_mit_cmd_t), handle_mit_cmd, "mit" },
     { PROTO_FUNC_ARM_PUMP, sizeof(payload_arm_pump_t), handle_arm_pump, "arm_pump" },
     { PROTO_FUNC_MODE_CMD, sizeof(payload_mode_cmd_t), handle_mode_cmd, "mode" },
+    { PROTO_FUNC_WHEEL_TEST, sizeof(payload_wheel_test_t), handle_wheel_test, "wheel_test" },
 };
 
 static void on_usb_rx(const uint8_t* d, uint32_t n, void* user) {

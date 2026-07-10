@@ -27,7 +27,7 @@ USB CDC 协议入口和遥测发送。
 主要职责：
 
 - `proto_frame` 增量解析 `55 AA | func | len | payload | checksum`。
-- `proto_dispatch` 分发 `0x10/0x11/0x12/0x13/0x14/0x15`。
+- `proto_dispatch` 分发 `0x10/0x11/0x12/0x13/0x14/0x15/0x16`。
 - 缓存底盘速度、机械臂目标、气泵命令、整机 mode 和最近有效接收时间。
 - 拒绝机械臂 J1-J6 的 `0x13 MIT_CMD` 旁路写入。
 - 在通信入口过滤机械臂 target 类型、有限值和明显单位/字节序错误。
@@ -79,7 +79,7 @@ USB CDC 协议入口和遥测发送。
 - BMI088 姿态估计和 yaw 闭环转向。
 - `vx/vy/wz` 命令斜率限制。
 - planner 调用、online/offline 判断、stand/trot/walk/script gait 选择。
-- 支撑相轮速应用、姿态补偿、机械臂载荷补偿。
+- 运动 gait 四轮连续轮速应用、stand 锁轮、姿态补偿、机械臂载荷补偿。
 - 腿控制器派发和 MCU 电机输出 flush。
 
 ### `App/control/src/chassis/chassis_planner.c`
@@ -89,10 +89,11 @@ USB CDC 协议入口和遥测发送。
 - `moving` 标志。
 - `low_speed_turn` 标志。
 - walk/trot 通用 gait 参数。
-- `leg_step_length_m[4]` 每腿步长。
+- 普通行驶 4-5 Hz、`0.055 m` 高度的零平移步长参数。
+- `leg_step_length_m[4]` 每腿转向步长；低速/原地转向保留完整局部步长。
 - `wheel_rads[4]` 每轮局部滚动速度。
 
-`wz` 通过 `v_leg_x = vx - wz * y_leg` 映射到每条腿，默认 `|y_leg| = 0.15 m`。`vy` 目前只参与 moving 判断。
+轮速通过 `v_wheel_x = vx - wz * y_leg` 映射到每条腿，默认 `|y_leg| = 0.15 m`。普通行驶足端移除 `vx` 分量，只保留 yaw 步差；`vy` 目前只参与 moving 判断。
 
 ### `App/control/src/gait`
 
@@ -115,7 +116,8 @@ USB CDC 协议入口和遥测发送。
 - 调用 `leg_ik_solve_all()`。
 - 根据支撑腿集合分配 payload 和 balance 前馈。
 - 给 GO 髋/膝发送位置命令。
-- 给 M3508 轮毂发送 MIT 位置/速度参考命令。
+- DRIVE 模式把速度误差有界积分成 MIT 位置偏差，跨腿相位连续驱动。
+- HOLD 模式清除 DRIVE 积分，在 stand 中一次锁存实际轮角并通过 MIT 保持零速。
 
 ### `App/control/src/attitude`
 
@@ -175,7 +177,7 @@ GO-8010 髋/膝电机驱动，使用 RS485/RIS 协议和 UART2/UART3/UART4/UART7
 
 ### `App/device/src/motor_m3508.c`
 
-M3508/C620 轮毂电机驱动，使用 FDCAN1/FDCAN2。支持电流、速度、位置、力矩和 MIT 模式；轮足主链默认走 MIT。
+M3508/C620 轮毂电机驱动，使用 FDCAN1/FDCAN2。支持电流、速度、位置、力矩和 MIT 模式；轮足主链使用有界积分 MIT，stand 使用 MIT 锁轮。
 
 ### `App/device/src/motor_damiao.c`
 
@@ -224,4 +226,4 @@ BMI088 初始化、寄存器读写、温度读取、量程配置和诊断状态�
 
 ### `host_tests`
 
-host 侧回归测试覆盖 planner、walk/trot、IK、轮毂 MIT、姿态/载荷前馈、USB 协议、模式 gate、机械臂 IK/轨迹/重补/兼容层、task_arm 固定姿态、达妙打包/反馈/自动 enable、气泵和端到端任务链路。
+host 侧回归测试覆盖 planner、walk/trot、IK、轮毂有界积分 MIT/stand 锁轮、独立轮驱测试及超时、姿态/载荷前馈、USB 协议、模式 gate、机械臂 IK/轨迹/重补/兼容层、task_arm 固定姿态、达妙打包/反馈/自动 enable、气泵和端到端任务链路。

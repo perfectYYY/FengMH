@@ -28,16 +28,17 @@ typedef struct {
 } leg_controller_t;
 
 typedef struct {
-    uint8_t  enable;       /* 诊断位：轮子默认使用 MIT，初始化后保持 1 */
+    uint8_t  enable;       /* 诊断位：轮子 MIT 已配置，初始化后保持 1 */
     uint8_t  reset;        /* GDB 写 1 重新锁存各轮参考位置 */
-    uint8_t  active_mask;  /* bit0..3: 当前支撑相积分轮角参考的腿 */
-    uint8_t  hold_swing;   /* 诊断位：摆动相默认 MIT 保持当前轮角 */
-    float    kp;           /* 输出轴 N·m/rad */
-    float    kd;           /* 输出轴 N·m·s/rad */
+    uint8_t  drive_mask;   /* bit0..3: 当前使用有界积分 MIT 驱动的轮子 */
+    uint8_t  hold_mask;    /* bit0..3: 当前使用 MIT 定点锁轮的轮子 */
+    float    kp;           /* 输出轴 N·m/rad；DRIVE 中等效为速度积分增益 */
+    float    kd;           /* 输出轴 N·m·s/rad；DRIVE 中等效为速度比例增益 */
     float    tau_limit_nm;
     float    pos_err_limit_rad;
-    float    stance_tau_ff_nm; /* 支撑相按目标轮速方向给的摩擦补偿前馈 */
+    float    stance_tau_ff_nm; /* 支撑相按目标轮速方向给的滚阻前馈 */
     float    theta_ref_rad[GAIT_LEG_NUM];
+    float    velocity_i_rad[GAIT_LEG_NUM]; /* DRIVE 的有界速度误差积分 */
     uint8_t  ref_valid[GAIT_LEG_NUM];
 } leg_wheel_mit_debug_t;
 

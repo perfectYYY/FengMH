@@ -47,6 +47,11 @@ int   task_chassis_start_walk(const gait_params_t* p, float blend_dur_s);
 void     task_chassis_set_online_timeout_ms(uint32_t ms);
 uint32_t task_chassis_get_online_timeout_ms(void);
 
+int task_chassis_set_wheel_test(uint8_t enable,
+                                uint8_t wheel_mask,
+                                const float wheel_rads[GAIT_LEG_NUM],
+                                uint32_t now_ms);
+
 /* host / 板上诊断接口：手动喂时间，让逻辑可单测 */
 void  task_chassis_step_for_test(float dt_s, uint32_t now_ms);
 const char* task_chassis_active_gait_name(void);

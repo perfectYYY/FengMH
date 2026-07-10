@@ -25,6 +25,7 @@ extern "C" {
 #define PROTO_FUNC_MIT_CMD      0x13   /* MIT 阻抗控制单个电机 (调试用) */
 #define PROTO_FUNC_ARM_PUMP     0x14
 #define PROTO_FUNC_MODE_CMD     0x15
+#define PROTO_FUNC_WHEEL_TEST   0x16   /* 绕过 gait/planner 的四轮 MIT 诊断 */
 #define PROTO_FUNC_STATUS_REQ   0x20
 #define PROTO_FUNC_USB_CDC_PING 0x21
 
@@ -100,6 +101,16 @@ typedef struct __attribute__((packed)) {
 typedef struct __attribute__((packed)) {
     uint8_t mode;         /* PROTO_ROBOT_MODE_* */
 } payload_mode_cmd_t;    /* FuncID 0x15, len=1 */
+
+#define PROTO_WHEEL_TEST_DISABLE 0u
+#define PROTO_WHEEL_TEST_ENABLE  1u
+
+typedef struct __attribute__((packed)) {
+    uint8_t enable;       /* 0=退出并锁轮，1=进入直接轮驱测试 */
+    uint8_t wheel_mask;   /* bit0..3 = FL/FR/RL/RR；未选轮目标速度为 0 */
+    uint8_t reserved[2];
+    float wheel_rads[GAIT_LEG_NUM]; /* FL/FR/RL/RR 输出轴 rad/s */
+} payload_wheel_test_t;  /* FuncID 0x16, len=20；需持续刷新 */
 
 #define PROTO_ARM_STATE_IDLE    0u
 #define PROTO_ARM_STATE_MOVING  1u

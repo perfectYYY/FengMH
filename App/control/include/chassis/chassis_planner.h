@@ -2,7 +2,8 @@
  * chassis_planner.h — vx/wz 自运动规划
  *
  * 输入上位机速度命令，输出每腿动态步态参数与每轮滚动速度。
- * vx/wz 按刚体运动学映射到左右侧局部前后速度；vy 保留输入但暂不生成横移轨迹。
+ * 普通行驶默认移除 vx 足端步长，由轮子推进并保持高频原地踏步；
+ * 低速/原地 yaw 转向仍使用完整局部步长。vy 保留输入但暂不生成横移轨迹。
  * 本层不依赖 IMU，也不触碰电机外设。
  */
 #ifndef APP_SERVICE_CHASSIS_CHASSIS_PLANNER_H_
@@ -41,11 +42,14 @@ typedef struct {
 } chassis_turn_cfg_t;
 
 typedef struct {
-    uint8_t enable;              /* 1=按速度小范围调度周期，步长仍由局部速度计算 */
-    uint8_t reserved[3];
+    uint8_t enable;              /* 1=按速度调度普通行驶踏步参数 */
+    uint8_t wheel_only_travel;   /* 1=普通行驶移除 vx 足端步长，仅由轮子推进 */
+    uint8_t reserved[2];
     float slow_period_s;         /* 低速移动周期 */
     float fast_period_s;         /* 高速移动周期 */
     float fast_speed_m_s;        /* 达到该速度后使用 fast_period_s */
+    float step_height_m;         /* 普通行驶原地踏步高度 */
+    float duty;                  /* 普通行驶支撑占空比 */
 } chassis_stride_cfg_t;
 
 extern volatile chassis_turn_cfg_t g_chassis_turn_cfg;

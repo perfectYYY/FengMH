@@ -92,6 +92,7 @@ FuncID：
 | `0x13` | `payload_mit_cmd_t` | `handle_mit_cmd()` | 单电机 MIT 调试，拒绝 ARM_J1-J6 |
 | `0x14` | `<B>` | `handle_arm_pump()` | 写 `s_arm_pump` |
 | `0x15` | `<B>` | `handle_mode_cmd()` | 写 `s_mode_cmd`，ESTOP/ERROR 置急停 |
+| `0x16` | `<BB2x4f>` | `handle_wheel_test()` | 腿固定 stand，直接测试 FL/FR/RL/RR 轮毂 MIT |
 | `0x80` | state | `send_state_frame()` | MCU 上行 10 Hz |
 | `0x81` | motor state | `send_motor_frame()` | MCU 上行 5 Hz 轮询 |
 | `0x86` | arm feedback | `task_comm_send_arm_feedback()` | `task_arm` 上行 50 Hz |
@@ -146,6 +147,8 @@ task_chassis_step_for_test()
 - `moving=1`。
 - 基础 gait 使用 `s_trot_params`。
 - `online_decide()` 选择 `trot`。
+- 默认周期随速度在 `0.25 s` 到 `0.20 s` 之间调度，抬脚高度固定 `0.055 m`，duty 为 `0.60`。
+- `wheel_only_travel=1` 时，`vx` 不生成足端前后步长，直行足端只做高频原地抬落。
 
 低速/原地 yaw 转向：
 
@@ -159,16 +162,23 @@ task_chassis_step_for_test()
 ```text
 left legs:  y_leg = +half_track
 right legs: y_leg = -half_track
-v_leg_x = vx - wz * y_leg
-wheel_rads = v_leg_x / wheel_radius
-leg_step_length_m[i] = v_leg_x * period_s * duty, then clamped
+wheel_vx = vx - wz * y_leg
+wheel_rads = wheel_vx / wheel_radius
+
+普通行驶:
+  foot_vx = -wz * y_leg
+  leg_step_length_m[i] = foot_vx * period_s * duty, then clamped
+
+低速/原地 yaw 转向:
+  foot_vx = wheel_vx
+  保持原有 walk 步长、周期、步高和 duty
 ```
 
 `vy` 当前只参与 moving 判断，不进入足端横向轨迹。
 
 ### 3.4 gait 到电机
 
-`gait_machine_update()` 输出 `foot_x_m/foot_z_m/in_stance`。`apply_plan_wheel_speed()` 只在 online 且 motion gait 时改写支撑相轮速；摆动相轮速为 0。
+`gait_machine_update()` 输出 `foot_x_m/foot_z_m/in_stance/wheel_mode`。`apply_plan_wheel_speed()` 在 online motion gait 中给四轮持续写入 planner 轮速，不再按 `in_stance` 清零；`trot <-> walk` 过渡的轮速 scale 保持为 1。
 
 `leg_controller_apply_dt()`：
 
@@ -176,13 +186,29 @@ leg_step_length_m[i] = v_leg_x * period_s * duty, then clamped
 2. `gravity_comp_prepare_payload_shares()` 处理机械臂载荷。
 3. `gravity_comp_prepare_balance_forces()` 处理姿态虚拟力矩。
 4. `send_joint_targets()` 给 GO 髋/膝下发位置和 `tau_ff`。
-5. `send_wheel_target()` 给 M3508 下发 MIT 参考。
+5. `send_wheel_target()` 在 DRIVE 中下发有界积分 MIT，在 HOLD 中下发 MIT 锁轮参考。
 
-轮毂 MIT：
+轮毂 MIT 控制：
 
-- 支撑相积分 `theta_ref_rad[i] += wheel_rads * dt`。
-- 摆动相锁住当前轮角。
-- 默认增益和限幅看 `g_leg_wheel_mit`。
+- DRIVE 模式跨支撑/摆动相持续积分实际速度误差，并用 `theta_actual + velocity_i` 作为 MIT 位置参考。
+- 积分受 `min(pos_err_limit, tau_limit / kp)` 限制，并根据未限幅力矩做条件积分抗饱和。
+- HOLD 模式只在进入时清积分并锁存一次实际轮角，stand 中持续保持该参考角和零速度。
+- 默认增益、滚阻前馈、积分和限幅看 `g_leg_wheel_mit`。
+
+独立轮驱测试使用 `0x16`，不经过 planner、步态轨迹或轮速 blend。控制任务固定输出 stand 足端目标，按 `wheel_mask` 应用 `wheel_rads[FL,FR,RL,RR]`；未选轮速度为 0。进入时清空并开启 M3508 trace，退出或 500 ms 超时时停止 trace 并切回 HOLD。
+
+常用小端测试帧：
+
+```text
+# 四轮 +0.5 rad/s；需以 10 Hz 左右持续发送
+55 AA 16 14 01 0F 00 00 00 00 00 3F 00 00 00 3F 00 00 00 3F 00 00 00 3F 35
+
+# 仅 FL +0.5 rad/s
+55 AA 16 14 01 01 00 00 00 00 00 3F 00 00 00 00 00 00 00 00 00 00 00 00 6A
+
+# 退出测试并锁轮
+55 AA 16 14 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 29
+```
 
 ## 4. 机械臂链路排查
 
@@ -325,9 +351,9 @@ arm_control_get_status()
 
 `host_tests/test_main.c` 覆盖当前关键链路：
 
-- planner：前进/转向、`vy`、死区、周期调度。
-- gait：trot 每腿步长、walk 三支撑、足端字段。
-- 底盘：端到端、stand ramp、轮速 blend、mode gate、姿态补偿、机械臂载荷补偿。
+- planner：轮驱零平移步长、前进/转向、`vy`、死区、高频周期调度和旧步长回退。
+- gait：trot 原地抬腿峰值、每腿转向步长、walk 三支撑、足端字段。
+- 底盘：端到端、`vx=0.1 m/s` 四轮有界积分 MIT 连续驱动、stand ramp/MIT 锁轮、独立轮驱/超时、motion gait 切换、轮速 blend、mode gate、姿态补偿、机械臂载荷补偿。
 - 协议：FuncID 分区、USB 到缓存、ARM feedback、MIT 拒绝机械臂旁路。
 - 机械臂：IK/FK、旧兼容层、轨迹、重补、payload 过渡、反馈 freshness、三段式、fine tracking、固定等待姿态、纯重补、ESTOP。
 - 设备：气泵、达妙 MIT、达妙反馈、FDCAN3 路由、自动 enable。

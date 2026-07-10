@@ -30,6 +30,7 @@ flowchart TD
     DISPATCH --> MIT["handle_mit_cmd 0x13"]
     DISPATCH --> PUMP["handle_arm_pump 0x14"]
     DISPATCH --> MODE["handle_mode_cmd 0x15"]
+    DISPATCH --> WHEEL_TEST["handle_wheel_test 0x16"]
 
     CHASSIS --> S_CH["s_chassis seq"]
     ARM_TARGET --> S_AT["s_arm_target seq"]
@@ -72,7 +73,7 @@ flowchart TD
     LOAD --> LEG["leg_controller_apply_dt"]
     LEG --> IK["leg_ik_solve_all"]
     LEG --> GO["GO hip/knee set_position"]
-    LEG --> M3508["M3508 wheel MIT"]
+    LEG --> M3508["M3508 bounded-integral MIT"]
     TICK --> FLUSH["motor_go_send_all + motor_m3508_send_all"]
 ```
 
@@ -84,9 +85,9 @@ flowchart TD
 | `App/control/src/chassis/chassis_control.c` | `chassis_control_tick()` | 一个完整 500 Hz 底盘控制周期。 |
 | `App/control/src/chassis/chassis_control.c` | `update_steering()` | 读取 IMU，更新 yaw/roll/pitch；目标 yaw 模式下生成实际 `wz`。 |
 | `App/control/src/chassis/chassis_control.c` | `slew_plan_command()` | 对 `vx/vy/wz` 做斜率限制。 |
-| `App/control/src/chassis/chassis_planner.c` | `chassis_planner_update()` | 生成 moving、低速转向标志、每腿步长和每轮速度。 |
+| `App/control/src/chassis/chassis_planner.c` | `chassis_planner_update()` | 普通行驶生成高频零平移步长和轮速；低速/原地转向保留原 walk 步长。 |
 | `App/control/src/chassis/chassis_control.c` | `online_decide()` | moving 时普通移动走 trot，低速 yaw 转向走 walk，停止走 stand。 |
-| `App/control/src/leg/leg_controller.c` | `leg_controller_apply_dt()` | IK、前馈分配、GO/M3508 vtable 命令。 |
+| `App/control/src/leg/leg_controller.c` | `leg_controller_apply_dt()` | IK、前馈分配、GO 命令，以及 M3508 跨腿相位有界积分 DRIVE/stand MIT HOLD。 |
 
 ## 机械臂代码图
 
@@ -155,9 +156,9 @@ flowchart TD
 
 重点 host 测试覆盖：
 
-- planner：前进/转向、`vy` 行为、死区、步频/步幅调度。
-- gait：trot 每腿步长、walk 三支撑、脚端字段。
-- chassis：端到端、stand height ramp、轮速 blend、mode gate、姿态补偿、机械臂载荷补偿。
+- planner：轮驱零平移步长、前进/转向、`vy` 行为、死区、4-5 Hz 调度和旧模式回退。
+- gait：trot `0.055 m` 原地抬腿峰值、yaw 每腿步长、walk 三支撑、脚端字段。
+- chassis：端到端、`vx=0.1 m/s` 有界积分 MIT 连续轮驱、stand height/MIT 锁轮、独立轮驱/超时、motion gait 切换、轮速 blend、mode gate、姿态补偿、机械臂载荷补偿。
 - protocol：FuncID 分区、USB 到 task 缓存、ARM feedback TX、拒绝 ARM MIT 旁路。
 - arm：IK/FK、五次轨迹、重补、J1 禁区、安全三段式、fine tracking、固定等待姿态、纯重补、ESTOP。
 - device：气泵 GPIO、达妙 MIT 打包/反馈/FDCAN3 路由/自动 enable。

@@ -23,6 +23,11 @@ typedef enum {
     GAIT_LEG_NUM
 } gait_leg_t;
 
+typedef enum {
+    GAIT_WHEEL_HOLD = 0,
+    GAIT_WHEEL_DRIVE,
+} gait_wheel_mode_t;
+
 /*
  * 单条腿的步态目标。
  *
@@ -43,6 +48,7 @@ typedef struct {
     gait_leg_target_t leg[GAIT_LEG_NUM];
     float             phase;        /* [0,1) 当前主相位 */
     uint32_t          tick_count;   /* 本次步态从 enter 起累计的 update 次数 */
+    gait_wheel_mode_t wheel_mode;    /* HOLD=锁轮，DRIVE=轮速不受腿相位门控 */
 } gait_output_t;
 
 /* 公共参数（高度/步长/周期/步高/占空比/相位偏移） */

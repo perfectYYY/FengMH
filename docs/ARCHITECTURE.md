@@ -60,7 +60,7 @@ host_tests/       host 侧回归测试
 控制和算法层：
 
 - 底盘：在线/离线策略、命令斜率限制、planner、walk/trot/stand/script、姿态补偿、机械臂载荷补偿。
-- 腿：足端目标到二连杆 IK、支撑腿前馈力矩、M3508 轮毂 MIT 参考。
+- 腿：足端目标到二连杆 IK、支撑腿前馈力矩、M3508 有界积分 MIT 驱动和 stand MIT 锁轮。
 - 机械臂：host target 校验、J1 禁区、IK/FK、三段式安全运动、fine tracking、五次轨迹、重力补偿、达妙输出 gate。
 - 姿态：BMI088 yaw/roll/pitch 估计和目标 yaw 转 `wz`。
 

@@ -71,6 +71,13 @@ uint32_t task_chassis_get_online_timeout_ms(void) {
     return chassis_control_get_online_timeout_ms();
 }
 
+int task_chassis_set_wheel_test(uint8_t enable,
+                                uint8_t wheel_mask,
+                                const float wheel_rads[GAIT_LEG_NUM],
+                                uint32_t now_ms) {
+    return chassis_control_set_wheel_test(enable, wheel_mask, wheel_rads, now_ms);
+}
+
 int task_chassis_play_script(const script_t* script, float blend_dur_s) {
     return chassis_control_play_script(script, blend_dur_s);
 }

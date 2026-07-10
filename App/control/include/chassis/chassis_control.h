@@ -104,6 +104,18 @@ typedef struct {
 
 extern volatile chassis_arm_load_comp_debug_t g_chassis_arm_load_comp;
 
+typedef struct {
+    uint8_t active;
+    uint8_t wheel_mask;
+    uint8_t reserved[2];
+    float wheel_rads[GAIT_LEG_NUM];
+    uint32_t last_cmd_ms;
+    uint32_t command_count;
+    uint32_t timeout_count;
+} chassis_wheel_test_debug_t;
+
+extern volatile chassis_wheel_test_debug_t g_chassis_wheel_test;
+
 void chassis_control_init(void);
 void chassis_control_tick(const chassis_control_input_t* input,
                           float dt_s,
@@ -125,6 +137,11 @@ int chassis_control_start_walk(const gait_params_t* params, float blend_dur_s);
 
 void chassis_control_set_online_timeout_ms(uint32_t timeout_ms);
 uint32_t chassis_control_get_online_timeout_ms(void);
+
+int chassis_control_set_wheel_test(uint8_t enable,
+                                   uint8_t wheel_mask,
+                                   const float wheel_rads[GAIT_LEG_NUM],
+                                   uint32_t now_ms);
 
 const char* chassis_control_active_gait_name(void);
 
