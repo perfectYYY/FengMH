@@ -1,10 +1,11 @@
-# damiao_new1 机械臂函数迁移对账
+# 机械臂旧 API 兼容层对账
 
-目的：保留旧机械臂工程的主要业务函数和调试入口，方便后续负责机械臂的人在 FengMH 集成工程里继续开发。当前策略是：
+目的：保留旧 `damiao_new1` 机械臂工程的主要业务函数和调试入口，方便后续负责机械臂的人在 FengMH 集成工程里继续开发。当前策略是：
 
 - 主控制链仍使用新工程的 `task_arm -> arm_control -> motor_damiao/arm_pump`。
 - 旧工程 CamelCase API 以兼容层方式保留，内部转到新抽象。
 - 旧 USB/CAN/HAL 直连逻辑不抢主链路；需要单独调试时可手动调用。
+- `task_arm` 在正式路径中先进入固定等待姿态；只有 ARM 模式、等待姿态释放且收到新的合法 GRASP 后，才把整机协议 `0x11/0x14` 排进旧协议兼容队列。
 
 ## 1. 新增兼容文件
 
@@ -77,7 +78,7 @@
 | `Arm_Control_GetCurrentAngles()` | 已保留 | 优先读 motor_registry 中四个达妙反馈；无反馈时用规划末端反解。 |
 | `Arm_Control_IsFeedbackFresh()` | 已保留 | 包装到 `arm_control_status_t.motor_feedback_fresh`。 |
 
-注意：旧工程的重力保持模式会持续给达妙发重补力矩；新主链在上电反馈就绪后进入固定等待姿态，ARM 模式的新 GRASP 才释放给抓放流程。兼容层保留函数入口和安全语义，但不会绕过新 `task_arm` gate 去抢电机输出。
+注意：旧工程的重力保持模式会持续给达妙发重补力矩；新主链在上电反馈就绪后进入固定等待/park 姿态，ARM 模式下新的合法 GRASP 才释放给抓放流程。兼容层保留函数入口和安全语义，但不会绕过新 `task_arm` gate 去抢电机输出。
 
 ### 2.5 视觉转换 `vision_transform`
 
@@ -126,7 +127,7 @@
 | `Arm_Serial_Protocol_Init()` | 已保留 | 初始化旧协议 parser/debug 状态。 |
 | `Arm_Serial_Protocol_Receive()` | 已保留 | 可手动喂旧 `0x12/0x13` 帧。 |
 | `Arm_Serial_Protocol_QueueTarget()` / `Arm_Serial_Protocol_QueuePump()` | 新增薄适配 | 整机协议 `0x11/0x14` 经 mode gate 后排入旧协议待处理队列，避免 task 直接改机械臂状态。 |
-| `Arm_Serial_Protocol_Process()` | 已保留 | 保留 target/pump 消费、延迟关泵、等待下一次抓取等逻辑；旧 `0x21` feedback 打包保留但整合固件默认不发送。 |
+| `Arm_Serial_Protocol_Process()` | 已保留 | 保留 target/pump 消费、延迟关泵、等待下一次抓取等逻辑；旧 `0x21` feedback 打包保留但整合固件默认不发送，主上行反馈由 `task_arm` 发送 `0x86`。 |
 
 底层冲突处理：旧协议不自动 attach 到 `bsp_usb_cdc_attach_rx()`，因为当前主链由 `task_comm` 独占 USB CDC。如果需要单机械臂调试，可以在专门测试入口里手动调用 `Arm_Serial_Protocol_Receive()`。
 

@@ -1,99 +1,122 @@
 # 固件架构
 
-本文档说明当前固件代码的分层、职责边界和依赖方向。新增代码或做重构前，先用这里判断代码应该放在哪一层。
+本文档说明当前固件代码的启动路径、分层职责和依赖方向。新增代码时先按这里判断应该放在哪一层。
+
+## 启动形态
+
+默认构建不走旧业务主循环：
+
+```text
+Core/Src/main.c
+  HAL_Init / SystemClock_Config / MX_GPIO/FDCAN/SPI/TIM/UART
+  -> app_init()
+  -> osKernelInitialize()
+  -> MX_FREERTOS_Init()
+       -> app_tasks_create()
+  -> osKernelStart()
+
+Core/Src/freertos.c
+  defaultTask -> MX_USB_DEVICE_Init()
+  app_tasks_create() -> 创建 App 任务
+```
+
+`USE_LEGACY_MAIN=1` 只作为旧底盘代码回退入口；默认 `0`，避免旧 GO/M3508/PID 代码与 App 层任务竞写电机。
 
 ## 分层结构
 
 ```text
-App/app/          FreeRTOS 任务入口和应用生命周期
-App/control/      机器人行为、步态、运动学、转向、腿部派发
-App/device/       电机、IMU、设备注册表等设备驱动
-App/bsp/          MCU 外设适配和 host mock
-App/service/      协议、PID 等可复用工具
-App/common/       配置、错误码、日志和公共基础类型
+Core/             CubeMX/HAL 启动、外设实例、中断桥接
+USB_DEVICE/       ST USB device 栈
+App/app/          FreeRTOS 任务入口、命令缓存消费、应用生命周期
+App/control/      机器人行为、运动学、步态、轨迹、补偿、输出派发
+App/device/       电机、IMU、气泵、设备注册表
+App/bsp/          UART/FDCAN/SPI/USB/GPIO/time 适配和 host mock
+App/service/      协议、PID、旧机械臂协议兼容工具
+App/common/       配置、错误码、日志、公共类型
+host_tests/       host 侧回归测试
 ```
 
 ## 各层职责
 
+### `Core/`
+
+保留 CubeMX 生成的底层入口和 HAL handle。主链路只在这里完成 MCU 初始化、`app_init()` 调用、RTOS 启动和 USB device 初始化，不再放业务控制逻辑。
+
 ### `App/app`
 
-负责任务入口、协议缓存和应用生命周期。这里应保持很薄：
+任务包装层，保持薄：
 
-- 初始化模块
-- 读取通信状态
-- 调用控制周期
-- 保留旧公开 API 的兼容包装
+- `app_init()` 初始化 BSP、设备、registry、IMU、气泵。
+- `app_tasks_create()` 初始化通信、底盘、机械臂，并创建 FreeRTOS 任务。
+- `task_comm` 解析 USB 协议并缓存最新命令。
+- `task_chassis` 将通信缓存和 mode gate 转成 `chassis_control_input_t`。
+- `task_arm` 维护机械臂常驻 task、固定等待姿态、ARM 模式命令释放、0x86 反馈。
+- `task_safety` 维护急停、电机离线和过温保护。
 
-不要把步态数学、IK、电机协议细节或板级驱动逻辑放在这一层。
+不要把步态数学、IK、电机协议或 HAL 细节放进这一层。
 
 ### `App/control`
 
-负责机器人行为：
+控制和算法层：
 
-- 在线/离线决策
-- 转向和 planner 状态
-- 步态选择和步态更新
-- 足端目标到关节目标的转换
-- 腿和轮的命令派发
+- 底盘：在线/离线策略、命令斜率限制、planner、walk/trot/stand/script、姿态补偿、机械臂载荷补偿。
+- 腿：足端目标到二连杆 IK、支撑腿前馈力矩、M3508 轮毂 MIT 参考。
+- 机械臂：host target 校验、J1 禁区、IK/FK、三段式安全运动、fine tracking、五次轨迹、重力补偿、达妙输出 gate。
+- 姿态：BMI088 yaw/roll/pitch 估计和目标 yaw 转 `wz`。
 
-新的运动行为优先放在这一层，除非它只是某个具体设备协议的细节。
+控制层可以调用 device 层 vtable，但不直接调用 HAL。
 
 ### `App/device`
 
-负责具体设备和电机 vtable：
+具体设备和电机协议：
 
-- logical motor id 到运行期设备的绑定
-- GO-8010 RS485/RIS 协议
-- M3508/C620 FDCAN 协议
-- BMI088 设备行为
+- `motor_registry` 维护 logical motor id 到运行期设备的绑定和硬件映射。
+- `motor_go` 负责 GO-8010 RS485/RIS 编解码和 UART 总线发送。
+- `motor_m3508` 负责 DJI C620/M3508 反馈、速度/位置/力矩/电流/MIT 控制和 FDCAN 电流帧。
+- `motor_damiao` 负责 J1-J4 达妙 MIT 帧、反馈、enable/disable/reset fault、FDCAN3 路由和自动 enable 恢复。
+- `imu_bmi088`、`arm_pump` 提供传感器和气泵设备抽象。
 
-设备层可以做物理量和协议量之间的转换，但不应该决定高层步态策略。
+设备层可以做协议量和物理量转换，但不决定高层步态或任务模式。
 
 ### `App/bsp`
 
-负责 MCU 外设访问和 host 侧 mock：
+硬件适配和 host mock：
 
-- UART / RS485
-- FDCAN
-- SPI
-- USB CDC
-- 时间
+- UART/RS485、FDCAN、SPI、USB CDC、GPIO、time。
+- MCU 构建桥接 HAL；host 构建提供可注入的测试队列和 latch。
 
-BSP 以上的代码应调用稳定的 BSP API，不直接依赖 HAL。
+BSP 以上代码调用稳定 BSP API，不直接碰 HAL handle。
 
 ### `App/service`
 
-负责不持有机器人行为状态的通用工具：
+不持有机器人行为状态的工具：
 
-- 协议帧解析和分发
-- PID 工具
+- `proto_frame` 和 `proto_dispatch` 是整机协议 parser/dispatcher。
+- `arm_serial_protocol` 保留旧机械臂 target/pump/place-cycle 语义，但不接管 USB 主入口。
+- `pid` 是通用 PID。
 
 ## 依赖方向
 
-推荐依赖方向如下：
-
 ```text
-app -> control -> device -> bsp
-app -> service
-control -> service
-device -> service/common
+Core -> App/app
+App/app -> App/control + App/device + App/service + App/bsp
+App/control -> App/device + App/service + App/common
+App/device -> App/bsp + App/common
+App/service -> App/common
 ```
 
-避免反向依赖。例如 `device/` 不应该调用 `task_chassis`，`bsp/` 不应该知道步态或电机注册表策略。
+禁止反向依赖：`device/` 不调用任务层，`bsp/` 不知道步态、电机 registry 策略或机械臂状态机。
 
-## 当前运行形态
+## 主运行链路
 
 ```text
-USB 命令
+USB CDC
   -> task_comm
-  -> task_chassis
-  -> chassis_control
-  -> chassis_planner
-  -> gait_machine + 具体 gait
-  -> leg_ik + leg_controller
-  -> motor registry vtable
-  -> GO / M3508 驱动
-  -> UART / FDCAN BSP
+  -> task_chassis / task_arm
+  -> chassis_control / arm_control
+  -> leg_controller / motor_damiao / arm_pump
+  -> motor vtable
+  -> BSP UART/FDCAN/GPIO
 ```
 
-更详细的运行链路见 [`firmware_control_flow.md`](firmware_control_flow.md)。
+更详细路径见 [`firmware_control_flow.md`](firmware_control_flow.md)。

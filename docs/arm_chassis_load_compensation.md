@@ -2,8 +2,9 @@
 
 本文档描述当前第一版“机械臂载荷 -> 底盘腿部前馈力矩”的实现。它是准静态补偿：根据机械臂末端位置估算等效质心，把机械臂/末端载荷按质心投影分配到支撑腿，再沿用腿控制器现有的 `tau_ff` 下发路径。
 
-默认不开启；上板调试时打开 `g_chassis_arm_load_comp.enable`。
-关闭该开关或失去有效机械臂姿态时，下位机会清掉写入腿控制器的 payload 载荷，避免继续使用旧姿态补偿。
+默认不开启。并且 MCU 构建中 `APP_CHASSIS_COMP_FORCE_DISABLE=(!APP_TARGET_HOST)` 默认会把机械臂载荷补偿、姿态补偿和腿部 `tau_ff` 补偿全部编译期关掉；上板调试前需要确认编译期开关允许补偿路径，再逐步打开 `g_chassis_arm_load_comp.enable`。
+
+关闭该开关、编译期强制关闭或失去有效机械臂姿态时，下位机会清掉写入腿控制器的 payload 载荷，避免继续使用旧姿态补偿。
 
 ## 1. 控制链路
 
@@ -40,6 +41,7 @@ flowchart TD
 
 | 文件 | 函数/变量 | 作用 |
 |---|---|---|
+| `App/common/include/config.h` | `APP_CHASSIS_COMP_FORCE_DISABLE` | MCU 默认强制关闭补偿路径；host 单测默认允许。 |
 | `App/control/src/chassis/chassis_control.c` | `update_arm_load_compensation()` | 每个底盘 tick 读取机械臂末端位置和末端质量，估算等效载荷质心，写入腿部补偿入口。 |
 | `App/control/src/chassis/chassis_control.c` | `arm_load_select_end_pose()` | 优先选择实测 FK 末端坐标；没有实测时回退到规划末端坐标。 |
 | `App/control/src/chassis/chassis_control.c` | `arm_load_filter_update()` | 对载荷总质量和质心做一阶滤波，避免机械臂目标突变导致腿部前馈跳变。 |
@@ -117,6 +119,7 @@ share_i = mass / stance_count
 - ARM 模式下机械臂移动时，站立腿可以根据末端运动做平衡补偿。
 - NAV 模式下如果机械臂保持某个姿态或带货，底盘行走时也会按当前姿态补偿。
 - 它不会允许上位机同时发送底盘速度和机械臂目标；模式 gate 仍然由 `task_chassis`/`task_arm` 执行。
+- 当前 MCU 默认构建里该路径被编译期开关关闭，所以上述效果需要显式开启补偿构建后才会出现在实机输出中。
 
 ## 6. 已覆盖测试
 

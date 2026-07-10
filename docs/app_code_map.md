@@ -2,236 +2,226 @@
 
 本文档按文件说明当前 App 固件的主要职责，用来快速判断“应该先看哪个文件”。逐函数查找见 [`app_function_index.md`](app_function_index.md)。
 
-## App 任务层
+## 启动和任务层
+
+### `Core/Src/main.c`
+
+CubeMX/HAL 主入口。默认 `USE_LEGACY_MAIN=0`，旧底盘死循环业务不参与启动；`main()` 完成 HAL、时钟、外设初始化后，在 RTOS kernel 初始化前调用 `app_init()`。
+
+### `Core/Src/freertos.c`
+
+CubeMX FreeRTOS 入口。`MX_FREERTOS_Init()` 创建 USB `defaultTask`，再调用 `app_tasks_create()` 创建 App 任务。
 
 ### `App/app/src/app_init.c`
 
-板级启动入口。初始化日志、时间、总线、电机注册表、电机和 IMU。
+板级应用初始化入口。初始化日志、时间、FDCAN、UART、USB CDC、SPI、GPIO、气泵、motor registry、GO/M3508/达妙电机和 BMI088；BMI088 初始化失败时降级运行。
 
 ### `App/app/src/app_tasks.c`
 
-创建应用任务。在 MCU 构建中，先初始化通信和底盘控制，再启动 FreeRTOS 任务。
+创建 App 任务。在 MCU 构建中创建 `t_log`、`t_safety`、`t_comm`、`t_chassis`、`t_arm`；host 构建只初始化模块，不创建线程。这里也保存 RTOS stack overflow 和 assert 诊断变量。
 
 ### `App/app/src/task_comm.c`
 
-USB CDC 协议输入和遥测输出。
+USB CDC 协议入口和遥测发送。
 
 主要职责：
 
-- 解析协议帧
-- 缓存最新底盘命令
-- 缓存最新机械臂目标、气泵命令和整机模式命令
-- 更新心跳时间
-- 分发步态命令、底盘 MIT 调试命令、机械臂命令和模式命令；机械臂 J1-J6 拒绝 MIT 旁路写入
-- 在 MCU 构建中发送状态和电机遥测
-
-### `App/app/src/task_arm.c`
-
-机械臂控制任务包装层。
-
-主要职责：
-
-- 读取 `task_comm` 缓存的机械臂目标、气泵和模式命令
-- 机械臂按原工程三连调用常驻运行：`Arm_Control_Process()`、`Pump_Control_Process()`、`Arm_Serial_Protocol_Process()`
-- J1-J4 反馈就绪后立即进入固定等待姿态，ARM 模式收到新 `GRASP` 后同拍交给原抓放流程
-- 固定等待姿态不会因普通 4 秒 settling 超时清目标或退回重补；PLACE 完成后重新进入固定等待姿态
-- 只在上位机请求 `ROBOT_MODE_ARM` 后把新的 USB 目标/气泵命令排进旧机械臂协议队列
-- 唯一保留的机械臂测试态是纯重力补偿：可由编译期开关 `APP_ARM_FORCE_GRAVITY_ONLY` 固定开启，或在 Live Expressions 手动将 `debug_arm_force_gravity_only` 置 `1`
-- 以 50 Hz 发送 `0x86 ARM_FEEDBACK`
-- 每 100 ms 更新一次 `g_arm_debug_snapshot`，供 Live Expressions 单表达式查看常用机械臂数据
-- MCU 固件达妙输出默认开启；只有等待首帧反馈、反馈丢失恢复和纯重补测试态使用重力保持
+- `proto_frame` 增量解析 `55 AA | func | len | payload | checksum`。
+- `proto_dispatch` 分发 `0x10/0x11/0x12/0x13/0x14/0x15`。
+- 缓存底盘速度、机械臂目标、气泵命令、整机 mode 和最近有效接收时间。
+- 拒绝机械臂 J1-J6 的 `0x13 MIT_CMD` 旁路写入。
+- 在通信入口过滤机械臂 target 类型、有限值和明显单位/字节序错误。
+- MCU 上发送 `0x80 STATE`、`0x81 MOTOR_STATE`；被 `task_arm` 调用时发送 `0x86 ARM_FEEDBACK`。
 
 ### `App/app/src/task_chassis.c`
 
-`chassis_control` 的 RTOS 包装层。
+底盘 RTOS 包装层。
 
 主要职责：
 
-- 将 `task_comm` 状态转换成 `chassis_control_input_t`
-- 读取 `ROBOT_MODE_CMD`：无 mode 帧时兼容旧调试路径，`NAV` 才允许底盘速度输出
-- 在 `ARM/IDLE/ESTOP/ERROR` 下本地清零底盘速度、目标 yaw 和转向模式
-- 运行一个 500 Hz 控制周期
-- 保留旧 `task_chassis_*` 公开 API 的转发包装
+- 读取 `task_comm` 底盘缓存。
+- 本地二次执行 mode gate：无 mode 帧保留旧调试兼容；收到 mode 后仅 `ROBOT_MODE_NAV` 允许底盘速度、目标 yaw 和 steer mode 进入控制器。
+- 以 500 Hz 调用 `chassis_control_tick()`。
+- 保留 `task_chassis_*` 公开 API，转发到 `chassis_control`。
+
+### `App/app/src/task_arm.c`
+
+机械臂 RTOS 包装层。
+
+主要职责：
+
+- 机械臂 task 常驻，不随 mode 启停。
+- 处理上电/非 ARM `PARK` 姿态、ARM 第一箱等待姿态、PLACE 完成后的第二箱等待姿态。
+- 只有等待姿态到位并收到新的合法 `GRASP` 后，才释放固定姿态给上位机抓放流程。
+- 只有 `ROBOT_MODE_ARM` 且已释放时，才把新的 USB target/pump 排进 `Arm_Serial_Protocol_QueueTarget/QueuePump()`；其他模式同步 seq 并丢弃旧命令。
+- 支持编译期 `APP_ARM_FORCE_GRAVITY_ONLY` 和 Live Expressions `debug_arm_force_gravity_only` 纯重力保持。
+- 急停时禁用控制器和达妙输出，不运行自动 enable。
+- 50 Hz 发送 `0x86 ARM_FEEDBACK`，100 ms 更新一次 `g_arm_debug_snapshot`。
 
 ### `App/app/src/task_safety.c`
 
-急停和安全监控任务。
+急停和安全监控任务。`MODE_CMD` 为 `ESTOP/ERROR` 时会置位急停并 disable 全部电机；任务本身 200 Hz 扫描电机反馈超时和温度。
+
+### `App/app/src/task_log.c`
+
+低优先级日志心跳任务占位。
 
 ## Control 控制层
 
-### `App/control/src/arm/arm_control.c`
-
-机械臂控制门面。当前阶段接收目标和气泵状态，运行 IK/FK、安全三段式、fine tracking、五次轨迹、重力补偿和基于真实反馈的 settling/REACHED；优先使用真实达妙反馈生成 `0x86`，并具备 J1-J4 达妙 MIT 输出路径。MCU 固件默认自动 enable 达妙；无目标时用当前反馈角做重力保持，USB 目标/泵命令只在 ARM 模式被消费。
-
-### `App/control/src/arm/arm_kinematics.c`
-
-机械臂四关节运动学。
-
-主要职责：
-
-- 维护 L2/L3 几何参数和旧工程零偏配置
-- 将末端 `arm_base xyz` 目标转换为 J1-J4 关节角
-- 检查 J2/J3 实测物理限位
-- 计算 J3/J4 固定和关系
-- 根据关节角计算末端位姿
-
-### `App/control/src/arm/arm_motion.c`
-
-机械臂四关节同步五次轨迹生成器。
-
-主要职责：
-
-- 根据每轴速度/加速度限制估算同步运动时长
-- 生成四关节五次多项式轨迹
-- 在 `tick(now_ms)` 风格调用中输出位置、速度和加速度
-- 支持运动中重规划时传入当前 sample 保持连续
-
-### `App/control/src/arm/arm_gravity_comp.c`
-
-机械臂重力补偿模型。
-
-主要职责：
-
-- 维护旧工程大臂、小臂、末端和货物质量参数
-- 维护旧工程质心参数和末端等效质心距离
-- 根据 J2/J3/J4 几何角计算 tau2/tau3/tau4 重力前馈
-- 抓取载荷切换时平滑过渡 active end mass
-
 ### `App/control/src/chassis/chassis_control.c`
 
-主行为流水线。在线/离线策略、转向、步态选择、步态更新和电机派发都在这里分阶段执行。
+底盘主行为流水线。改底盘行为优先读这个文件。
 
-改行为时优先读这个文件。
+当前职责：
+
+- GO 上电预标定窗口。
+- stand height ramp。
+- BMI088 姿态估计和 yaw 闭环转向。
+- `vx/vy/wz` 命令斜率限制。
+- planner 调用、online/offline 判断、stand/trot/walk/script gait 选择。
+- 支撑相轮速应用、姿态补偿、机械臂载荷补偿。
+- 腿控制器派发和 MCU 电机输出 flush。
 
 ### `App/control/src/chassis/chassis_planner.c`
 
 将速度命令转换成 planner 输出：
 
-- `moving`
-- 每腿 gait 参数
-- 每轮局部滚动速度目标
+- `moving` 标志。
+- `low_speed_turn` 标志。
+- walk/trot 通用 gait 参数。
+- `leg_step_length_m[4]` 每腿步长。
+- `wheel_rads[4]` 每轮局部滚动速度。
 
-`wz` 通过 `y_leg = 0.15 m` 映射成每条腿的局部前后速度：`v_leg_x = vx - wz * y_leg`。planner 将这个局部速度同时写入每腿步长和每轮滚动速度；轮速只在支撑相应用，用于匹配接触速度，不作为独立的纯轮差速转向方案。
+`wz` 通过 `v_leg_x = vx - wz * y_leg` 映射到每条腿，默认 `|y_leg| = 0.15 m`。`vy` 目前只参与 moving 判断。
 
-`g_chassis_stride_cfg` 控制轮足步态周期的小范围调度：默认周期只从 `0.60 s` 缩短到 `0.50 s`，速度变化主要进入轮速和每腿步长；`g_chassis_turn_cfg` 继续控制低速转向的步态参数。
+### `App/control/src/gait`
 
-当前注意点：`vy` 参与 moving 判断，但还不是完整横向控制链路。
+步态接口、默认参数和步态实现。
+
+- `gait_machine.c`：当前 gait、目标 gait、过渡混合。
+- `gait_stand.c`：静态站立。
+- `gait_trot.c`：对角小跑，支持每腿步长。
+- `gait_walk.c`：四拍三支撑 walk，当前用于低速/原地 yaw 转向。
+- `gait_trajectory.c`：通用摆线足端轨迹。
+
+### `App/control/src/kinematics/leg_ik.c`
+
+二连杆腿部 IK/FK 和四腿镜像映射。输入是 gait 输出的 `foot_x_m/foot_z_m`，输出髋/膝关节角。
+
+### `App/control/src/leg/leg_controller.c`
+
+将 gait 输出转换为电机 vtable 调用：
+
+- 调用 `leg_ik_solve_all()`。
+- 根据支撑腿集合分配 payload 和 balance 前馈。
+- 给 GO 髋/膝发送位置命令。
+- 给 M3508 轮毂发送 MIT 位置/速度参考命令。
 
 ### `App/control/src/attitude`
 
 姿态估计和 yaw 转向控制器。
 
-- `attitude_estimator.c`：用 BMI088 gyro/accel 更新 yaw、roll、pitch 和角速度。yaw 仍用于航向闭环，roll/pitch 提供给底盘姿态力矩补偿。
-- `steer_controller.c`：目标 yaw 到实际 `wz` 的 PID 控制器。
+- `attitude_estimator.c`：用 gyro 积分 yaw，用 accel 估计 roll/pitch，输出角速度。
+- `steer_controller.c`：目标 yaw 到 yaw-rate 的 PID 控制。
 
-`chassis_control.c` 中的 `g_chassis_attitude_comp` 是姿态补偿调试入口，默认关闭；打开后把 roll/pitch 姿态误差转换成 `Mx/My`，再由腿控制器分配到支撑腿 `tau_ff`。
+### `App/control/src/arm/arm_control.c`
 
-### `App/control/src/gait`
+机械臂控制门面。
 
-步态实现和步态切换：
+当前职责：
 
-- `gait_machine.c`：当前/目标步态和过渡混合
-- `gait_stand.c`：静态站立
-- `gait_trot.c`：trot 相位和足端轨迹
+- 校验 target 类型、IK 和 GRASP J1 周期性禁区。
+- 管理安全三段式 `RETRACT -> ROTATE_BASE -> EXTEND`。
+- 支持 fine tracking 小范围在线重规划。
+- 使用四关节同步五次轨迹。
+- 优先用真实达妙反馈生成 measured FK；反馈缺失时按场景回退 planned sample 或报错。
+- 计算 J2/J3/J4 重力补偿并输出达妙 MIT 命令。
+- 无目标时用当前反馈角做重力保持。
+- 维护 `arm_control_status_t`，供 `task_arm` 和底盘载荷补偿读取。
 
-### `App/control/src/kinematics/leg_ik.c`
+### `App/control/src/arm/arm_kinematics.c`
 
-二连杆腿部 IK/FK 和四腿映射。
+机械臂四关节 IK/FK，单位为 m/rad。保留 J2/J3 物理限位、J3/J4 固定关系和旧工程零偏。
 
-### `App/control/src/leg/leg_controller.c`
+### `App/control/src/arm/arm_motion.c`
 
-将 gait 输出转换成电机 vtable 调用：
+四关节同步五次轨迹生成器。按速度/加速度限制估算总时长，支持运动中从当前 sample 连续重规划。
 
-- GO 髋/膝位置命令
-- M3508 轮毂 MIT 位置/速度参考命令
+### `App/control/src/arm/arm_gravity_comp.c`
 
-轮毂默认全面使用 MIT 模式：支撑相积分轮角参考，摆动相保持当前轮角。
+机械臂重力补偿模型。维护 L2/L3/末端/载荷质量和 COM 参数，泵开关会平滑切换末端 active mass。
+
+### `App/control/src/arm/arm_legacy_compat.c`
+
+旧 `damiao_new1` CamelCase API 兼容层。主链仍走 `task_arm -> arm_control`；兼容层用于旧测试、调试入口和旧单位转换。
+
+### `App/control/src/arm/arm_vision_transform.c`
+
+保留旧视觉坐标转换和新的米制 API。
 
 ### `App/control/src/script`
 
-脚本步态播放器和 gait 包装。脚本步态是当前维护功能，不是开发日志；脚本可以通过 gait 接口输出关键帧步态。
+脚本步态播放器和 gait 包装。脚本可以通过 gait 接口输出关键帧步态。
 
 ## Device 设备层
 
 ### `App/device/src/motor_registry.c`
 
-logical motor id 表和运行期电机句柄绑定。
+logical motor id 表和运行期设备绑定。硬件映射集中在这里：四腿 GO/M3508 和机械臂 J1-J4 达妙。
 
 ### `App/device/src/motor_go.c`
 
-GO-8010 髋/膝电机驱动，使用 RS485/RIS 协议。
-
-主要职责：
-
-- 创建并绑定 GO 电机实例
-- 将关节侧命令转换成电机协议单位
-- 根据反馈锁存零偏
-- 按 UART 总线发送命令帧
+GO-8010 髋/膝电机驱动，使用 RS485/RIS 协议和 UART2/UART3/UART4/UART7。
 
 ### `App/device/src/motor_m3508.c`
 
-M3508/C620 轮毂电机驱动，使用 FDCAN。
-
-主要职责：
-
-- 创建并绑定轮毂电机实例
-- 解码 C620 反馈
-- 运行速度、位置、力矩、电流和 MIT 控制模式
-- 打包并发送 DJI 电流帧
+M3508/C620 轮毂电机驱动，使用 FDCAN1/FDCAN2。支持电流、速度、位置、力矩和 MIT 模式；轮足主链默认走 MIT。
 
 ### `App/device/src/motor_damiao.c`
 
-达妙 DM43xx 机械臂关节电机驱动，使用 FDCAN3。
-
-主要职责：
-
-- 创建并绑定 J1-J4 达妙电机实例
-- 打包 DM4340/DM4310 MIT 控制帧
-- 发送 enable、disable、reset fault 特殊帧
-- 解析达妙反馈并更新统一 `motor_state_t`
-- 将 FDCAN3 RX 帧路由到匹配的机械臂关节
-- 按旧工程策略周期性重发 enable，恢复未使能或长时间无反馈的关节
+达妙 DM4340/DM4310 机械臂关节电机驱动，使用 FDCAN3。负责 MIT 打包、反馈解析、特殊 enable/disable/reset 帧、RX 路由和自动 enable 恢复。
 
 ### `App/device/src/arm_pump.c`
 
-机械臂气泵 device wrapper。
+机械臂主气泵 device wrapper。主气泵为 `PD11`，上电默认关闭；辅助 `PC8/PC9/PA8/PA9` 只保留接口。
 
-主要职责：
+### `App/device/src/pump_control.c`
 
-- 上电默认关闭主气泵
-- 通过 `bsp_gpio` 控制旧工程确认的主气泵 `PD11`
-- 保留 `PC8/PC9/PA8/PA9` 辅助通道接口，但不主动初始化这些通道
-- 给 `arm_control` 提供气泵状态查询和控制入口
+旧气泵 API 兼容层，包装到 `arm_pump` 并同步机械臂 payload 重力状态。
+
+### `App/device/src/dm4310_posvel.c`
+
+旧达妙 API 兼容层，包装到 `motor_damiao` 和 `motor_registry`。
 
 ### `App/device/src/imu_bmi088.c`
 
-BMI088 初始化和传感器读取。
+BMI088 初始化、寄存器读写、温度读取、量程配置和诊断状态。
 
 ## BSP 层
 
-### `App/bsp/src`
+`App/bsp/src` 是 MCU 外设适配和 host mock：
 
-硬件适配和 host mock：
-
-- `bsp_gpio.c`
 - `bsp_fdcan.c`
 - `bsp_uart.c`
-- `bsp_usb_cdc.c`
 - `bsp_spi.c`
+- `bsp_usb_cdc.c`
+- `bsp_gpio.c`
 - `bsp_time.c`
 
-## Service 工具层
+## Service 层
 
 ### `App/service/src/protocol`
 
-协议帧解析器和功能号分发器。
+- `proto_frame.c`：整机协议帧解析/构造。
+- `proto_dispatch.c`：FuncID 查表分发。
+- `arm_serial_protocol.c`：旧机械臂 target/pump/place-cycle 协议兼容，不自动占用 USB。
 
 ### `App/service/src/pid`
 
-可复用 PID 实现。
+通用 PID 实现。
 
 ## 测试层
 
 ### `host_tests`
 
-host 侧回归测试，覆盖当前可读控制链路。现有覆盖包括 planner 行为、gait 输出、IK、命令解析、`chassis_control_tick()` 到 stub 电机命令的直接链路、达妙 MIT 打包、FDCAN3 发送和反馈解析，以及主气泵 GPIO latch/mode gate。
+host 侧回归测试覆盖 planner、walk/trot、IK、轮毂 MIT、姿态/载荷前馈、USB 协议、模式 gate、机械臂 IK/轨迹/重补/兼容层、task_arm 固定姿态、达妙打包/反馈/自动 enable、气泵和端到端任务链路。
