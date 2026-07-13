@@ -1465,13 +1465,17 @@ static void test_protocol_function_ids_are_partitioned(void) {
     TEST_ASSERT(PROTO_FUNC_ARM_PUMP == 0x14U);
     TEST_ASSERT(PROTO_FUNC_MODE_CMD == 0x15U);
     TEST_ASSERT(PROTO_FUNC_WHEEL_TEST == 0x16U);
+    TEST_ASSERT(PROTO_FUNC_ARM_AUX_GPIO == 0x17U);
     TEST_ASSERT(PROTO_FUNC_USB_CDC_PING == 0x21U);
     TEST_ASSERT(PROTO_FUNC_ARM_FEEDBACK == 0x86U);
+    TEST_ASSERT(PROTO_ROBOT_MODE_REAR_PLACE == 5U);
+    TEST_ASSERT(PROTO_ROBOT_MODE_MAX == PROTO_ROBOT_MODE_REAR_PLACE);
 
     TEST_ASSERT(sizeof(payload_arm_target_t) == 13U);
     TEST_ASSERT(sizeof(payload_arm_pump_t) == 1U);
     TEST_ASSERT(sizeof(payload_mode_cmd_t) == 1U);
     TEST_ASSERT(sizeof(payload_wheel_test_t) == 20U);
+    TEST_ASSERT(sizeof(payload_arm_aux_gpio_t) == 2U);
     TEST_ASSERT(sizeof(payload_arm_feedback_t) == 17U);
 }
 
@@ -2396,6 +2400,19 @@ static void test_usb_arm_and_mode_protocol_cache(void) {
     task_comm_get_mode_cmd(&cached_mode);
     TEST_ASSERT(cached_mode.seq == 1U);
     TEST_ASSERT(cached_mode.mode == PROTO_ROBOT_MODE_ARM);
+
+    mode.mode = PROTO_ROBOT_MODE_REAR_PLACE;
+    frame_len = proto_frame_build(PROTO_FUNC_MODE_CMD,
+                                  (const uint8_t*)&mode,
+                                  (uint8_t)sizeof(mode),
+                                  frame,
+                                  sizeof(frame));
+    TEST_ASSERT(frame_len > 0);
+    bsp_usb_cdc_test_inject_rx(frame, (uint32_t)frame_len);
+
+    task_comm_get_mode_cmd(&cached_mode);
+    TEST_ASSERT(cached_mode.seq == 2U);
+    TEST_ASSERT(cached_mode.mode == PROTO_ROBOT_MODE_REAR_PLACE);
     TEST_ASSERT(task_comm_dispatch_hit() >= 3U);
 }
 
@@ -2513,6 +2530,38 @@ static void test_usb_wheel_test_protocol_controls_direct_mode(void) {
     cmd.wheel_mask = 0U;
     inject_proto_frame(PROTO_FUNC_WHEEL_TEST, &cmd, (uint8_t)sizeof(cmd));
     TEST_ASSERT(g_chassis_wheel_test.active == 0U);
+}
+
+static void test_usb_arm_aux_gpio_protocol_controls_outputs(void) {
+    payload_arm_aux_gpio_t cmd = {
+        .channel = PROTO_ARM_AUX_GPIO_PC8,
+        .on = 1U,
+    };
+
+    bsp_gpio_test_reset();
+    TEST_ASSERT(bsp_usb_cdc_init() == APP_OK);
+    arm_gravity_comp_init();
+    Pump_Control_Init();
+    task_comm_init();
+
+    inject_proto_frame(PROTO_FUNC_ARM_AUX_GPIO, &cmd, (uint8_t)sizeof(cmd));
+    TEST_ASSERT(arm_pump_aux_is_enabled(ARM_PUMP_AUX_PC8) == 1U);
+    TEST_ASSERT(debug_pc8_on == 1U);
+
+    cmd.channel = PROTO_ARM_AUX_GPIO_PC9;
+    inject_proto_frame(PROTO_FUNC_ARM_AUX_GPIO, &cmd, (uint8_t)sizeof(cmd));
+    TEST_ASSERT(arm_pump_aux_is_enabled(ARM_PUMP_AUX_PC9) == 1U);
+    TEST_ASSERT(debug_pc9_on == 1U);
+
+    cmd.channel = PROTO_ARM_AUX_GPIO_PA8;
+    inject_proto_frame(PROTO_FUNC_ARM_AUX_GPIO, &cmd, (uint8_t)sizeof(cmd));
+    TEST_ASSERT(arm_pump_aux_is_enabled(ARM_PUMP_AUX_PA8) == 1U);
+    TEST_ASSERT(debug_pa8_on == 1U);
+
+    cmd.on = 0U;
+    inject_proto_frame(PROTO_FUNC_ARM_AUX_GPIO, &cmd, (uint8_t)sizeof(cmd));
+    TEST_ASSERT(arm_pump_aux_is_enabled(ARM_PUMP_AUX_PA8) == 0U);
+    TEST_ASSERT(debug_pa8_on == 0U);
 }
 
 static void test_usb_mit_rejects_arm_motor_bypass(void) {
@@ -2983,12 +3032,13 @@ static void test_task_arm_holds_state_and_discards_usb_commands_outside_arm_mode
     arm_control_get_status(&status);
     TEST_ASSERT(status.enabled == 1U);
     TEST_ASSERT(status.target_seq == 1U);
-    TEST_ASSERT(status.pump_seq == 1U);
+    TEST_ASSERT(status.pump_seq == 2U);
     TEST_ASSERT_NEAR(status.target_x_m, target_a.x_m, 1e-6f);
     TEST_ASSERT_NEAR(status.target_y_m, target_a.y_m, 1e-6f);
     TEST_ASSERT_NEAR(status.target_z_m, target_a.z_m, 1e-6f);
-    TEST_ASSERT(arm_pump_is_enabled() == 1U);
-    TEST_ASSERT(bsp_gpio_read_latch(BSP_GPIO_ARM_PUMP_MAIN) == 1U);
+    TEST_ASSERT(status.pump_on == 0U);
+    TEST_ASSERT(arm_pump_is_enabled() == 0U);
+    TEST_ASSERT(bsp_gpio_read_latch(BSP_GPIO_ARM_PUMP_MAIN) == 0U);
 }
 
 static void test_task_arm_estop_disables_motion_but_keeps_vacuum(void) {
@@ -3325,6 +3375,7 @@ int main(void) {
     test_usb_arm_and_mode_protocol_cache();
     test_usb_arm_feedback_frame_tx();
     test_usb_wheel_test_protocol_controls_direct_mode();
+    test_usb_arm_aux_gpio_protocol_controls_outputs();
     test_usb_mit_rejects_arm_motor_bypass();
     test_arm_serial_protocol_legacy_parser_caches_target_and_pump();
     test_task_arm_startup_requests_fixed_pose_immediately();

@@ -66,6 +66,8 @@ void task_comm_get_mode_cmd(task_comm_mode_cmd_t* out);
 
 /* 机械臂 feedback 上行；后续 task_arm 以此发送 PROTO_FUNC_ARM_FEEDBACK */
 int task_comm_send_arm_feedback(const payload_arm_feedback_t* feedback);
+/* 机械臂 J1..J4 原始电机角度上行；FuncID=PROTO_FUNC_ARM_MOTOR_ANGLES。 */
+int task_comm_send_arm_motor_angles(const payload_arm_motor_angles_t* angles);
 
 /* 最近一次"任何有效帧"的 ms 时戳；用于心跳超时判定 */
 uint32_t task_comm_last_rx_ms(void);

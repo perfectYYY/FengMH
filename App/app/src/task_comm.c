@@ -13,6 +13,7 @@
 #include "proto_dispatch.h"
 #include "proto_defs.h"
 #include "motor_registry.h"
+#include "pump_control.h"
 #include "task_chassis.h"
 #include "task_safety.h"
 #include "err.h"
@@ -290,12 +291,42 @@ static int handle_arm_pump(const uint8_t* p, uint8_t len) {
     return 0;
 }
 
+static int handle_arm_aux_gpio(const uint8_t* p, uint8_t len) {
+    if (len != sizeof(payload_arm_aux_gpio_t)) return -1;
+
+    payload_arm_aux_gpio_t cmd;
+    memcpy(&cmd, p, sizeof(cmd));
+    if (cmd.on > 1U || cmd.channel > PROTO_ARM_AUX_GPIO_PA9) {
+        return APP_ERR_INVALID_ARG;
+    }
+
+    switch (cmd.channel) {
+        case PROTO_ARM_AUX_GPIO_PC8:
+            Pump_Control_SetPC8(cmd.on);
+            break;
+        case PROTO_ARM_AUX_GPIO_PC9:
+            Pump_Control_SetPC9(cmd.on);
+            break;
+        case PROTO_ARM_AUX_GPIO_PA8:
+            Pump_Control_SetPA8(cmd.on);
+            break;
+        case PROTO_ARM_AUX_GPIO_PA9:
+            Pump_Control_SetPA9(cmd.on);
+            break;
+        default:
+            return APP_ERR_INVALID_ARG;
+    }
+
+    mark_valid_rx();
+    return 0;
+}
+
 static int handle_mode_cmd(const uint8_t* p, uint8_t len) {
     if (len != sizeof(payload_mode_cmd_t)) return -1;
 
     payload_mode_cmd_t cmd;
     memcpy(&cmd, p, sizeof(cmd));
-    if (cmd.mode > PROTO_ROBOT_MODE_ERROR) {
+    if (cmd.mode > PROTO_ROBOT_MODE_MAX) {
         return APP_ERR_INVALID_ARG;
     }
 
@@ -322,6 +353,7 @@ static const proto_entry_t s_tbl[] = {
     { PROTO_FUNC_ARM_PUMP, sizeof(payload_arm_pump_t), handle_arm_pump, "arm_pump" },
     { PROTO_FUNC_MODE_CMD, sizeof(payload_mode_cmd_t), handle_mode_cmd, "mode" },
     { PROTO_FUNC_WHEEL_TEST, sizeof(payload_wheel_test_t), handle_wheel_test, "wheel_test" },
+    { PROTO_FUNC_ARM_AUX_GPIO, sizeof(payload_arm_aux_gpio_t), handle_arm_aux_gpio, "arm_aux_gpio" },
 };
 
 static void on_usb_rx(const uint8_t* d, uint32_t n, void* user) {
@@ -433,6 +465,13 @@ int task_comm_send_arm_feedback(const payload_arm_feedback_t* feedback) {
     return send_proto_payload(PROTO_FUNC_ARM_FEEDBACK,
                               feedback,
                               (uint8_t)sizeof(*feedback));
+}
+
+int task_comm_send_arm_motor_angles(const payload_arm_motor_angles_t* angles) {
+    if (!angles) return APP_ERR_INVALID_ARG;
+    return send_proto_payload(PROTO_FUNC_ARM_MOTOR_ANGLES,
+                              angles,
+                              (uint8_t)sizeof(*angles));
 }
 
 /* 发送上行帧 */

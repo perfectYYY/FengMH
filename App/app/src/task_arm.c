@@ -338,8 +338,13 @@ static uint8_t current_robot_mode(void) {
     return (mode.seq > 0U) ? mode.mode : PROTO_ROBOT_MODE_IDLE;
 }
 
+static uint8_t arm_work_mode(uint8_t robot_mode) {
+    return (robot_mode == PROTO_ROBOT_MODE_ARM ||
+            robot_mode == PROTO_ROBOT_MODE_REAR_PLACE) ? 1U : 0U;
+}
+
 static uint8_t arm_usb_commands_allowed(uint8_t robot_mode) {
-    return (robot_mode == PROTO_ROBOT_MODE_ARM) ? 1U : 0U;
+    return arm_work_mode(robot_mode);
 }
 
 static void consume_new_commands(uint8_t command_allowed) {
@@ -398,6 +403,37 @@ static void build_integrated_feedback(payload_arm_feedback_t* feedback) {
     feedback->theta1_rad = angles.theta1_geo;
 }
 
+static void build_motor_angles_feedback(payload_arm_motor_angles_t* angles) {
+    if (!angles) return;
+
+    const motor_logical_id_t motor_ids[4] = {
+        MOTOR_ID_ARM_J1, MOTOR_ID_ARM_J2, MOTOR_ID_ARM_J3, MOTOR_ID_ARM_J4,
+    };
+    memset(angles, 0, sizeof(*angles));
+    for (uint32_t i = 0U; i < 4U; i++) {
+        const motor_dev_t* motor = motor_get(motor_ids[i]);
+        if (motor && motor->state.online) {
+            angles->online_mask |= (uint8_t)(1U << i);
+            switch (i) {
+                case 0U:
+                    angles->j1_angle_rad = motor->state.angle_rad;
+                    break;
+                case 1U:
+                    angles->j2_angle_rad = motor->state.angle_rad;
+                    break;
+                case 2U:
+                    angles->j3_angle_rad = motor->state.angle_rad;
+                    break;
+                case 3U:
+                    angles->j4_angle_rad = motor->state.angle_rad;
+                    break;
+                default:
+                    break;
+            }
+        }
+    }
+}
+
 static void send_feedback_if_due(uint32_t now_ms) {
     if ((now_ms - s_last_feedback_tx_ms) < ARM_FEEDBACK_TX_INTERVAL_MS) {
         return;
@@ -407,11 +443,14 @@ static void send_feedback_if_due(uint32_t now_ms) {
     }
 
     payload_arm_feedback_t feedback;
+    payload_arm_motor_angles_t motor_angles;
     build_integrated_feedback(&feedback);
+    build_motor_angles_feedback(&motor_angles);
     s_last_feedback_attempt_ms = now_ms;
     if (task_comm_send_arm_feedback(&feedback) > 0) {
         s_last_feedback_tx_ms = now_ms;
     }
+    (void)task_comm_send_arm_motor_angles(&motor_angles);
 }
 
 static uint32_t snapshot_motor_age_ms(const motor_dev_t* motor,
@@ -466,6 +505,13 @@ static void force_all_pump_outputs_off(void) {
     Pump_Control_SetPA9(0U);
 }
 
+static void reset_host_arm_protocol_state(void) {
+    Arm_Serial_Protocol_Init();
+    s_last_place_cycle_sequence = Arm_Serial_Protocol_PlaceCycleSequence();
+    force_all_pump_outputs_off();
+    s_place_hold_active = 0U;
+}
+
 static void enter_gravity_only_override(void) {
     /* Clear every queued/active grasp-place state before enabling gravity only. */
     Arm_Serial_Protocol_Init();
@@ -501,6 +547,8 @@ static void leave_gravity_only_override(void) {
     Arm_Control_SetGravityOnlyMode(0U);
 #if APP_ARM_POWER_ON_FIXED_GRASP_TEST
     reset_fixed_hold(ARM_FIXED_PROFILE_FIRST_LIFT);
+#elif APP_ARM_POWER_ON_HOST_READY_ENABLE
+    reset_fixed_hold(ARM_FIXED_PROFILE_FIRST_LIFT);
 #else
     reset_fixed_hold(ARM_FIXED_PROFILE_PARK);
 #endif
@@ -524,6 +572,8 @@ void task_arm_init(void) {
     s_fixed_profile =
 #if APP_ARM_POWER_ON_FIXED_GRASP_TEST
         ARM_FIXED_PROFILE_FIRST_LIFT;
+#elif APP_ARM_POWER_ON_HOST_READY_ENABLE
+        ARM_FIXED_PROFILE_FIRST_LIFT;
 #else
         ARM_FIXED_PROFILE_PARK;
 #endif
@@ -544,6 +594,8 @@ void task_arm_init(void) {
     if (!APP_ARM_FORCE_GRAVITY_ONLY) {
 #if APP_ARM_POWER_ON_FIXED_GRASP_TEST
         reset_fixed_hold(ARM_FIXED_PROFILE_FIRST_LIFT);
+#elif APP_ARM_POWER_ON_HOST_READY_ENABLE
+        reset_fixed_hold(ARM_FIXED_PROFILE_FIRST_LIFT);
 #else
         reset_fixed_hold(ARM_FIXED_PROFILE_PARK);
 #endif
@@ -562,9 +614,21 @@ void task_arm_step_for_test(float dt_s, uint32_t now_ms) {
 #endif
     uint8_t robot_mode = current_robot_mode();
     uint8_t entered_arm_mode =
-        (robot_mode == PROTO_ROBOT_MODE_ARM &&
-         s_last_robot_mode != PROTO_ROBOT_MODE_ARM) ? 1U : 0U;
+        (arm_work_mode(robot_mode) && !arm_work_mode(s_last_robot_mode)) ? 1U : 0U;
+    uint8_t switched_arm_work_mode =
+        (arm_work_mode(robot_mode) && arm_work_mode(s_last_robot_mode) &&
+         robot_mode != s_last_robot_mode) ? 1U : 0U;
+    uint8_t exited_arm_work_mode =
+        (!arm_work_mode(robot_mode) && arm_work_mode(s_last_robot_mode)) ? 1U : 0U;
     s_last_robot_mode = robot_mode;
+    uint8_t rear_place_mode =
+        (robot_mode == PROTO_ROBOT_MODE_REAR_PLACE) ? 1U : 0U;
+    (void)arm_control_set_rear_place_avoidance(
+        rear_place_mode);
+    if (entered_arm_mode || switched_arm_work_mode || exited_arm_work_mode) {
+        reset_host_arm_protocol_state();
+    }
+    Arm_Serial_Protocol_SetRearPlaceMode(rear_place_mode);
 
     if (task_safety_estop_active()) {
         consume_new_commands(0U);
@@ -588,8 +652,10 @@ void task_arm_step_for_test(float dt_s, uint32_t now_ms) {
         s_estop_was_active = 0U;
 #if APP_ARM_POWER_ON_FIXED_GRASP_TEST
         reset_fixed_hold(ARM_FIXED_PROFILE_FIRST_LIFT);
+#elif APP_ARM_POWER_ON_HOST_READY_ENABLE
+        reset_fixed_hold(ARM_FIXED_PROFILE_FIRST_LIFT);
 #else
-        reset_fixed_hold((robot_mode == PROTO_ROBOT_MODE_ARM) ?
+        reset_fixed_hold(arm_work_mode(robot_mode) ?
                          ARM_FIXED_PROFILE_FIRST_LIFT :
                          ARM_FIXED_PROFILE_PARK);
 #endif
@@ -614,11 +680,12 @@ void task_arm_step_for_test(float dt_s, uint32_t now_ms) {
     (void)robot_mode;
     process_power_on_fixed_grasp_test();
 #else
-    if (robot_mode == PROTO_ROBOT_MODE_ARM &&
+    if (arm_work_mode(robot_mode) &&
         (entered_arm_mode || s_fixed_profile == ARM_FIXED_PROFILE_PARK)) {
         s_place_hold_active = 0U;
         reset_fixed_hold(ARM_FIXED_PROFILE_FIRST_LIFT);
-    } else if (robot_mode != PROTO_ROBOT_MODE_ARM &&
+    } else if (!APP_ARM_POWER_ON_HOST_READY_ENABLE &&
+               !arm_work_mode(robot_mode) &&
                s_fixed_profile != ARM_FIXED_PROFILE_PARK) {
         s_place_hold_active = 0U;
         reset_fixed_hold(ARM_FIXED_PROFILE_PARK);
@@ -640,7 +707,7 @@ void task_arm_step_for_test(float dt_s, uint32_t now_ms) {
     uint8_t consume_commands = 1U;
 #if !APP_ARM_POWER_ON_FIXED_GRASP_TEST
     if (debug_arm_fixed_state == ARM_FIXED_HOLDING &&
-        robot_mode == PROTO_ROBOT_MODE_ARM &&
+        arm_work_mode(robot_mode) &&
         host_has_new_valid_grasp_target()) {
         /* 等待姿态到位后，新的 GRASP 才接管控制。 */
         release_fixed_pose_to_host();
@@ -650,7 +717,7 @@ void task_arm_step_for_test(float dt_s, uint32_t now_ms) {
         (debug_arm_fixed_state == ARM_FIXED_RELEASED_TO_HOST) ?
         arm_usb_commands_allowed(robot_mode) : 0U;
     if (debug_arm_fixed_state != ARM_FIXED_RELEASED_TO_HOST &&
-        robot_mode == PROTO_ROBOT_MODE_ARM) {
+        arm_work_mode(robot_mode)) {
         /* ARM 等待目标期间保留可能先到达的泵命令。 */
         consume_commands = 0U;
     }
@@ -696,10 +763,13 @@ void task_arm_step_for_test(float dt_s, uint32_t now_ms) {
                debug_arm_fixed_state == ARM_FIXED_ERROR) {
         process_fixed_hold(now_ms);
 #else
-    } else if (robot_mode == PROTO_ROBOT_MODE_ARM ||
+    } else if (APP_ARM_POWER_ON_HOST_READY_ENABLE ||
+               arm_work_mode(robot_mode) ||
                s_fixed_profile == ARM_FIXED_PROFILE_PARK ||
                debug_arm_fixed_state == ARM_FIXED_MOVING ||
-               debug_arm_fixed_state == ARM_FIXED_HOLDING) {
+               debug_arm_fixed_state == ARM_FIXED_HOLDING ||
+               debug_arm_fixed_state == ARM_FIXED_WAIT_FEEDBACK ||
+               debug_arm_fixed_state == ARM_FIXED_ERROR) {
         process_fixed_hold(now_ms);
 #endif
     }

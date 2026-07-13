@@ -22,6 +22,8 @@ extern "C" {
 #define ARM_CONTROL_TARGET_INTERNAL_HOLD 0xFEu
 
 extern volatile float debug_arm_host_target_j1_motor_deg;
+extern volatile float debug_arm_selected_target_j1_motor_deg;
+extern volatile uint8_t debug_arm_rear_place_avoidance_enabled;
 extern volatile uint32_t debug_arm_grasp_j1_reject_count;
 
 typedef struct {
@@ -69,6 +71,7 @@ typedef struct {
 app_err_t arm_control_init(void);
 app_err_t arm_control_set_enabled(uint8_t enabled);
 app_err_t arm_control_set_motor_output_enabled(uint8_t enabled);
+app_err_t arm_control_set_rear_place_avoidance(uint8_t enabled);
 /* 目标保持期间让 J1 使用重补式零刚度/轻阻尼，可被外力自由转动。 */
 app_err_t arm_control_set_j1_free_mode(uint8_t enabled);
 app_err_t arm_control_set_gravity_mode(void);

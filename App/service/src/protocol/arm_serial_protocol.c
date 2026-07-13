@@ -27,6 +27,12 @@ typedef struct {
     float z_m;
 } Arm_Target_Command_t;
 
+typedef enum {
+    PLACE_SLOT_NONE = 0,
+    PLACE_SLOT_1_NEGATIVE_Y = 1,
+    PLACE_SLOT_2_POSITIVE_Y = 2,
+} place_slot_t;
+
 volatile uint8_t debug_serial_target_type;
 volatile float debug_serial_target_x_m;
 volatile float debug_serial_target_y_m;
@@ -58,7 +64,9 @@ static volatile uint32_t s_pending_pump_sequence;
 static uint32_t s_handled_pump_sequence;
 static uint8_t s_deferred_pump_off;
 static uint8_t s_waiting_for_next_grasp;
+static uint8_t s_rear_place_mode;
 static volatile uint32_t s_place_cycle_sequence;
+static place_slot_t s_active_place_slot;
 static uint32_t s_last_feedback_tick;
 static uint32_t s_last_feedback_attempt_tick;
 
@@ -159,6 +167,10 @@ void Arm_Serial_Protocol_QueuePump(uint8_t pump_on) {
     debug_serial_pump_rx_count++;
 }
 
+void Arm_Serial_Protocol_SetRearPlaceMode(uint8_t enabled) {
+    s_rear_place_mode = enabled ? 1U : 0U;
+}
+
 static void parse_stream(void) {
     for (;;) {
         uint32_t header = 0U;
@@ -230,6 +242,24 @@ static void process_pending_target(void) {
         .z = s_pending_target.z_m * METERS_TO_MILLIMETERS,
         .pitch = 0.0f,
     };
+    if (s_rear_place_mode && s_pending_target.type == 0U) {
+        if (s_pending_target.y_m > 0.0f) {
+            Pump_Control_SetPA8(0U);
+        } else if (s_pending_target.y_m < 0.0f) {
+            Pump_Control_SetPC9(0U);
+        }
+        s_active_place_slot = PLACE_SLOT_NONE;
+    } else if (s_pending_target.type == 1U) {
+        s_active_place_slot = (s_pending_target.y_m < 0.0f) ?
+                              PLACE_SLOT_1_NEGATIVE_Y :
+                              PLACE_SLOT_2_POSITIVE_Y;
+        if (!s_rear_place_mode &&
+            s_active_place_slot == PLACE_SLOT_1_NEGATIVE_Y) {
+            Pump_Control_SetPC9(1U);
+        }
+    } else {
+        s_active_place_slot = PLACE_SLOT_NONE;
+    }
     (void)Arm_Control_MoveToTypedPose(&pose, s_pending_target.type);
 }
 
@@ -237,7 +267,17 @@ static void finish_place_cycle(void) {
     s_deferred_pump_off = 0U;
     debug_serial_pump_off_deferred = 0U;
     Pump_Control_Set(0U);
-    Arm_Control_SetGravityMode();
+    if (!s_rear_place_mode &&
+        s_active_place_slot == PLACE_SLOT_1_NEGATIVE_Y) {
+        Pump_Control_SetPC8(1U);
+    } else if (!s_rear_place_mode &&
+               s_active_place_slot == PLACE_SLOT_2_POSITIVE_Y) {
+        Pump_Control_SetPA8(1U);
+    }
+    s_active_place_slot = PLACE_SLOT_NONE;
+    if (!s_rear_place_mode) {
+        Arm_Control_SetGravityMode();
+    }
     s_waiting_for_next_grasp = 1U;
     debug_serial_waiting_next_grasp = 1U;
     s_place_cycle_sequence++;
@@ -342,7 +382,9 @@ void Arm_Serial_Protocol_Init(void) {
     s_handled_pump_sequence = 0U;
     s_deferred_pump_off = 0U;
     s_waiting_for_next_grasp = 0U;
+    s_rear_place_mode = 0U;
     s_place_cycle_sequence = 0U;
+    s_active_place_slot = PLACE_SLOT_NONE;
     debug_serial_target_type = 0U;
     debug_serial_target_x_m = 0.0f;
     debug_serial_target_y_m = 0.0f;

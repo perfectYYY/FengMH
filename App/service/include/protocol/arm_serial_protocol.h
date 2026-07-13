@@ -50,6 +50,7 @@ void Arm_Serial_Protocol_QueueTarget(uint8_t target_type,
                                       float y_m,
                                       float z_m);
 void Arm_Serial_Protocol_QueuePump(uint8_t pump_on);
+void Arm_Serial_Protocol_SetRearPlaceMode(uint8_t enabled);
 void Arm_Serial_Protocol_Process(void);
 /* Increments once after a PLACE target is reached and the pump is released. */
 uint32_t Arm_Serial_Protocol_PlaceCycleSequence(void);

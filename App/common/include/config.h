@@ -104,6 +104,16 @@
 #endif
 
 /*
+ * 上电后是否直接进入上位机作业准备姿态：
+ * - 默认关闭：上电进入 PARK；收到 ARM/REAR_PLACE 后再进入第一箱等待位；
+ * - NAV/IDLE 等非机械臂模式会挤走 ARM/REAR_PLACE，并让机械臂回 PARK；
+ * - 需要现场纯重补时仍可用 debug_arm_force_gravity_only=1 临时切换。
+ */
+#ifndef APP_ARM_POWER_ON_HOST_READY_ENABLE
+#define APP_ARM_POWER_ON_HOST_READY_ENABLE 0
+#endif
+
+/*
  * 测试版执行策略：
  * - 上电后底盘仍按原逻辑站起；
  * - 机械臂不再等待 ARM 模式才进等待位，上电后直接进入抓取固定姿态；
@@ -137,11 +147,9 @@
 #define APP_ARM_FIXED_J2_MOTOR_DEG 42.4236679f
 #define APP_ARM_FIXED_J3_MOTOR_DEG (-11.5840006f)
 
-/* 仅限制上位机 GRASP 坐标反解出的 J1 电机角；PLACE 不使用该禁区。 */
+/* 仅限制上位机 GRASP 坐标反解出的 J1 电机角 A=[-57,44]；PLACE 不使用该禁区。 */
 #define APP_ARM_GRASP_J1_FORBIDDEN_A_MIN_DEG (-57.0f)
 #define APP_ARM_GRASP_J1_FORBIDDEN_A_MAX_DEG (44.0f)
-#define APP_ARM_GRASP_J1_FORBIDDEN_B_MIN_DEG (-227.0f)
-#define APP_ARM_GRASP_J1_FORBIDDEN_B_MAX_DEG (-136.0f)
 
 /* 旧工程三段式移动时的收臂/转底座中间点。 */
 #ifndef APP_ARM_SAFE_MOVE_J2_DEG

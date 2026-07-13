@@ -36,6 +36,8 @@
 #define ARM_SAFE_MOVE_J3_LOGICAL_RAD      APP_ARM_DEG2RAD(APP_ARM_SAFE_MOVE_J3_DEG)
 #define ARM_FINE_MAX_BASE_DELTA_RAD       APP_ARM_DEG2RAD(8.0f)
 #define ARM_FINE_MAX_ARM_DELTA_RAD        APP_ARM_DEG2RAD(12.0f)
+#define ARM_REAR_PLACE_FORBIDDEN_J1_RAD   APP_ARM_DEG2RAD(-180.1203f)
+#define ARM_J1_AVOIDANCE_EPS_RAD          APP_ARM_DEG2RAD(0.05f)
 
 typedef enum {
     ARM_SAFE_MOVE_IDLE = 0,
@@ -61,11 +63,14 @@ typedef struct {
     uint32_t control_last_ms;
     uint8_t error_latched;
     uint8_t j1_free_mode;
+    uint8_t rear_place_avoidance_enabled;
 } arm_control_ctx_t;
 
 static arm_control_ctx_t s_arm;
 
 volatile float debug_arm_host_target_j1_motor_deg;
+volatile float debug_arm_selected_target_j1_motor_deg;
+volatile uint8_t debug_arm_rear_place_avoidance_enabled;
 volatile uint32_t debug_arm_grasp_j1_reject_count;
 
 static const motor_logical_id_t S_ARM_MOTOR_IDS[ARM_MOTOR_COUNT] = {
@@ -193,6 +198,11 @@ static uint8_t target_is_inside_fine_window(const arm_joint_angles_t* target) {
     return target_delta_inside_fine_window(target, &reference);
 }
 
+static uint8_t rear_place_requires_staged_motion(uint8_t target_type) {
+    return (s_arm.rear_place_avoidance_enabled &&
+            target_type == PROTO_ARM_TARGET_PLACE) ? 1U : 0U;
+}
+
 static uint8_t joint_targets_match(const arm_joint_angles_t* a,
                                    const arm_joint_angles_t* b,
                                    float tolerance_rad) {
@@ -252,6 +262,72 @@ static void normalize_theta1_to_reference(arm_joint_angles_t* target,
         target->theta1_motor_rad + ARM_KINEMATICS_DEFAULT_OFFSET.theta1_offset_rad;
 }
 
+static uint8_t theta1_segment_crosses_rear_place_forbidden(float start_rad,
+                                                           float end_rad) {
+    if (!isfinite(start_rad) || !isfinite(end_rad)) return 1U;
+
+    const float low = (start_rad < end_rad) ? start_rad : end_rad;
+    const float high = (start_rad < end_rad) ? end_rad : start_rad;
+    int32_t first = (int32_t)floorf(
+        (low - ARM_REAR_PLACE_FORBIDDEN_J1_RAD) / (2.0f * APP_ARM_PI)) - 1;
+    int32_t last = (int32_t)ceilf(
+        (high - ARM_REAR_PLACE_FORBIDDEN_J1_RAD) / (2.0f * APP_ARM_PI)) + 1;
+
+    for (int32_t k = first; k <= last; k++) {
+        const float forbidden =
+            ARM_REAR_PLACE_FORBIDDEN_J1_RAD + (2.0f * APP_ARM_PI * (float)k);
+        if (forbidden >= (low - ARM_J1_AVOIDANCE_EPS_RAD) &&
+            forbidden <= (high + ARM_J1_AVOIDANCE_EPS_RAD)) {
+            return 1U;
+        }
+    }
+    return 0U;
+}
+
+static void avoid_rear_place_forbidden_theta1(arm_joint_angles_t* target,
+                                              float reference_theta1_rad) {
+    if (!target || !s_arm.rear_place_avoidance_enabled) return;
+
+    normalize_theta1_to_reference(target, reference_theta1_rad);
+    const float nearest = target->theta1_motor_rad;
+    float best = nearest;
+    float best_distance = INFINITY;
+    uint8_t found_clear = 0U;
+
+    for (int32_t k = -2; k <= 2; k++) {
+        const float candidate = nearest + (2.0f * APP_ARM_PI * (float)k);
+        const float distance = fabsf(candidate - reference_theta1_rad);
+        if (theta1_segment_crosses_rear_place_forbidden(reference_theta1_rad,
+                                                        candidate)) {
+            continue;
+        }
+        if (!found_clear || distance < best_distance) {
+            best = candidate;
+            best_distance = distance;
+            found_clear = 1U;
+        }
+    }
+
+    if (!found_clear) {
+        best = (nearest >= reference_theta1_rad) ?
+               nearest - (2.0f * APP_ARM_PI) :
+               nearest + (2.0f * APP_ARM_PI);
+    }
+
+    target->theta1_motor_rad = best;
+    target->theta1_geo_rad =
+        target->theta1_motor_rad + ARM_KINEMATICS_DEFAULT_OFFSET.theta1_offset_rad;
+    debug_arm_selected_target_j1_motor_deg =
+        APP_ARM_RAD2DEG(target->theta1_motor_rad);
+}
+
+static void select_theta1_route_to_reference(arm_joint_angles_t* target,
+                                             float reference_theta1_rad) {
+    if (!target) return;
+    normalize_theta1_to_reference(target, reference_theta1_rad);
+    avoid_rear_place_forbidden_theta1(target, reference_theta1_rad);
+}
+
 static float wrap_degrees_0_to_360(float angle_deg) {
     float wrapped = fmodf(angle_deg, 360.0f);
     if (wrapped < 0.0f) wrapped += 360.0f;
@@ -265,20 +341,12 @@ uint8_t arm_control_grasp_j1_angle_forbidden(float theta1_motor_rad) {
     const float wrapped_deg = wrap_degrees_0_to_360(angle_deg);
     const float a_min_wrapped = wrap_degrees_0_to_360(
         APP_ARM_GRASP_J1_FORBIDDEN_A_MIN_DEG);
-    const float b_min_wrapped = wrap_degrees_0_to_360(
-        APP_ARM_GRASP_J1_FORBIDDEN_B_MIN_DEG);
-    const float b_max_wrapped = wrap_degrees_0_to_360(
-        APP_ARM_GRASP_J1_FORBIDDEN_B_MAX_DEG);
     const float boundary_epsilon_deg = 0.001f;
 
-    /* A=[-57,44] 跨越 0 度；B=[-227,-136] 对应 [133,224]。 */
+    /* A=[-57,44] 跨越 0 度；旧 B=[-227,-136] 已按现场策略移除。 */
     if (wrapped_deg >= a_min_wrapped - boundary_epsilon_deg ||
         wrapped_deg <= APP_ARM_GRASP_J1_FORBIDDEN_A_MAX_DEG +
                        boundary_epsilon_deg) {
-        return 1U;
-    }
-    if (wrapped_deg >= b_min_wrapped - boundary_epsilon_deg &&
-        wrapped_deg <= b_max_wrapped + boundary_epsilon_deg) {
         return 1U;
     }
     return 0U;
@@ -521,7 +589,13 @@ static void set_stage_target(arm_safe_move_stage_t stage,
                              const arm_joint_angles_t* target,
                              uint32_t now_ms) {
     if (!target) return;
-    s_arm.target_angles = *target;
+    arm_joint_angles_t planned = *target;
+    if (s_arm.rear_place_avoidance_enabled) {
+        arm_joint_angles_t reference;
+        current_reference_angles(&reference);
+        avoid_rear_place_forbidden_theta1(&planned, reference.theta1_motor_rad);
+    }
+    s_arm.target_angles = planned;
     s_arm.status.safe_move_stage = (uint8_t)stage;
     s_arm.status.target_pending = 1U;
     reset_settle_tracking(now_ms);
@@ -548,7 +622,9 @@ static void start_safe_extend_stage(uint32_t now_ms) {
 static void plan_final_target(uint32_t now_ms) {
     s_arm.active_target_angles = s_arm.final_target_angles;
 
-    if (target_is_inside_fine_window(&s_arm.final_target_angles)) {
+    if (rear_place_requires_staged_motion(s_arm.status.target_type)) {
+        start_safe_retract_stage(now_ms);
+    } else if (target_is_inside_fine_window(&s_arm.final_target_angles)) {
         s_arm.status.fine_tracking_active = 1U;
         set_stage_target(ARM_SAFE_MOVE_IDLE, &s_arm.final_target_angles, now_ms);
     } else {
@@ -937,6 +1013,12 @@ app_err_t arm_control_set_motor_output_enabled(uint8_t enabled) {
     return APP_OK;
 }
 
+app_err_t arm_control_set_rear_place_avoidance(uint8_t enabled) {
+    s_arm.rear_place_avoidance_enabled = enabled ? 1U : 0U;
+    debug_arm_rear_place_avoidance_enabled = s_arm.rear_place_avoidance_enabled;
+    return APP_OK;
+}
+
 app_err_t arm_control_set_j1_free_mode(uint8_t enabled) {
     s_arm.j1_free_mode = enabled ? 1U : 0U;
     return APP_OK;
@@ -982,8 +1064,10 @@ app_err_t arm_control_set_target(uint8_t target_type, float x_m, float y_m, floa
 
     arm_joint_angles_t reference_angles;
     current_reference_angles(&reference_angles);
-    normalize_theta1_to_reference(&target_angles,
-                                  reference_angles.theta1_motor_rad);
+    select_theta1_route_to_reference(&target_angles,
+                                     reference_angles.theta1_motor_rad);
+    debug_arm_selected_target_j1_motor_deg =
+        APP_ARM_RAD2DEG(target_angles.theta1_motor_rad);
 
     const uint8_t had_active_target =
         (s_arm.status.target_valid && !s_arm.error_latched) ? 1U : 0U;
@@ -1044,6 +1128,10 @@ app_err_t arm_control_set_target(uint8_t target_type, float x_m, float y_m, floa
     if (s_arm.status.fine_tracking_active) {
         const arm_joint_angles_t previous_target = s_arm.active_target_angles;
         s_arm.active_target_angles = target_angles;
+        if (rear_place_requires_staged_motion(target_type)) {
+            start_safe_retract_stage(now_ms);
+            return APP_OK;
+        }
         if (!target_delta_inside_fine_window(&target_angles,
                                              &previous_target)) {
             start_safe_retract_stage(now_ms);
@@ -1059,7 +1147,9 @@ app_err_t arm_control_set_target(uint8_t target_type, float x_m, float y_m, floa
     }
 
     s_arm.active_target_angles = target_angles;
-    if (target_is_inside_fine_window(&target_angles)) {
+    if (rear_place_requires_staged_motion(target_type)) {
+        start_safe_retract_stage(now_ms);
+    } else if (target_is_inside_fine_window(&target_angles)) {
         s_arm.status.fine_tracking_active = 1U;
         if (joint_targets_match(&target_angles,
                                 &s_arm.target_angles,
@@ -1100,6 +1190,13 @@ app_err_t arm_control_set_joint_target(uint8_t target_type,
         requested.theta3_motor_rad + ARM_KINEMATICS_DEFAULT_OFFSET.theta3_offset_rad;
     requested.theta4_geo_rad =
         requested.theta4_motor_rad + ARM_KINEMATICS_DEFAULT_OFFSET.theta4_offset_rad;
+
+    arm_joint_angles_t reference_angles;
+    current_reference_angles(&reference_angles);
+    select_theta1_route_to_reference(&requested,
+                                     reference_angles.theta1_motor_rad);
+    debug_arm_selected_target_j1_motor_deg =
+        APP_ARM_RAD2DEG(requested.theta1_motor_rad);
 
     if (!joint_target_is_valid(&requested)) {
         s_arm.status.last_result = APP_ERR_INVALID_ARG;

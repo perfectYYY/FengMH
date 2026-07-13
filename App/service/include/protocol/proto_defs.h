@@ -26,6 +26,7 @@ extern "C" {
 #define PROTO_FUNC_ARM_PUMP     0x14
 #define PROTO_FUNC_MODE_CMD     0x15
 #define PROTO_FUNC_WHEEL_TEST   0x16   /* 绕过 gait/planner 的四轮 MIT 诊断 */
+#define PROTO_FUNC_ARM_AUX_GPIO 0x17   /* 调试用：直接控制机械臂辅助 GPIO */
 #define PROTO_FUNC_STATUS_REQ   0x20
 #define PROTO_FUNC_USB_CDC_PING 0x21
 
@@ -37,6 +38,7 @@ extern "C" {
 #define PROTO_FUNC_USB_CDC_STATE 0x84
 #define PROTO_FUNC_USB_CDC_PONG 0x85
 #define PROTO_FUNC_ARM_FEEDBACK 0x86
+#define PROTO_FUNC_ARM_MOTOR_ANGLES 0x87
 #define PROTO_FUNC_EVENT        0x8F
 
 #define PROTO_ROBOT_MODE_IDLE   0u
@@ -44,6 +46,8 @@ extern "C" {
 #define PROTO_ROBOT_MODE_ARM    2u
 #define PROTO_ROBOT_MODE_ESTOP  3u
 #define PROTO_ROBOT_MODE_ERROR  4u
+#define PROTO_ROBOT_MODE_REAR_PLACE 5u
+#define PROTO_ROBOT_MODE_MAX    PROTO_ROBOT_MODE_REAR_PLACE
 
 typedef struct __attribute__((packed)) {
     float vx;   /* m/s  前后 */
@@ -112,6 +116,16 @@ typedef struct __attribute__((packed)) {
     float wheel_rads[GAIT_LEG_NUM]; /* FL/FR/RL/RR 输出轴 rad/s */
 } payload_wheel_test_t;  /* FuncID 0x16, len=20；需持续刷新 */
 
+#define PROTO_ARM_AUX_GPIO_PC8 0u
+#define PROTO_ARM_AUX_GPIO_PC9 1u
+#define PROTO_ARM_AUX_GPIO_PA8 2u
+#define PROTO_ARM_AUX_GPIO_PA9 3u
+
+typedef struct __attribute__((packed)) {
+    uint8_t channel;  /* PROTO_ARM_AUX_GPIO_* */
+    uint8_t on;       /* 1=on, 0=off */
+} payload_arm_aux_gpio_t; /* FuncID 0x17, len=2 */
+
 #define PROTO_ARM_STATE_IDLE    0u
 #define PROTO_ARM_STATE_MOVING  1u
 #define PROTO_ARM_STATE_REACHED 2u
@@ -124,6 +138,15 @@ typedef struct __attribute__((packed)) {
     float   end_z_m;      /* current end-effector z in arm_base, m */
     float   theta1_rad;   /* base joint angle, rad */
 } payload_arm_feedback_t; /* FuncID 0x86, len=17 */
+
+/* J1..J4 原始电机反馈角度；online_mask bit0..3 对应 J1..J4，角度单位 rad。 */
+typedef struct __attribute__((packed)) {
+    uint8_t online_mask;
+    float   j1_angle_rad;
+    float   j2_angle_rad;
+    float   j3_angle_rad;
+    float   j4_angle_rad;
+} payload_arm_motor_angles_t; /* FuncID 0x87, len=17 */
 
 typedef struct __attribute__((packed)) {
     uint8_t req_kind;  /* 0=state, 1=motor, 2=stats */
