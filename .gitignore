@@ -45,3 +45,5 @@ build_host/
 build_host_tests/
 build_arm/
 host_tests/build-*/
+imu_N.c
+imu_N.h
