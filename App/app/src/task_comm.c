@@ -554,7 +554,9 @@ int task_comm_send_chassis_diag(void) {
     p.effective_wz_mrad_s = diag_float_to_i16(status.effective_wz_rad_s, 1000.0f);
     p.slip_residual_mrad_s = diag_float_to_i16(status.slip_residual_rad_s, 1000.0f);
     p.speed_scale_permille = (uint16_t)diag_float_to_i16(status.speed_scale, 1000.0f);
-    p.flags = status.diagnostic_flags;
+    p.flags = (uint16_t)(status.diagnostic_flags |
+              (((uint16_t)g_chassis_wheel_test.active << PROTO_DIAG_WHEEL_TEST_MODE_SHIFT) &
+               PROTO_DIAG_WHEEL_TEST_MODE_MASK));
     return send_proto_payload(PROTO_FUNC_CHASSIS_DIAG, &p, (uint8_t)sizeof(p));
 }
 

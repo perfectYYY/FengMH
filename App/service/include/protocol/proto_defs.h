@@ -112,11 +112,15 @@ typedef struct __attribute__((packed)) {
     uint8_t mode;         /* PROTO_ROBOT_MODE_* */
 } payload_mode_cmd_t;    /* FuncID 0x15, len=1 */
 
-#define PROTO_WHEEL_TEST_DISABLE 0u
-#define PROTO_WHEEL_TEST_ENABLE  1u
+#define PROTO_WHEEL_TEST_DISABLE        0u
+#define PROTO_WHEEL_TEST_ENABLE         1u
+#define PROTO_WHEEL_TEST_COAST          2u
+#define PROTO_WHEEL_TEST_VERTICAL_DRIVE 3u
+#define PROTO_DIAG_WHEEL_TEST_MODE_SHIFT 12u
+#define PROTO_DIAG_WHEEL_TEST_MODE_MASK  0x3000u
 
 typedef struct __attribute__((packed)) {
-    uint8_t enable;       /* 0=退出并锁轮，1=进入直接轮驱测试 */
+    uint8_t enable;       /* 0=退出锁轮，1=纯轮驱，2=自由推动，3=原地踏步轮驱 */
     uint8_t wheel_mask;   /* bit0..3 = FL/FR/RL/RR；未选轮目标速度为 0 */
     uint8_t reserved[2];
     float wheel_rads[GAIT_LEG_NUM]; /* FL/FR/RL/RR 输出轴 rad/s */

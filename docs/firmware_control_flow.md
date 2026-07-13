@@ -75,7 +75,7 @@ flowchart TD
 | `0x13 MIT_CMD` | 单电机 MIT 调试；拒绝 ARM_J1-J6 旁路，防止抢机械臂 task。 |
 | `0x14 ARM_PUMP` | 校验 `pump_on` 后写 `s_arm_pump`。 |
 | `0x15 MODE_CMD` | 写 `s_mode_cmd`；`ESTOP/ERROR` 同步置位 `task_safety` 急停。 |
-| `0x16 WHEEL_TEST` | 腿固定 stand，按 FL/FR/RL/RR 掩码直接测试轮毂 MIT；500 ms 超时锁轮。 |
+| `0x16 WHEEL_TEST` | 测试专用：模式 1 固定腿轮驱，模式 2 轮毂零电流自由推动，模式 3 按 NAV 参数原地踏步并独立轮驱；500 ms 超时锁轮。 |
 
 上行：
 
@@ -136,7 +136,20 @@ gait_output
 - `GAIT_WHEEL_HOLD`：进入 stand/保守保持时清 DRIVE 积分、一次锁存实际轮角，随后发送固定位置和零速度。
 - `g_leg_wheel_mit` 提供 drive/hold mask、速度积分、增益、力矩限幅、位置误差限幅和 debug reset。
 
-`0x16 WHEEL_TEST` payload 为 `enable:u8, wheel_mask:u8, reserved[2], wheel_rads[4]:f32`，轮序固定 `FL/FR/RL/RR`。测试状态绕过 planner/gait，但仍由 500 Hz chassis task 下发并自动启用 `g_m3508_trace`；命令必须在 500 ms 内持续刷新。
+`0x16 WHEEL_TEST` payload 为 `mode:u8, wheel_mask:u8, reserved[2], wheel_rads[4]:f32`，轮序固定 `FL/FR/RL/RR`。`mode=0` 退出并锁轮，`1` 为固定腿纯轮驱，`2` 为轮毂零电流自由推动，`3` 为四腿按 NAV 行走参数仅上下踏步（步长 0）并使用四个独立轮速。模式 3 默认步高 `0.055 m`、周期 `0.20 s`（`5 Hz`）、占空比 `0.60`，并读取当前 `g_chassis_stride_cfg` 对应值。测试状态绕过正式 planner/gait，但仍由 500 Hz chassis task 下发；命令必须在 500 ms 内持续刷新，模式 2 退出时会在当前位置重新锁轮。
+
+`0x89` 的 `flags` 位 12..13 同步输出当前测试模式，因此 payload 最后两个字节在无其他标志时分别为：普通状态 `00 00`、模式 1 `00 10`、模式 2 `00 20`、模式 3 `00 30`。
+
+```text
+自由推动（每 50 ms 循环）：
+55 AA 16 14 02 0F 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 3A
+
+原地踏步轮驱，FL/FR/RL=4.00 rad/s，RR=4.16 rad/s：
+55 AA 16 14 03 0F 00 00 00 00 80 40 00 00 80 40 00 00 80 40 B8 1E 85 40 16
+
+退出测试并锁轮：
+55 AA 16 14 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 29
+```
 
 ## 机械臂控制周期
 

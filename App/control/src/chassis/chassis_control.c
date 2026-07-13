@@ -19,6 +19,7 @@
 #include "gait_params.h"
 #include "gait_script.h"
 #include "gait_stand.h"
+#include "gait_trajectory.h"
 #include "gait_trot.h"
 #include "gait_walk.h"
 #include "imu_bmi088.h"
@@ -56,7 +57,12 @@ static const char* TAG = "CHASSIS";
 #define CHASSIS_CMD_SLEW_VY_MPS2               0.60f
 #define CHASSIS_CMD_SLEW_WZ_RADPS2             1.50f
 #define CHASSIS_WHEEL_TEST_TIMEOUT_MS           500U
-#define CHASSIS_WHEEL_TEST_MAX_RADS             4.0f
+#define CHASSIS_WHEEL_TEST_MAX_RADS             18.0f
+#define CHASSIS_WHEEL_TEST_DEFAULT_PERIOD_S     0.20f
+#define CHASSIS_WHEEL_TEST_DEFAULT_HEIGHT_M     0.055f
+#define CHASSIS_WHEEL_TEST_DEFAULT_DUTY         0.60f
+#define CHASSIS_WHEEL_TEST_MODE_COAST            2U
+#define CHASSIS_WHEEL_TEST_MODE_VERTICAL_DRIVE   3U
 #define HEADING_HOLD_MIN_VX_M_S                  0.05f
 #define HEADING_HOLD_MANUAL_WZ_RAD_S             0.05f
 #define SLIP_FILTER_TAU_S                         0.10f
@@ -105,6 +111,8 @@ volatile chassis_attitude_comp_debug_t g_chassis_attitude_comp;
 volatile chassis_arm_load_comp_debug_t g_chassis_arm_load_comp;
 volatile chassis_wheel_test_debug_t g_chassis_wheel_test;
 static uint8_t s_wheel_test_was_active = 0U;
+static uint8_t s_wheel_test_last_mode = 0U;
+static float s_wheel_test_vertical_phase = 0.0f;
 static uint8_t s_attitude_balance_filter_valid = 0U;
 static uint8_t s_attitude_balance_was_enabled = 0U;
 static float s_attitude_filtered_mx_nm = 0.0f;
@@ -1087,20 +1095,83 @@ static uint8_t wheel_test_active_at(uint32_t now_ms) {
     return 0U;
 }
 
+static void wheel_test_build_vertical_output(gait_output_t* output, float dt_s) {
+    static const float phase_offset[GAIT_LEG_NUM] = {0.0f, 0.5f, 0.5f, 0.0f};
+    float period_s = g_chassis_stride_cfg.fast_period_s;
+    float step_height_m = g_chassis_stride_cfg.step_height_m;
+    float duty = g_chassis_stride_cfg.duty;
+
+    if (!isfinite(period_s) || period_s <= 1e-6f) {
+        period_s = CHASSIS_WHEEL_TEST_DEFAULT_PERIOD_S;
+    }
+    if (!isfinite(step_height_m) || step_height_m < 0.0f) {
+        step_height_m = CHASSIS_WHEEL_TEST_DEFAULT_HEIGHT_M;
+    }
+    if (!isfinite(duty) || duty <= 0.0f || duty >= 1.0f) {
+        duty = CHASSIS_WHEEL_TEST_DEFAULT_DUTY;
+    }
+
+    if (!isfinite(dt_s) || dt_s < 0.0f) dt_s = 0.0f;
+    s_wheel_test_vertical_phase = gait_wrap01(s_wheel_test_vertical_phase + dt_s / period_s);
+    output->phase = s_wheel_test_vertical_phase;
+
+    for (int i = 0; i < GAIT_LEG_NUM; i++) {
+        float dx_m = 0.0f;
+        float dz_m = 0.0f;
+        uint8_t in_stance = 1U;
+        float leg_phase = gait_wrap01(s_wheel_test_vertical_phase + phase_offset[i]);
+        gait_trot_foot_traj(leg_phase,
+                            duty,
+                            0.0f,
+                            step_height_m,
+                            &dx_m,
+                            &dz_m,
+                            &in_stance);
+        output->leg[i].in_stance = in_stance;
+        output->leg[i].foot_x_m = 0.0f;
+        output->leg[i].foot_z_m = dz_m;
+        output->leg[i].hip_rad = 0.0f;
+        output->leg[i].knee_rad = dz_m;
+    }
+}
+
 static void apply_direct_wheel_test(float dt_s) {
+    static const motor_logical_id_t wheel_ids[GAIT_LEG_NUM] = {
+        MOTOR_ID_FL_WHEEL, MOTOR_ID_FR_WHEEL, MOTOR_ID_RL_WHEEL, MOTOR_ID_RR_WHEEL
+    };
     gait_output_t output;
+    uint8_t mode = g_chassis_wheel_test.active;
+    uint8_t coast = (mode == CHASSIS_WHEEL_TEST_MODE_COAST) ? 1U : 0U;
+    uint8_t vertical_drive = (mode == CHASSIS_WHEEL_TEST_MODE_VERTICAL_DRIVE) ? 1U : 0U;
     memset(&output, 0, sizeof(output));
-    output.wheel_mode = GAIT_WHEEL_DRIVE;
+    output.wheel_mode = coast ? GAIT_WHEEL_HOLD : GAIT_WHEEL_DRIVE;
+
+    if (vertical_drive) {
+        wheel_test_build_vertical_output(&output, dt_s);
+    }
 
     uint8_t mask = (uint8_t)(g_chassis_wheel_test.wheel_mask & 0x0FU);
     for (int i = 0; i < GAIT_LEG_NUM; i++) {
-        output.leg[i].in_stance = 1U;
-        output.leg[i].wheel_rads = (mask & (uint8_t)(1U << i))
+        if (!vertical_drive) output.leg[i].in_stance = 1U;
+        output.leg[i].wheel_rads = (!coast && (mask & (uint8_t)(1U << i)))
                                  ? g_chassis_wheel_test.wheel_rads[i]
                                  : 0.0f;
     }
 
     leg_controller_apply_dt(&s_leg_controller, &output, dt_s);
+
+    if (coast) {
+        for (int i = 0; i < GAIT_LEG_NUM; i++) {
+            if ((mask & (uint8_t)(1U << i)) == 0U) continue;
+            motor_dev_t* wheel = motor_get(wheel_ids[i]);
+            if (wheel && wheel->ops && wheel->ops->set_current) {
+                (void)wheel->ops->set_current(wheel, 0.0f);
+            }
+        }
+
+        /* Do not retain a pre-push MIT position while the wheels are current-free. */
+        g_leg_wheel_mit.reset = 1U;
+    }
 }
 
 static uint8_t update_boot_stand(float dt_s) {
@@ -1217,6 +1288,8 @@ void chassis_control_init(void) {
     s_offline_seq_start_ms = 0U;
     s_last_online = 0U;
     s_wheel_test_was_active = 0U;
+    s_wheel_test_last_mode = 0U;
+    s_wheel_test_vertical_phase = 0.0f;
 
     LOGI("chassis init: mode=AUTO active=stand timeout=%ums",
          (unsigned)s_online_timeout_ms);
@@ -1241,9 +1314,11 @@ void chassis_control_tick(const chassis_control_input_t* input,
 
     uint8_t wheel_test_active = wheel_test_active_at(now_ms);
     if (wheel_test_active) {
-        if (!s_wheel_test_was_active) {
+        if (!s_wheel_test_was_active || s_wheel_test_last_mode != wheel_test_active) {
             wheel_test_force_stand_state();
+            s_wheel_test_vertical_phase = 0.0f;
             s_wheel_test_was_active = 1U;
+            s_wheel_test_last_mode = wheel_test_active;
         }
         update_stand_height_ramp(dt_s);
         apply_direct_wheel_test(dt_s);
@@ -1251,7 +1326,12 @@ void chassis_control_tick(const chassis_control_input_t* input,
         return;
     }
     if (s_wheel_test_was_active) {
+        if (s_wheel_test_last_mode == CHASSIS_WHEEL_TEST_MODE_COAST) {
+            g_leg_wheel_mit.reset = 1U;
+        }
         s_wheel_test_was_active = 0U;
+        s_wheel_test_last_mode = 0U;
+        s_wheel_test_vertical_phase = 0.0f;
         wheel_test_force_stand_state();
         update_stand_height_ramp(dt_s);
         apply_gait_output_to_motors(0U, dt_s);
@@ -1310,7 +1390,7 @@ int chassis_control_set_wheel_test(uint8_t enable,
                                    uint8_t wheel_mask,
                                    const float wheel_rads[GAIT_LEG_NUM],
                                    uint32_t now_ms) {
-    if (enable > 1U) return APP_ERR_INVALID_ARG;
+    if (enable > CHASSIS_WHEEL_TEST_MODE_VERTICAL_DRIVE) return APP_ERR_INVALID_ARG;
 
     if (!enable) {
         g_chassis_wheel_test.active = 0U;
@@ -1345,7 +1425,7 @@ int chassis_control_set_wheel_test(uint8_t enable,
         motor_m3508_trace_reset(1U);
         motor_m3508_trace_enable(1U);
     }
-    g_chassis_wheel_test.active = 1U;
+    g_chassis_wheel_test.active = enable;
     return APP_OK;
 }
 
