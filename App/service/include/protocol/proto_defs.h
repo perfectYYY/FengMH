@@ -27,6 +27,7 @@ extern "C" {
 #define PROTO_FUNC_MODE_CMD     0x15
 #define PROTO_FUNC_WHEEL_TEST   0x16   /* 绕过 gait/planner 的四轮 MIT 诊断 */
 #define PROTO_FUNC_ARM_AUX_GPIO 0x17   /* 调试用：直接控制机械臂辅助 GPIO */
+#define PROTO_FUNC_ODOM_RESET   0x18   /* 相对里程计原点重置 */
 #define PROTO_FUNC_STATUS_REQ   0x20
 #define PROTO_FUNC_USB_CDC_PING 0x21
 
@@ -41,6 +42,7 @@ extern "C" {
 #define PROTO_FUNC_ARM_MOTOR_ANGLES 0x87
 #define PROTO_FUNC_WHEEL_STATE  0x88
 #define PROTO_FUNC_CHASSIS_DIAG 0x89
+#define PROTO_FUNC_ODOMETRY      0x8A
 #define PROTO_FUNC_EVENT        0x8F
 
 #define PROTO_STEER_MODE_OFF       0u
@@ -132,6 +134,12 @@ typedef struct __attribute__((packed)) {
     uint8_t on;       /* 1=on, 0=off */
 } payload_arm_aux_gpio_t; /* FuncID 0x17, len=2 */
 
+typedef struct __attribute__((packed)) {
+    float x_m;
+    float y_m;
+    float yaw_rad;
+} payload_odom_reset_t; /* FuncID 0x18, len=12 */
+
 #define PROTO_ARM_STATE_IDLE    0u
 #define PROTO_ARM_STATE_MOVING  1u
 #define PROTO_ARM_STATE_REACHED 2u
@@ -177,6 +185,19 @@ typedef struct __attribute__((packed)) {
     uint16_t speed_scale_permille;
     uint16_t flags;
 } payload_chassis_diag_t; /* FuncID 0x89, len=48 */
+
+typedef struct __attribute__((packed)) {
+    uint32_t timestamp_ms;
+    float x_m;
+    float y_m;
+    float yaw_rad;
+    float vx_m_s;
+    float yaw_rate_rad_s;
+    float gyro_z_bias_rad_s;
+    uint16_t quality_flags;
+    uint8_t stance_mask;
+    uint8_t wheel_online_mask;
+} payload_odometry_t; /* FuncID 0x8A, len=32 */
 
 typedef struct __attribute__((packed)) {
     uint8_t req_kind;  /* 0=state, 1=motor, 2=stats */

@@ -50,11 +50,13 @@ static uint32_t s_last_state_tx_ms  = 0;  /* 0x80 上次发送时间 */
 static uint32_t s_last_motor_tx_ms  = 0;  /* 0x81 上次发送时间 */
 static uint32_t s_last_wheel_tx_ms  = 0;  /* 0x88 上次发送时间 */
 static uint32_t s_last_diag_tx_ms   = 0;  /* 0x89 上次发送时间 */
+static uint32_t s_last_odom_tx_ms   = 0;  /* 0x8A 上次发送时间 */
 #if APP_TARGET_MCU
 static const uint32_t STATE_TX_INTERVAL_MS  = 100;  /* 10Hz */
 static const uint32_t MOTOR_TX_INTERVAL_MS  = 200;  /* 5Hz, motor states are round-robin */
 static const uint32_t WHEEL_TX_INTERVAL_MS  = 40;   /* 25Hz, FL/FR/RL/RR synchronized */
 static const uint32_t DIAG_TX_INTERVAL_MS   = 40;   /* 25Hz */
+static const uint32_t ODOM_TX_INTERVAL_MS   = 20;   /* 50Hz */
 #endif
 
 static void mark_valid_rx(void) {
@@ -329,6 +331,21 @@ static int handle_arm_aux_gpio(const uint8_t* p, uint8_t len) {
     return 0;
 }
 
+static int handle_odom_reset(const uint8_t* p, uint8_t len) {
+#if !APP_CHASSIS_ENABLE
+    (void)p;
+    (void)len;
+    return APP_ERR_UNSUPPORTED;
+#else
+    payload_odom_reset_t cmd;
+    if (len != sizeof(cmd)) return APP_ERR_INVALID_ARG;
+    memcpy(&cmd, p, sizeof(cmd));
+    int ret = task_chassis_reset_odometry(cmd.x_m, cmd.y_m, cmd.yaw_rad);
+    if (ret == APP_OK) mark_valid_rx();
+    return ret;
+#endif
+}
+
 static int handle_mode_cmd(const uint8_t* p, uint8_t len) {
     if (len != sizeof(payload_mode_cmd_t)) return -1;
 
@@ -362,6 +379,7 @@ static const proto_entry_t s_tbl[] = {
     { PROTO_FUNC_MODE_CMD, sizeof(payload_mode_cmd_t), handle_mode_cmd, "mode" },
     { PROTO_FUNC_WHEEL_TEST, sizeof(payload_wheel_test_t), handle_wheel_test, "wheel_test" },
     { PROTO_FUNC_ARM_AUX_GPIO, sizeof(payload_arm_aux_gpio_t), handle_arm_aux_gpio, "arm_aux_gpio" },
+    { PROTO_FUNC_ODOM_RESET, sizeof(payload_odom_reset_t), handle_odom_reset, "odom_reset" },
 };
 
 static void on_usb_rx(const uint8_t* d, uint32_t n, void* user) {
@@ -386,6 +404,7 @@ void task_comm_init(void) {
     s_last_motor_tx_ms = 0;
     s_last_wheel_tx_ms = 0;
     s_last_diag_tx_ms = 0;
+    s_last_odom_tx_ms = 0;
     proto_dispatcher_init(&s_disp, s_tbl, sizeof(s_tbl)/sizeof(s_tbl[0]));
     proto_frame_init(&s_parser, proto_dispatch_on_frame, &s_disp);
     bsp_usb_cdc_attach_rx(on_usb_rx, NULL);
@@ -554,6 +573,25 @@ int task_comm_send_chassis_diag(void) {
     return send_proto_payload(PROTO_FUNC_CHASSIS_DIAG, &p, (uint8_t)sizeof(p));
 }
 
+int task_comm_send_odometry(void) {
+    chassis_odometry_state_t odom;
+    payload_odometry_t p;
+    memset(&odom, 0, sizeof(odom));
+    memset(&p, 0, sizeof(p));
+    task_chassis_get_odometry(&odom);
+    p.timestamp_ms = (uint32_t)bsp_time_now_ms();
+    p.x_m = odom.x_m;
+    p.y_m = odom.y_m;
+    p.yaw_rad = odom.yaw_rad;
+    p.vx_m_s = odom.vx_m_s;
+    p.yaw_rate_rad_s = odom.yaw_rate_rad_s;
+    p.gyro_z_bias_rad_s = odom.gyro_z_bias_rad_s;
+    p.quality_flags = odom.quality_flags;
+    p.stance_mask = odom.stance_mask;
+    p.wheel_online_mask = odom.wheel_online_mask;
+    return send_proto_payload(PROTO_FUNC_ODOMETRY, &p, (uint8_t)sizeof(p));
+}
+
 /* 发送上行帧 */
 static void send_state_frame(void) {
     payload_state_t p = build_state_payload();
@@ -623,6 +661,12 @@ void task_comm_entry(void* arg) {
         if ((now - s_last_diag_tx_ms) >= DIAG_TX_INTERVAL_MS) {
             if (task_comm_send_chassis_diag() > 0) {
                 s_last_diag_tx_ms = now;
+            }
+        }
+
+        if ((now - s_last_odom_tx_ms) >= ODOM_TX_INTERVAL_MS) {
+            if (task_comm_send_odometry() > 0) {
+                s_last_odom_tx_ms = now;
             }
         }
 

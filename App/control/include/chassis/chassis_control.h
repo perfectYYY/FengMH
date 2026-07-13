@@ -11,6 +11,7 @@
 #include <stdint.h>
 
 #include "chassis_types.h"
+#include "chassis_odometry.h"
 #include "gait_if.h"
 #include "script_if.h"
 
@@ -49,6 +50,7 @@ typedef struct {
     float stand_height_m;
     float wheel_rads[GAIT_LEG_NUM];
     gait_params_t gait_params;
+    chassis_odometry_state_t odometry;
 } chassis_control_status_t;
 
 enum {
@@ -164,6 +166,8 @@ const char* chassis_control_active_gait_name(void);
 void chassis_control_reset_yaw(void);
 float chassis_control_get_yaw(void);
 float chassis_control_get_effective_wz(void);
+int chassis_control_reset_odometry(float x_m, float y_m, float yaw_rad);
+void chassis_control_get_odometry(chassis_odometry_state_t* out);
 void chassis_control_get_status(chassis_control_status_t* out);
 
 #ifdef __cplusplus

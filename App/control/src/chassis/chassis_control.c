@@ -7,6 +7,7 @@
  * inputs.
  */
 #include "chassis_control.h"
+#include "chassis_odometry.h"
 
 #include "arm_control.h"
 #include "arm_gravity_comp.h"
@@ -126,6 +127,7 @@ static float s_slip_severe_elapsed = 0.0f;
 static float s_slip_recover_elapsed = 0.0f;
 static float s_speed_scale = 1.0f;
 static uint16_t s_diagnostic_flags = 0U;
+static float s_odom_zero_elapsed_s = 0.0f;
 
 #if APP_OFFLINE_AUTO_MARCH
 static const gait_params_t S_OFFLINE_MARCH_PARAMS = {
@@ -1053,7 +1055,89 @@ static void decide_gait_for_link_state(uint8_t online, uint32_t now_ms) {
     online_decide(&s_chassis_plan);
 }
 
-static void apply_gait_output_to_motors(uint8_t online, float dt_s) {
+static uint8_t odom_collect_wheel_feedback(float wheel_rads[GAIT_LEG_NUM],
+                                           uint32_t now_ms) {
+    static const motor_logical_id_t IDS[GAIT_LEG_NUM] = {
+        MOTOR_ID_FL_WHEEL, MOTOR_ID_FR_WHEEL, MOTOR_ID_RL_WHEEL, MOTOR_ID_RR_WHEEL
+    };
+    uint8_t online_mask = 0U;
+
+    for (int i = 0; i < GAIT_LEG_NUM; i++) {
+        motor_dev_t* wheel = motor_get(IDS[i]);
+        wheel_rads[i] = 0.0f;
+        if (!wheel || !wheel->state.online ||
+            (now_ms - wheel->state.last_rx_tick) > APP_ODOM_WHEEL_FEEDBACK_TIMEOUT_MS ||
+            !isfinite(wheel->state.velocity_rads)) {
+            continue;
+        }
+        wheel_rads[i] = wheel->state.velocity_rads;
+        online_mask |= (uint8_t)(1U << i);
+    }
+    return online_mask;
+}
+
+static void update_odometry_from_gait(const gait_output_t* gait_output,
+                                      float dt_s,
+                                      uint32_t now_ms,
+                                      uint8_t force_gate) {
+    chassis_odometry_input_t odom_input;
+    const attitude_state_t* attitude = attitude_estimator_get_state();
+    uint8_t run_state = gait_machine_state(&s_gait_machine) == GM_STATE_RUN;
+    uint8_t supported_gait = (s_active == ACTIVE_STAND ||
+                              s_active == ACTIVE_TROT ||
+                              s_active == ACTIVE_WALK) ? 1U : 0U;
+    uint8_t transition_gated = force_gate || !run_state ||
+                               !supported_gait || s_active == ACTIVE_SCRIPT;
+    uint8_t slip_gated = (s_diagnostic_flags &
+                          (CHASSIS_DIAG_SLIP_ACTIVE | CHASSIS_DIAG_CURRENT_LIMITED)) ? 1U : 0U;
+    uint8_t all_wheels_still = 1U;
+
+    memset(&odom_input, 0, sizeof(odom_input));
+    odom_input.gyro_z_rad_s = attitude->yaw_rate;
+    odom_input.wheel_radius_m = LEG_DIM_DEFAULT.wheel_diameter * 0.5f;
+    odom_input.half_track_m = g_chassis_turn_cfg.half_track_m;
+    odom_input.imu_ready = imu_bmi088_is_ready() && attitude_estimator_is_calibrated();
+    odom_input.wheel_online_mask = odom_collect_wheel_feedback(odom_input.wheel_velocity_rads,
+                                                                 now_ms);
+    odom_input.transition_gated = transition_gated;
+    odom_input.slip_gated = slip_gated;
+    odom_input.wheel_measurement_scale =
+        (s_diagnostic_flags & CHASSIS_DIAG_SLIP_WARNING) ? 4.0f : 1.0f;
+
+    if (gait_output) {
+        for (int i = 0; i < GAIT_LEG_NUM; i++) {
+            if (gait_output->leg[i].in_stance) {
+                odom_input.stance_mask |= (uint8_t)(1U << i);
+            }
+        }
+    }
+
+    if (!transition_gated) {
+        odom_input.allow_yaw_correction = 1U;
+        /* Low-speed gait turn has leg-induced wheel motion: only use its yaw observation. */
+        odom_input.allow_velocity_correction = s_chassis_plan.low_speed_turn ? 0U : 1U;
+    }
+
+    for (int i = 0; i < GAIT_LEG_NUM; i++) {
+        if (!(odom_input.wheel_online_mask & (uint8_t)(1U << i)) ||
+            fabsf(odom_input.wheel_velocity_rads[i] * odom_input.wheel_radius_m) >
+                APP_ODOM_ZUPT_SPEED_M_S) {
+            all_wheels_still = 0U;
+        }
+    }
+    if (!transition_gated && s_active == ACTIVE_STAND &&
+        odom_input.wheel_online_mask == 0x0FU && all_wheels_still &&
+        fabsf(attitude->yaw_rate) <= APP_ODOM_ZUPT_GYRO_MAX_RAD_S) {
+        s_odom_zero_elapsed_s += dt_s;
+    } else {
+        s_odom_zero_elapsed_s = 0.0f;
+    }
+    odom_input.zero_velocity =
+        s_odom_zero_elapsed_s >= APP_ODOM_ZUPT_HOLD_S ? 1U : 0U;
+    chassis_odometry_update(&odom_input, dt_s);
+}
+
+static void apply_gait_output_to_motors(uint8_t online, float dt_s, uint32_t now_ms) {
     gait_output_t gait_output;
     gait_machine_update(&s_gait_machine, dt_s, &gait_output);
     if (online) {
@@ -1061,6 +1145,7 @@ static void apply_gait_output_to_motors(uint8_t online, float dt_s) {
     }
     apply_attitude_compensation(&gait_output, dt_s);
     update_arm_load_compensation(dt_s);
+    update_odometry_from_gait(&gait_output, dt_s, now_ms, 0U);
     leg_controller_apply_dt(&s_leg_controller, &gait_output, dt_s);
 }
 
@@ -1087,7 +1172,7 @@ static uint8_t wheel_test_active_at(uint32_t now_ms) {
     return 0U;
 }
 
-static void apply_direct_wheel_test(float dt_s) {
+static void apply_direct_wheel_test(float dt_s, uint32_t now_ms) {
     gait_output_t output;
     memset(&output, 0, sizeof(output));
     output.wheel_mode = GAIT_WHEEL_DRIVE;
@@ -1100,6 +1185,7 @@ static void apply_direct_wheel_test(float dt_s) {
                                  : 0.0f;
     }
 
+    update_odometry_from_gait(&output, dt_s, now_ms, 1U);
     leg_controller_apply_dt(&s_leg_controller, &output, dt_s);
 }
 
@@ -1115,7 +1201,7 @@ static uint8_t update_boot_stand(float dt_s) {
     (void)request_gait(s_stand_gait, &GAIT_PARAMS_STAND_DEFAULT, 0.0f);
     apply_controller_height(&GAIT_PARAMS_STAND_DEFAULT);
     update_stand_height_ramp(dt_s);
-    apply_gait_output_to_motors(0U, dt_s);
+    apply_gait_output_to_motors(0U, dt_s, (uint32_t)bsp_time_now_ms());
     flush_motor_outputs();
 
     if (fabsf(s_current_stand_height_m - s_target_stand_height_m) < 1e-4f) {
@@ -1192,6 +1278,7 @@ void chassis_control_init(void) {
     s_slip_severe_elapsed = s_slip_recover_elapsed = 0.0f;
     s_speed_scale = 1.0f;
     s_diagnostic_flags = 0U;
+    s_odom_zero_elapsed_s = 0.0f;
 #if APP_DEBUG_RL_WHEEL_ONLY
     leg_controller_set_output_options((uint8_t)(1U << GAIT_LEG_RL), 1U, 1U, 1.5f, 0.1f);
     LOGW("debug mode: RL single-leg closed loop; stand locks wheel, vx/wz drives online gait + wheel");
@@ -1208,6 +1295,7 @@ void chassis_control_init(void) {
     s_boot_stand_done = 0U;
 
     attitude_estimator_init();
+    chassis_odometry_init();
     steer_controller_init();
     chassis_planner_init();
     s_steer_mode = STEER_MODE_OFF;
@@ -1246,7 +1334,7 @@ void chassis_control_tick(const chassis_control_input_t* input,
             s_wheel_test_was_active = 1U;
         }
         update_stand_height_ramp(dt_s);
-        apply_direct_wheel_test(dt_s);
+        apply_direct_wheel_test(dt_s, now_ms);
         flush_motor_outputs();
         return;
     }
@@ -1254,7 +1342,7 @@ void chassis_control_tick(const chassis_control_input_t* input,
         s_wheel_test_was_active = 0U;
         wheel_test_force_stand_state();
         update_stand_height_ramp(dt_s);
-        apply_gait_output_to_motors(0U, dt_s);
+        apply_gait_output_to_motors(0U, dt_s, now_ms);
         flush_motor_outputs();
         return;
     }
@@ -1274,7 +1362,7 @@ void chassis_control_tick(const chassis_control_input_t* input,
 
     decide_gait_for_link_state(online, now_ms);
     update_stand_height_ramp(dt_s);
-    apply_gait_output_to_motors(online, dt_s);
+    apply_gait_output_to_motors(online, dt_s, now_ms);
     flush_motor_outputs();
 }
 
@@ -1439,6 +1527,7 @@ const char* chassis_control_active_gait_name(void) {
 
 void chassis_control_reset_yaw(void) {
     attitude_estimator_reset_yaw();
+    /* Keep relative odometry in its existing frame; use ODOM_RESET for a full rebase. */
 }
 
 float chassis_control_get_yaw(void) {
@@ -1447,6 +1536,40 @@ float chassis_control_get_yaw(void) {
 
 float chassis_control_get_effective_wz(void) {
     return s_last_effective_wz;
+}
+
+static uint8_t odometry_reset_is_safe(void) {
+    const attitude_state_t* attitude = attitude_estimator_get_state();
+    float wheel_rads[GAIT_LEG_NUM];
+    float wheel_radius = LEG_DIM_DEFAULT.wheel_diameter * 0.5f;
+    uint32_t now_ms = (uint32_t)bsp_time_now_ms();
+    uint8_t online_mask;
+
+    if (s_active != ACTIVE_STAND ||
+        gait_machine_state(&s_gait_machine) != GM_STATE_RUN ||
+        g_chassis_wheel_test.active || s_chassis_plan.moving ||
+        !attitude_estimator_is_calibrated() ||
+        fabsf(attitude->yaw_rate) > APP_ODOM_ZUPT_GYRO_MAX_RAD_S) {
+        return 0U;
+    }
+    online_mask = odom_collect_wheel_feedback(wheel_rads, now_ms);
+    if (online_mask != 0x0FU) return 0U;
+    for (int i = 0; i < GAIT_LEG_NUM; i++) {
+        if (fabsf(wheel_rads[i] * wheel_radius) > APP_ODOM_ZUPT_SPEED_M_S) return 0U;
+    }
+    return 1U;
+}
+
+int chassis_control_reset_odometry(float x_m, float y_m, float yaw_rad) {
+    if (!isfinite(x_m) || !isfinite(y_m) || !isfinite(yaw_rad)) return APP_ERR_INVALID_ARG;
+    if (!odometry_reset_is_safe()) return APP_ERR_BUSY;
+    chassis_odometry_reset_pose(x_m, y_m, yaw_rad);
+    return APP_OK;
+}
+
+void chassis_control_get_odometry(chassis_odometry_state_t* out) {
+    if (!out) return;
+    *out = *chassis_odometry_get_state();
 }
 
 void chassis_control_get_status(chassis_control_status_t* out) {
@@ -1470,4 +1593,5 @@ void chassis_control_get_status(chassis_control_status_t* out) {
     for (int i = 0; i < GAIT_LEG_NUM; i++) {
         out->wheel_rads[i] = s_chassis_plan.wheel_rads[i];
     }
+    out->odometry = *chassis_odometry_get_state();
 }

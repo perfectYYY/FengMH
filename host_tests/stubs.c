@@ -220,6 +220,14 @@ app_err_t motor_m3508_send_all(void) {
     return APP_OK;
 }
 
+app_err_t motor_m3508_get_wheel_diag(motor_logical_id_t id,
+                                     m3508_wheel_diag_t* out) {
+    (void)id;
+    if (!out) return APP_ERR_INVALID_ARG;
+    memset(out, 0, sizeof(*out));
+    return APP_ERR_UNSUPPORTED;
+}
+
 void motor_m3508_trace_reset(uint32_t decim) {
     (void)decim;
 }

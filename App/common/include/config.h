@@ -22,6 +22,73 @@
 #define APP_CHASSIS_ENABLE 1
 #endif
 
+/* BMI088 attitude-estimation defaults. Body axes can be remapped per board. */
+#ifndef APP_IMU_BODY_X_SOURCE_AXIS
+#define APP_IMU_BODY_X_SOURCE_AXIS 0U
+#endif
+#ifndef APP_IMU_BODY_Y_SOURCE_AXIS
+#define APP_IMU_BODY_Y_SOURCE_AXIS 1U
+#endif
+#ifndef APP_IMU_BODY_Z_SOURCE_AXIS
+#define APP_IMU_BODY_Z_SOURCE_AXIS 2U
+#endif
+#ifndef APP_IMU_BODY_X_SIGN
+#define APP_IMU_BODY_X_SIGN 1.0f
+#endif
+#ifndef APP_IMU_BODY_Y_SIGN
+#define APP_IMU_BODY_Y_SIGN 1.0f
+#endif
+#ifndef APP_IMU_BODY_Z_SIGN
+#define APP_IMU_BODY_Z_SIGN 1.0f
+#endif
+#ifndef APP_IMU_GRAVITY_MPS2
+#define APP_IMU_GRAVITY_MPS2 9.80665f
+#endif
+#ifndef APP_IMU_MAHONY_TWO_KP
+#define APP_IMU_MAHONY_TWO_KP 1.0f
+#endif
+#ifndef APP_IMU_MAHONY_TWO_KI
+#define APP_IMU_MAHONY_TWO_KI 0.0f
+#endif
+#ifndef APP_IMU_BOOT_CAL_DURATION_S
+#define APP_IMU_BOOT_CAL_DURATION_S 1.0f
+#endif
+#ifndef APP_IMU_BOOT_CAL_GYRO_MAX_RAD_S
+#define APP_IMU_BOOT_CAL_GYRO_MAX_RAD_S 0.05f
+#endif
+#ifndef APP_IMU_BOOT_CAL_ACCEL_TOL_MPS2
+#define APP_IMU_BOOT_CAL_ACCEL_TOL_MPS2 0.8f
+#endif
+#ifndef APP_IMU_AHRS_ACCEL_TOL_MPS2
+#define APP_IMU_AHRS_ACCEL_TOL_MPS2 0.8f
+#endif
+#ifndef APP_IMU_STATIC_GYRO_MAX_RAD_S
+#define APP_IMU_STATIC_GYRO_MAX_RAD_S 0.02f
+#endif
+#ifndef APP_IMU_STATIC_ACCEL_TOL_MPS2
+#define APP_IMU_STATIC_ACCEL_TOL_MPS2 0.5f
+#endif
+#ifndef APP_IMU_STATIC_HOLD_S
+#define APP_IMU_STATIC_HOLD_S 1.0f
+#endif
+#ifndef APP_IMU_BIAS_TRACK_TAU_S
+#define APP_IMU_BIAS_TRACK_TAU_S 60.0f
+#endif
+
+/* Relative odometry gates. Contact is inferred solely from gait state. */
+#ifndef APP_ODOM_WHEEL_FEEDBACK_TIMEOUT_MS
+#define APP_ODOM_WHEEL_FEEDBACK_TIMEOUT_MS 100U
+#endif
+#ifndef APP_ODOM_ZUPT_SPEED_M_S
+#define APP_ODOM_ZUPT_SPEED_M_S 0.02f
+#endif
+#ifndef APP_ODOM_ZUPT_GYRO_MAX_RAD_S
+#define APP_ODOM_ZUPT_GYRO_MAX_RAD_S 0.03f
+#endif
+#ifndef APP_ODOM_ZUPT_HOLD_S
+#define APP_ODOM_ZUPT_HOLD_S 0.50f
+#endif
+
 /* 日志后端开关：SEGGER RTT（板上）/ 标准输出（host） */
 #ifndef LOG_BACKEND_RTT
 #define LOG_BACKEND_RTT 0   /* 暂不强制依赖 SEGGER 源码；当 RTT 源码接入后切 1 */

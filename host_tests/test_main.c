@@ -7,6 +7,7 @@
  *   3. chassis_control/USB end-to-end ticks using stub motors
  */
 #include "chassis_control.h"
+#include "chassis_odometry.h"
 #include "chassis_planner.h"
 #include "attitude_estimator.h"
 #include "steer_controller.h"
@@ -378,6 +379,88 @@ static void test_gyro_bias_calibration_and_heading_pid_direction(void) {
     TEST_ASSERT(steer_controller_update(0.2f, 0.0f, 0.002f) < 0.0f);
     TEST_ASSERT(steer_controller_update(-0.2f, 0.0f, 0.002f) > 0.0f);
     TEST_ASSERT(fabsf(steer_controller_update(-2.0f, 0.0f, 0.002f)) <= 0.5f);
+}
+
+static void calibrate_attitude(const float gyro[3], const float accel[3]) {
+    TEST_ASSERT(attitude_estimator_init() == APP_OK);
+    for (int i = 0; i < 510; i++) {
+        TEST_ASSERT(attitude_estimator_update(gyro, accel, 0.002f) == APP_OK);
+    }
+    TEST_ASSERT(attitude_estimator_is_calibrated() == 1U);
+}
+
+static void test_mahony_tilt_yaw_and_reset(void) {
+    const float roll_expected = 0.20f;
+    const float pitch_expected = -0.10f;
+    const float accel[3] = {
+        -sinf(pitch_expected) * BMI088_GRAVITY,
+        sinf(roll_expected) * cosf(pitch_expected) * BMI088_GRAVITY,
+        cosf(roll_expected) * cosf(pitch_expected) * BMI088_GRAVITY,
+    };
+    const float gyro_zero[3] = {0.0f, 0.0f, 0.0f};
+    const float gyro_yaw[3] = {0.0f, 0.0f, 1.57079633f};
+
+    calibrate_attitude(gyro_zero, accel);
+    const attitude_state_t* state = attitude_estimator_get_state();
+    TEST_ASSERT_NEAR(state->roll, roll_expected, 1e-3f);
+    TEST_ASSERT_NEAR(state->pitch, pitch_expected, 1e-3f);
+    TEST_ASSERT_NEAR(state->yaw, 0.0f, 1e-4f);
+
+    for (int i = 0; i < 500; i++) {
+        TEST_ASSERT(attitude_estimator_update(gyro_yaw, accel, 0.002f) == APP_OK);
+    }
+    state = attitude_estimator_get_state();
+    TEST_ASSERT_NEAR(state->yaw, 1.57079633f, 0.03f);
+    TEST_ASSERT_NEAR(state->yaw_rate, 1.57079633f, 1e-4f);
+
+    attitude_estimator_reset_yaw();
+    state = attitude_estimator_get_state();
+    TEST_ASSERT_NEAR(state->yaw, 0.0f, 1e-4f);
+    TEST_ASSERT_NEAR(state->roll, roll_expected, 1e-3f);
+    TEST_ASSERT_NEAR(state->pitch, pitch_expected, 1e-3f);
+}
+
+static void test_stationary_gyro_drift_is_suppressed(void) {
+    const float boot_bias[3] = {0.002f, -0.003f, 0.010f};
+    const float drifted_bias[3] = {0.006f, -0.005f, 0.018f};
+    const float accel[3] = {0.0f, 0.0f, BMI088_GRAVITY};
+
+    calibrate_attitude(boot_bias, accel);
+    for (int i = 0; i < 5000; i++) {
+        TEST_ASSERT(attitude_estimator_update(drifted_bias, accel, 0.002f) == APP_OK);
+    }
+    const attitude_state_t* state = attitude_estimator_get_state();
+    TEST_ASSERT_NEAR(state->yaw, 0.0f, 0.02f);
+    TEST_ASSERT_NEAR(state->yaw_rate, 0.0f, 1e-6f);
+}
+
+static void test_mahony_rejects_dynamic_acceleration(void) {
+    const float gyro[3] = {0.0f, 0.0f, 0.0f};
+    const float gravity[3] = {0.0f, 0.0f, BMI088_GRAVITY};
+    const float dynamic_accel[3] = {5.0f, 0.0f, BMI088_GRAVITY};
+
+    calibrate_attitude(gyro, gravity);
+    for (int i = 0; i < 500; i++) {
+        TEST_ASSERT(attitude_estimator_update(gyro, dynamic_accel, 0.002f) == APP_OK);
+    }
+    const attitude_state_t* state = attitude_estimator_get_state();
+    TEST_ASSERT_NEAR(state->roll, 0.0f, 1e-4f);
+    TEST_ASSERT_NEAR(state->pitch, 0.0f, 1e-4f);
+}
+
+static void test_attitude_rejects_invalid_sample(void) {
+    const float gyro[3] = {0.0f, 0.0f, 0.0f};
+    const float accel[3] = {0.0f, 0.0f, BMI088_GRAVITY};
+    float bad_gyro[3] = {0.0f, 0.0f, NAN};
+
+    calibrate_attitude(gyro, accel);
+    const attitude_state_t before = *attitude_estimator_get_state();
+    TEST_ASSERT(attitude_estimator_update(bad_gyro, accel, 0.002f) == APP_ERR_INVALID_ARG);
+    TEST_ASSERT(attitude_estimator_update(gyro, accel, 0.0f) == APP_ERR_INVALID_ARG);
+    const attitude_state_t* after = attitude_estimator_get_state();
+    TEST_ASSERT_NEAR(after->yaw, before.yaw, 1e-6f);
+    TEST_ASSERT(isfinite(after->roll));
+    TEST_ASSERT(isfinite(after->pitch));
 }
 
 static void test_low_speed_turn_keeps_full_wheels_and_scales_leg_assist(void) {
@@ -1555,10 +1638,12 @@ static void test_protocol_function_ids_are_partitioned(void) {
     TEST_ASSERT(PROTO_FUNC_MODE_CMD == 0x15U);
     TEST_ASSERT(PROTO_FUNC_WHEEL_TEST == 0x16U);
     TEST_ASSERT(PROTO_FUNC_ARM_AUX_GPIO == 0x17U);
+    TEST_ASSERT(PROTO_FUNC_ODOM_RESET == 0x18U);
     TEST_ASSERT(PROTO_FUNC_USB_CDC_PING == 0x21U);
     TEST_ASSERT(PROTO_FUNC_ARM_FEEDBACK == 0x86U);
     TEST_ASSERT(PROTO_FUNC_WHEEL_STATE == 0x88U);
     TEST_ASSERT(PROTO_FUNC_CHASSIS_DIAG == 0x89U);
+    TEST_ASSERT(PROTO_FUNC_ODOMETRY == 0x8AU);
     TEST_ASSERT(PROTO_ROBOT_MODE_REAR_PLACE == 5U);
     TEST_ASSERT(PROTO_ROBOT_MODE_MAX == PROTO_ROBOT_MODE_REAR_PLACE);
 
@@ -1570,6 +1655,57 @@ static void test_protocol_function_ids_are_partitioned(void) {
     TEST_ASSERT(sizeof(payload_arm_feedback_t) == 17U);
     TEST_ASSERT(sizeof(payload_wheel_state_t) == 21U);
     TEST_ASSERT(sizeof(payload_chassis_diag_t) == 48U);
+    TEST_ASSERT(sizeof(payload_odom_reset_t) == 12U);
+    TEST_ASSERT(sizeof(payload_odometry_t) == 32U);
+}
+
+static chassis_odometry_input_t odometry_test_input(void) {
+    chassis_odometry_input_t input;
+    memset(&input, 0, sizeof(input));
+    input.wheel_radius_m = 0.05f;
+    input.half_track_m = 0.15f;
+    input.wheel_measurement_scale = 1.0f;
+    input.imu_ready = 1U;
+    input.wheel_online_mask = 0x0FU;
+    input.stance_mask = 0x0FU;
+    input.allow_velocity_correction = 1U;
+    input.allow_yaw_correction = 1U;
+    return input;
+}
+
+static void test_chassis_odometry_fuses_wheel_speed_and_yaw_rate(void) {
+    chassis_odometry_input_t input = odometry_test_input();
+    chassis_odometry_init();
+    for (int i = 0; i < GAIT_LEG_NUM; i++) input.wheel_velocity_rads[i] = 2.0f;
+
+    for (int i = 0; i < 200; i++) chassis_odometry_update(&input, 0.01f);
+    const chassis_odometry_state_t* state = chassis_odometry_get_state();
+    TEST_ASSERT(state->quality_flags & CHASSIS_ODOM_FLAG_IMU_READY);
+    TEST_ASSERT(state->quality_flags & CHASSIS_ODOM_FLAG_WHEEL_VALID);
+    TEST_ASSERT(state->quality_flags & CHASSIS_ODOM_FLAG_WHEEL_CORRECTED);
+    TEST_ASSERT_NEAR(state->vx_m_s, 0.10f, 0.01f);
+    TEST_ASSERT(state->x_m > 0.15f);
+
+    input.wheel_velocity_rads[GAIT_LEG_FL] = -2.0f;
+    input.wheel_velocity_rads[GAIT_LEG_RL] = -2.0f;
+    input.wheel_velocity_rads[GAIT_LEG_FR] = 2.0f;
+    input.wheel_velocity_rads[GAIT_LEG_RR] = 2.0f;
+    for (int i = 0; i < 100; i++) chassis_odometry_update(&input, 0.01f);
+    TEST_ASSERT(fabsf(chassis_odometry_get_state()->gyro_z_bias_rad_s) > 0.02f);
+}
+
+static void test_chassis_odometry_rejects_transition_wheel_measurement(void) {
+    chassis_odometry_input_t input = odometry_test_input();
+    chassis_odometry_init();
+    input.transition_gated = 1U;
+    for (int i = 0; i < GAIT_LEG_NUM; i++) input.wheel_velocity_rads[i] = 4.0f;
+
+    for (int i = 0; i < 100; i++) chassis_odometry_update(&input, 0.01f);
+    const chassis_odometry_state_t* state = chassis_odometry_get_state();
+    TEST_ASSERT(state->quality_flags & CHASSIS_ODOM_FLAG_TRANSITION_GATED);
+    TEST_ASSERT(!(state->quality_flags & CHASSIS_ODOM_FLAG_WHEEL_CORRECTED));
+    TEST_ASSERT_NEAR(state->vx_m_s, 0.0f, 1e-6f);
+    TEST_ASSERT_NEAR(state->x_m, 0.0f, 1e-6f);
 }
 
 static void test_arm_kinematics_inverse_forward_roundtrip(void) {
@@ -2601,6 +2737,28 @@ static void test_usb_chassis_diag_frame_tx(void) {
     TEST_ASSERT(tx[frame_len - 1] == checksum);
 }
 
+static void test_usb_odometry_frame_tx(void) {
+    uint8_t tx[64];
+    payload_odometry_t payload;
+
+    log_init();
+    chassis_odometry_init();
+    TEST_ASSERT(bsp_usb_cdc_init() == APP_OK);
+    task_comm_init();
+    bsp_usb_cdc_test_reset();
+
+    int frame_len = task_comm_send_odometry();
+    TEST_ASSERT(frame_len == 5 + (int)sizeof(payload));
+    TEST_ASSERT(bsp_usb_cdc_test_read_tx(tx, sizeof(tx)) == (uint32_t)frame_len);
+    TEST_ASSERT(tx[0] == PROTO_HEAD1);
+    TEST_ASSERT(tx[1] == PROTO_HEAD2);
+    TEST_ASSERT(tx[2] == PROTO_FUNC_ODOMETRY);
+    TEST_ASSERT(tx[3] == sizeof(payload));
+    memcpy(&payload, &tx[4], sizeof(payload));
+    TEST_ASSERT(payload.quality_flags & CHASSIS_ODOM_FLAG_INITIALIZED);
+    TEST_ASSERT_NEAR(payload.x_m, 0.0f, 1e-6f);
+}
+
 static void test_arm_serial_protocol_legacy_parser_caches_target_and_pump(void) {
     uint8_t target_payload[ARM_PROTOCOL_TARGET_PAYLOAD_LEN];
     uint8_t pump_payload[ARM_PROTOCOL_PUMP_PAYLOAD_LEN] = {1U};
@@ -3471,6 +3629,10 @@ int main(void) {
     test_planner_forward_and_turn();
     test_planner_uses_real_speed_and_common_wheel_scaling();
     test_gyro_bias_calibration_and_heading_pid_direction();
+    test_mahony_tilt_yaw_and_reset();
+    test_stationary_gyro_drift_is_suppressed();
+    test_mahony_rejects_dynamic_acceleration();
+    test_attitude_rejects_invalid_sample();
     test_low_speed_turn_keeps_full_wheels_and_scales_leg_assist();
     test_planner_keeps_vy_as_motion_only();
     test_planner_deadband_zeroes_wheels();
@@ -3503,6 +3665,8 @@ int main(void) {
     test_usb_protocol_to_chassis_task_end_to_end();
     test_usb_gait_action_can_start_walk();
     test_protocol_function_ids_are_partitioned();
+    test_chassis_odometry_fuses_wheel_speed_and_yaw_rate();
+    test_chassis_odometry_rejects_transition_wheel_measurement();
     test_arm_kinematics_inverse_forward_roundtrip();
     test_arm_legacy_kinematics_and_gravity_wrappers();
     test_arm_motion_quintic_finishes_at_target();
@@ -3533,6 +3697,7 @@ int main(void) {
     test_usb_arm_feedback_frame_tx();
     test_usb_wheel_feedback_frame_tx();
     test_usb_chassis_diag_frame_tx();
+    test_usb_odometry_frame_tx();
     test_usb_wheel_test_protocol_controls_direct_mode();
     test_usb_arm_aux_gpio_protocol_controls_outputs();
     test_usb_mit_rejects_arm_motor_bypass();

@@ -67,6 +67,8 @@ const char* task_chassis_active_gait_name(void);
 void  task_chassis_reset_yaw(void);
 float task_chassis_get_yaw(void);
 float task_chassis_get_effective_wz(void);
+int task_chassis_reset_odometry(float x_m, float y_m, float yaw_rad);
+void task_chassis_get_odometry(chassis_odometry_state_t* out);
 void task_chassis_get_control_status(chassis_control_status_t* out);
 
 #ifdef __cplusplus

@@ -22,8 +22,10 @@ add_executable(fengmh_host_tests
     ../App/control/src/arm/arm_motion.c
     ../App/control/src/arm/arm_vision_transform.c
     ../App/control/src/attitude/attitude_estimator.c
+    ../App/control/src/attitude/mahony_ahrs.c
     ../App/control/src/attitude/steer_controller.c
     ../App/control/src/chassis/chassis_control.c
+    ../App/control/src/chassis/chassis_odometry.c
     ../App/control/src/chassis/chassis_planner.c
     ../App/control/src/gait/gait_if.c
     ../App/control/src/gait/gait_machine.c
@@ -73,9 +75,32 @@ target_include_directories(fengmh_host_tests PRIVATE
     ../App/service/include/protocol
 )
 
+add_executable(chassis_odometry_host_tests
+    test_odometry.c
+    ../App/common/src/log.c
+    ../App/control/src/attitude/attitude_estimator.c
+    ../App/control/src/attitude/mahony_ahrs.c
+    ../App/control/src/chassis/chassis_odometry.c
+)
+
+target_include_directories(chassis_odometry_host_tests PRIVATE
+    ../App/control/include
+    ../App/control/include/attitude
+    ../App/control/include/chassis
+    ../App/control/include/gait
+    ../App/common/include
+)
+
+target_compile_definitions(chassis_odometry_host_tests PRIVATE
+    APP_TARGET_HOST=1
+    LOG_BACKEND_STDIO=0
+)
+
 if(UNIX)
     target_link_libraries(fengmh_host_tests PRIVATE m)
+    target_link_libraries(chassis_odometry_host_tests PRIVATE m)
 endif()
 
 enable_testing()
 add_test(NAME fengmh_host_tests COMMAND fengmh_host_tests)
+add_test(NAME chassis_odometry_host_tests COMMAND chassis_odometry_host_tests)

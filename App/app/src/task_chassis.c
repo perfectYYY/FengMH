@@ -155,6 +155,14 @@ float task_chassis_get_effective_wz(void) {
     return chassis_control_get_effective_wz();
 }
 
+int task_chassis_reset_odometry(float x_m, float y_m, float yaw_rad) {
+    return chassis_control_reset_odometry(x_m, y_m, yaw_rad);
+}
+
+void task_chassis_get_odometry(chassis_odometry_state_t* out) {
+    chassis_control_get_odometry(out);
+}
+
 void task_chassis_get_control_status(chassis_control_status_t* out) {
     chassis_control_get_status(out);
 }
