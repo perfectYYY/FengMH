@@ -18,6 +18,7 @@
 #define APP_TASK_CHASSIS_H_
 
 #include <stdint.h>
+#include "chassis_control.h"
 #include "chassis_types.h"
 #include "gait_if.h"
 #include "script_if.h"
@@ -66,6 +67,7 @@ const char* task_chassis_active_gait_name(void);
 void  task_chassis_reset_yaw(void);
 float task_chassis_get_yaw(void);
 float task_chassis_get_effective_wz(void);
+void task_chassis_get_control_status(chassis_control_status_t* out);
 
 #ifdef __cplusplus
 }

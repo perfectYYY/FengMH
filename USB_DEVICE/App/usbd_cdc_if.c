@@ -316,6 +316,8 @@ static int8_t CDC_TransmitCplt_HS(uint8_t *Buf, uint32_t *Len, uint8_t epnum)
   UNUSED(Buf);
   UNUSED(Len);
   UNUSED(epnum);
+  extern void bsp_usb_cdc_on_tx_complete(void);
+  bsp_usb_cdc_on_tx_complete();
   /* USER CODE END 14 */
   return result;
 }

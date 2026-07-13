@@ -155,6 +155,10 @@ float task_chassis_get_effective_wz(void) {
     return chassis_control_get_effective_wz();
 }
 
+void task_chassis_get_control_status(chassis_control_status_t* out) {
+    chassis_control_get_status(out);
+}
+
 void task_chassis_step_for_test(float dt_s, uint32_t now_ms) {
     chassis_control_input_t input;
     read_chassis_input(&input);

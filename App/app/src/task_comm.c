@@ -2,7 +2,8 @@
  * task_comm.c — 解析 USB CDC 字节 → 帧 → FuncID 分发 + 上行帧发送
  *
  * 下行：USB CDC RX → proto_frame 解析 → proto_dispatch 分发
- * 上行：定时构造 0x80(整机状态) / 0x81(电机状态) 帧 → USB CDC TX
+ * 上行：定时构造 0x80(整机状态) / 0x81(电机状态) /
+ *       0x88(四轮实际转速) / 0x89(底盘诊断) 帧 → USB CDC TX
  */
 #include "task_comm.h"
 #include "log.h"
@@ -13,6 +14,7 @@
 #include "proto_dispatch.h"
 #include "proto_defs.h"
 #include "motor_registry.h"
+#include "motor_m3508.h"
 #include "pump_control.h"
 #include "task_chassis.h"
 #include "task_safety.h"
@@ -46,9 +48,13 @@ volatile uint32_t debug_comm_arm_target_reject_count;
 /* 上行帧发送周期控制 */
 static uint32_t s_last_state_tx_ms  = 0;  /* 0x80 上次发送时间 */
 static uint32_t s_last_motor_tx_ms  = 0;  /* 0x81 上次发送时间 */
+static uint32_t s_last_wheel_tx_ms  = 0;  /* 0x88 上次发送时间 */
+static uint32_t s_last_diag_tx_ms   = 0;  /* 0x89 上次发送时间 */
 #if APP_TARGET_MCU
 static const uint32_t STATE_TX_INTERVAL_MS  = 100;  /* 10Hz */
 static const uint32_t MOTOR_TX_INTERVAL_MS  = 200;  /* 5Hz, motor states are round-robin */
+static const uint32_t WHEEL_TX_INTERVAL_MS  = 40;   /* 25Hz, FL/FR/RL/RR synchronized */
+static const uint32_t DIAG_TX_INTERVAL_MS   = 40;   /* 25Hz */
 #endif
 
 static void mark_valid_rx(void) {
@@ -68,10 +74,12 @@ static void cache_chassis_steering_extension(const uint8_t* p, uint8_t len) {
     if (len >= PROTO_CHASSIS_CMD_EXT_LEN) {
         const uint8_t* ext = p + sizeof(payload_chassis_cmd_t);
         memcpy(&s_chassis.target_yaw, ext, sizeof(float));
-        s_chassis.steer_mode = ext[sizeof(float)];
+        uint8_t mode = ext[sizeof(float)];
+        s_chassis.steer_mode = (mode <= PROTO_STEER_MODE_AUTO_HOLD)
+                             ? mode : PROTO_STEER_MODE_OFF;
     } else {
         s_chassis.target_yaw = 0.0f;
-        s_chassis.steer_mode = 0U;  /* OFF: 保持现有行为 */
+        s_chassis.steer_mode = PROTO_STEER_MODE_AUTO_HOLD;
     }
 }
 
@@ -376,6 +384,8 @@ void task_comm_init(void) {
     s_last_rx_ms = 0;
     s_last_state_tx_ms = 0;
     s_last_motor_tx_ms = 0;
+    s_last_wheel_tx_ms = 0;
+    s_last_diag_tx_ms = 0;
     proto_dispatcher_init(&s_disp, s_tbl, sizeof(s_tbl)/sizeof(s_tbl[0]));
     proto_frame_init(&s_parser, proto_dispatch_on_frame, &s_disp);
     bsp_usb_cdc_attach_rx(on_usb_rx, NULL);
@@ -474,6 +484,76 @@ int task_comm_send_arm_motor_angles(const payload_arm_motor_angles_t* angles) {
                               (uint8_t)sizeof(*angles));
 }
 
+static float read_wheel_velocity(motor_logical_id_t id,
+                                 uint8_t online_bit,
+                                 uint8_t* online_mask) {
+    motor_dev_t* d = motor_get(id);
+    if (!d) return 0.0f;
+
+    if (d->state.online) {
+        *online_mask |= online_bit;
+    }
+    return d->state.velocity_rads;
+}
+
+int task_comm_send_wheel_feedback(void) {
+    payload_wheel_state_t p;
+    memset(&p, 0, sizeof(p));
+    p.timestamp_ms = (uint32_t)bsp_time_now_ms();
+
+    uint8_t online_mask = 0U;
+    p.fl_velocity_rads = read_wheel_velocity(MOTOR_ID_FL_WHEEL, 0x01U,
+                                             &online_mask);
+    p.fr_velocity_rads = read_wheel_velocity(MOTOR_ID_FR_WHEEL, 0x02U,
+                                             &online_mask);
+    p.rl_velocity_rads = read_wheel_velocity(MOTOR_ID_RL_WHEEL, 0x04U,
+                                             &online_mask);
+    p.rr_velocity_rads = read_wheel_velocity(MOTOR_ID_RR_WHEEL, 0x08U,
+                                             &online_mask);
+    p.online_mask = online_mask;
+
+    return send_proto_payload(PROTO_FUNC_WHEEL_STATE,
+                              &p,
+                              (uint8_t)sizeof(p));
+}
+
+static int16_t diag_float_to_i16(float value, float scale) {
+    float scaled = value * scale;
+    if (!isfinite(scaled)) return 0;
+    if (scaled > 32767.0f) return 32767;
+    if (scaled < -32768.0f) return -32768;
+    return (int16_t)scaled;
+}
+
+int task_comm_send_chassis_diag(void) {
+    static const motor_logical_id_t IDS[GAIT_LEG_NUM] = {
+        MOTOR_ID_FL_WHEEL, MOTOR_ID_FR_WHEEL, MOTOR_ID_RL_WHEEL, MOTOR_ID_RR_WHEEL
+    };
+    payload_chassis_diag_t p;
+    chassis_control_status_t status;
+    memset(&p, 0, sizeof(p));
+    memset(&status, 0, sizeof(status));
+    task_chassis_get_control_status(&status);
+    p.timestamp_ms = (uint32_t)bsp_time_now_ms();
+
+    for (int i = 0; i < GAIT_LEG_NUM; i++) {
+        m3508_wheel_diag_t d;
+        memset(&d, 0, sizeof(d));
+        (void)motor_m3508_get_wheel_diag(IDS[i], &d);
+        p.target_mrad_s[i] = diag_float_to_i16(d.target_velocity_rads, 1000.0f);
+        p.filtered_mrad_s[i] = diag_float_to_i16(d.filtered_velocity_rads, 1000.0f);
+        p.cmd_current_raw[i] = d.cmd_current_raw;
+        p.actual_current_raw[i] = d.actual_current_raw;
+    }
+    p.yaw_mrad = diag_float_to_i16(status.yaw_rad, 1000.0f);
+    p.gyro_z_mrad_s = diag_float_to_i16(status.gyro_z_rad_s, 1000.0f);
+    p.effective_wz_mrad_s = diag_float_to_i16(status.effective_wz_rad_s, 1000.0f);
+    p.slip_residual_mrad_s = diag_float_to_i16(status.slip_residual_rad_s, 1000.0f);
+    p.speed_scale_permille = (uint16_t)diag_float_to_i16(status.speed_scale, 1000.0f);
+    p.flags = status.diagnostic_flags;
+    return send_proto_payload(PROTO_FUNC_CHASSIS_DIAG, &p, (uint8_t)sizeof(p));
+}
+
 /* 发送上行帧 */
 static void send_state_frame(void) {
     payload_state_t p = build_state_payload();
@@ -532,6 +612,21 @@ void task_comm_entry(void* arg) {
             send_motor_frame();
             s_last_motor_tx_ms = now;
         }
+
+        /* 四轮同步反馈用于排查直行左右轮速差；USB 忙时下一轮重试。 */
+        if ((now - s_last_wheel_tx_ms) >= WHEEL_TX_INTERVAL_MS) {
+            if (task_comm_send_wheel_feedback() > 0) {
+                s_last_wheel_tx_ms = now;
+            }
+        }
+
+        if ((now - s_last_diag_tx_ms) >= DIAG_TX_INTERVAL_MS) {
+            if (task_comm_send_chassis_diag() > 0) {
+                s_last_diag_tx_ms = now;
+            }
+        }
+
+        bsp_usb_cdc_process();
 
         osDelay(5);
     }

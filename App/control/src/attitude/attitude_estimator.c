@@ -32,6 +32,8 @@ static const char* TAG = "ATTEST";
 #define DEFAULT_ACCEL_BLEND  0.04f
 #define ACCEL_NORM_MIN_MPS2  1.0f
 #define ACCEL_NORM_MAX_MPS2  30.0f
+#define GYRO_CAL_DURATION_S   1.0f
+#define GYRO_CAL_MAX_NORM     0.15f
 
 /* ─── 静态状态 ─── */
 
@@ -39,6 +41,11 @@ static attitude_state_t s_state;
 static float s_gyro_thresh = DEFAULT_GYRO_THRESH;
 static float s_accel_blend = DEFAULT_ACCEL_BLEND;
 static uint8_t s_accel_initialized = 0U;
+static uint8_t s_gyro_calibrated = 0U;
+static float s_gyro_bias[3];
+static float s_gyro_cal_sum[3];
+static uint32_t s_gyro_cal_samples;
+static float s_gyro_cal_elapsed_s;
 
 static float wrap_pi(float angle_rad) {
     while (angle_rad >  (float)M_PI) angle_rad -= 2.0f * (float)M_PI;
@@ -95,6 +102,11 @@ static void update_roll_pitch_from_accel(const float accel[3]) {
 app_err_t attitude_estimator_init(void) {
     memset(&s_state, 0, sizeof(s_state));
     s_accel_initialized = 0U;
+    s_gyro_calibrated = 0U;
+    memset(s_gyro_bias, 0, sizeof(s_gyro_bias));
+    memset(s_gyro_cal_sum, 0, sizeof(s_gyro_cal_sum));
+    s_gyro_cal_samples = 0U;
+    s_gyro_cal_elapsed_s = 0.0f;
     LOGI("attitude_estimator init: gyro_thresh=%.3f rad/s accel_blend=%.2f",
          (double)s_gyro_thresh,
          (double)s_accel_blend);
@@ -105,19 +117,45 @@ app_err_t attitude_estimator_update(const float gyro[3], const float accel[3], f
     if (!gyro) return APP_ERR_INVALID_ARG;
     if (dt_s <= 0.0f || dt_s > 1.0f) return APP_ERR_INVALID_ARG;
 
-    s_state.roll_rate = gyro[0];
-    s_state.pitch_rate = gyro[1];
-    s_state.yaw_rate = gyro[2];
+    float raw_norm = sqrtf(gyro[0] * gyro[0] + gyro[1] * gyro[1] + gyro[2] * gyro[2]);
+    if (!s_gyro_calibrated) {
+        if (isfinite(raw_norm) && raw_norm <= GYRO_CAL_MAX_NORM) {
+            for (int i = 0; i < 3; i++) s_gyro_cal_sum[i] += gyro[i];
+            s_gyro_cal_samples++;
+            s_gyro_cal_elapsed_s += dt_s;
+            if (s_gyro_cal_elapsed_s >= GYRO_CAL_DURATION_S && s_gyro_cal_samples > 0U) {
+                for (int i = 0; i < 3; i++) {
+                    s_gyro_bias[i] = s_gyro_cal_sum[i] / (float)s_gyro_cal_samples;
+                }
+                s_gyro_calibrated = 1U;
+            }
+        } else {
+            memset(s_gyro_cal_sum, 0, sizeof(s_gyro_cal_sum));
+            s_gyro_cal_samples = 0U;
+            s_gyro_cal_elapsed_s = 0.0f;
+        }
+        update_roll_pitch_from_accel(accel);
+        return APP_OK;
+    }
 
-    s_state.roll = wrap_pi(s_state.roll + gyro[0] * dt_s);
-    s_state.pitch = wrap_pi(s_state.pitch + gyro[1] * dt_s);
+    float corrected[3] = {
+        gyro[0] - s_gyro_bias[0],
+        gyro[1] - s_gyro_bias[1],
+        gyro[2] - s_gyro_bias[2],
+    };
+    s_state.roll_rate = corrected[0];
+    s_state.pitch_rate = corrected[1];
+    s_state.yaw_rate = corrected[2];
+
+    s_state.roll = wrap_pi(s_state.roll + corrected[0] * dt_s);
+    s_state.pitch = wrap_pi(s_state.pitch + corrected[1] * dt_s);
 
     /* 静止判定: 三轴角速度模长 */
-    float gyro_norm = sqrtf(gyro[0] * gyro[0] + gyro[1] * gyro[1] + gyro[2] * gyro[2]);
+    float gyro_norm = sqrtf(corrected[0] * corrected[0] + corrected[1] * corrected[1] + corrected[2] * corrected[2]);
 
     if (gyro_norm >= s_gyro_thresh) {
         /* 旋转中: 积分偏航角 (仅 Z 轴) */
-        s_state.yaw = wrap_pi(s_state.yaw + gyro[2] * dt_s);
+        s_state.yaw = wrap_pi(s_state.yaw + corrected[2] * dt_s);
     }
     /* else: 静止 → 冻结积分, 抑制漂移 */
 
@@ -127,6 +165,13 @@ app_err_t attitude_estimator_update(const float gyro[3], const float accel[3], f
 
 float attitude_estimator_get_yaw(void) {
     return s_state.yaw;
+}
+
+uint8_t attitude_estimator_is_calibrated(void) { return s_gyro_calibrated; }
+
+void attitude_estimator_get_gyro_bias(float out_bias[3]) {
+    if (!out_bias) return;
+    memcpy(out_bias, s_gyro_bias, sizeof(s_gyro_bias));
 }
 
 void attitude_estimator_reset_yaw(void) {

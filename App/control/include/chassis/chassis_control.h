@@ -23,7 +23,7 @@ typedef struct {
     float vy_m_s;
     float wz_rad_s;
     float target_yaw_rad;
-    uint8_t steer_mode; /* 0=raw wz, 1=target_yaw closed loop */
+    uint8_t steer_mode; /* PROTO_STEER_MODE_* compatible values */
     uint32_t seq;
 } chassis_control_command_t;
 
@@ -38,11 +38,27 @@ typedef struct {
     chassis_gait_active_t active_gait;
     uint8_t online;
     uint8_t moving;
+    uint8_t heading_hold_active;
+    uint8_t wheel_saturated;
+    uint16_t diagnostic_flags;
     float effective_wz_rad_s;
+    float yaw_rad;
+    float gyro_z_rad_s;
+    float slip_residual_rad_s;
+    float speed_scale;
     float stand_height_m;
     float wheel_rads[GAIT_LEG_NUM];
     gait_params_t gait_params;
 } chassis_control_status_t;
+
+enum {
+    CHASSIS_DIAG_IMU_READY        = 1U << 0,
+    CHASSIS_DIAG_HEADING_HOLD     = 1U << 1,
+    CHASSIS_DIAG_WHEEL_SATURATED = 1U << 2,
+    CHASSIS_DIAG_SLIP_WARNING     = 1U << 3,
+    CHASSIS_DIAG_SLIP_ACTIVE      = 1U << 4,
+    CHASSIS_DIAG_CURRENT_LIMITED  = 1U << 5,
+};
 
 typedef struct {
     uint8_t enable;             /* 1=把 roll/pitch 姿态误差转换为腿部 tau_ff */

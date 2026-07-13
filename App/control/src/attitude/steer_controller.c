@@ -15,17 +15,16 @@
 static const char* TAG = "STEER";
 
 /* ─── 默认参数 ─── */
-#define DEFAULT_KP      2.0f
-#define DEFAULT_KI      0.1f
-#define DEFAULT_KD      0.05f
-#define DEFAULT_I_MAX   0.5f    /* rad */
-#define DEFAULT_WZ_MAX  3.0f    /* rad/s, ~172 deg/s */
+#define DEFAULT_KP      1.0f
+#define DEFAULT_KI      0.03f
+#define DEFAULT_KD      0.04f
+#define DEFAULT_I_MAX   0.15f
+#define DEFAULT_WZ_MAX  0.5f
 
 /* ─── 静态状态 ─── */
 
 static steer_cfg_t s_cfg;
 static float s_integral;   /* 积分项累加 */
-static float s_prev_err;   /* 上一次误差 (用于微分) */
 
 /* ─── 辅助: 角度包裹到 [-PI, PI] ─── */
 
@@ -46,7 +45,6 @@ app_err_t steer_controller_init(void) {
     s_cfg.i_max      = DEFAULT_I_MAX;
     s_cfg.wz_max     = DEFAULT_WZ_MAX;
     s_integral       = 0.0f;
-    s_prev_err       = 0.0f;
 
     LOGI("steer_controller init: kp=%.2f ki=%.2f kd=%.2f wz_max=%.2f rad/s",
          (double)s_cfg.kp, (double)s_cfg.ki, (double)s_cfg.kd, (double)s_cfg.wz_max);
@@ -54,21 +52,22 @@ app_err_t steer_controller_init(void) {
 }
 
 app_err_t steer_controller_set_mode(steer_mode_t mode) {
+    if (mode < STEER_MODE_OFF || mode > STEER_MODE_AUTO_HOLD) return APP_ERR_INVALID_ARG;
     s_cfg.mode = mode;
     /* 模式切换时清零积分 */
     s_integral = 0.0f;
-    s_prev_err = 0.0f;
     LOGI("steer mode -> %d", (int)mode);
     return APP_OK;
 }
 
 app_err_t steer_controller_set_target_yaw(float yaw_rad) {
+    if (!isfinite(yaw_rad)) return APP_ERR_INVALID_ARG;
     s_cfg.target_yaw = wrap_pi(yaw_rad);
     return APP_OK;
 }
 
-float steer_controller_update(float current_yaw, float dt_s) {
-    if (s_cfg.mode != STEER_MODE_YAW) {
+float steer_controller_update(float current_yaw, float current_yaw_rate, float dt_s) {
+    if (s_cfg.mode == STEER_MODE_OFF) {
         return 0.0f;
     }
 
@@ -87,12 +86,7 @@ float steer_controller_update(float current_yaw, float dt_s) {
     if      (s_integral >  s_cfg.i_max) s_integral =  s_cfg.i_max;
     else if (s_integral < -s_cfg.i_max) s_integral = -s_cfg.i_max;
 
-    float d_term = 0.0f;
-    if (dt_s > 1e-6f) {
-        d_term = s_cfg.kd * (err - s_prev_err) / dt_s;
-    }
-    s_prev_err = err;
-
+    float d_term = isfinite(current_yaw_rate) ? -s_cfg.kd * current_yaw_rate : 0.0f;
     float wz_out = p_term + s_integral + d_term;
 
     /* 输出限幅 */

@@ -8,6 +8,8 @@
  */
 #include "chassis_control.h"
 #include "chassis_planner.h"
+#include "attitude_estimator.h"
+#include "steer_controller.h"
 #include "gait_params.h"
 #include "gait_trot.h"
 #include "gait_walk.h"
@@ -332,6 +334,50 @@ static void test_planner_forward_and_turn(void) {
     TEST_ASSERT(plan.gait_params.leg_step_length_m[GAIT_LEG_FR] >
                 plan.gait_params.leg_step_length_m[GAIT_LEG_FL]);
     TEST_ASSERT(plan.wheel_rads[GAIT_LEG_FR] > plan.wheel_rads[GAIT_LEG_FL]);
+}
+
+static void test_planner_uses_real_speed_and_common_wheel_scaling(void) {
+    chassis_plan_t plan;
+    chassis_cmd_plan_t cmd = {.vx_m_s = 0.7f, .vy_m_s = 0.0f, .wz_rad_s = 0.0f};
+
+    reset_wheel_only_travel_cfg();
+    g_chassis_turn_cfg.max_wheel_rads = 18.0f;
+    for (int i = 0; i < GAIT_LEG_NUM; i++) g_chassis_wheel_scale[i] = 1.0f;
+    TEST_ASSERT(chassis_planner_update(&cmd, &GAIT_PARAMS_TROT_DEFAULT, &plan) == APP_OK);
+    TEST_ASSERT(plan.wheel_saturated == 0U);
+    for (int i = 0; i < GAIT_LEG_NUM; i++) {
+        TEST_ASSERT_NEAR(plan.wheel_rads[i], 0.7f / (LEG_DIM_DEFAULT.wheel_diameter * 0.5f), 1e-4f);
+    }
+
+    cmd.vx_m_s = 1.0f;
+    cmd.wz_rad_s = 1.0f;
+    TEST_ASSERT(chassis_planner_update(&cmd, &GAIT_PARAMS_TROT_DEFAULT, &plan) == APP_OK);
+    TEST_ASSERT(plan.wheel_saturated == 1U);
+    TEST_ASSERT_NEAR(plan.wheel_rads[GAIT_LEG_FR], 18.0f, 1e-5f);
+    TEST_ASSERT(plan.wheel_rads[GAIT_LEG_FL] < plan.wheel_rads[GAIT_LEG_FR]);
+    TEST_ASSERT_NEAR(plan.wheel_rads[GAIT_LEG_FL] / plan.wheel_rads[GAIT_LEG_FR],
+                     (1.0f - 0.15f) / (1.0f + 0.15f), 1e-5f);
+}
+
+static void test_gyro_bias_calibration_and_heading_pid_direction(void) {
+    const float accel[3] = {0.0f, 0.0f, 9.81f};
+    const float bias_gyro[3] = {0.002f, -0.003f, 0.010f};
+    float bias[3];
+
+    TEST_ASSERT(attitude_estimator_init() == APP_OK);
+    for (int i = 0; i < 510; i++) {
+        TEST_ASSERT(attitude_estimator_update(bias_gyro, accel, 0.002f) == APP_OK);
+    }
+    TEST_ASSERT(attitude_estimator_is_calibrated() == 1U);
+    attitude_estimator_get_gyro_bias(bias);
+    TEST_ASSERT_NEAR(bias[2], 0.010f, 1e-5f);
+
+    TEST_ASSERT(steer_controller_init() == APP_OK);
+    TEST_ASSERT(steer_controller_set_mode(STEER_MODE_AUTO_HOLD) == APP_OK);
+    TEST_ASSERT(steer_controller_set_target_yaw(0.0f) == APP_OK);
+    TEST_ASSERT(steer_controller_update(0.2f, 0.0f, 0.002f) < 0.0f);
+    TEST_ASSERT(steer_controller_update(-0.2f, 0.0f, 0.002f) > 0.0f);
+    TEST_ASSERT(fabsf(steer_controller_update(-2.0f, 0.0f, 0.002f)) <= 0.5f);
 }
 
 static void test_low_speed_turn_keeps_full_wheels_and_scales_leg_assist(void) {
@@ -1415,7 +1461,7 @@ static void test_exact_vx_0p1_frame_decodes_without_yaw(void) {
     TEST_ASSERT_NEAR(command.vy, 0.0f, 1e-6f);
     TEST_ASSERT_NEAR(command.wz, 0.0f, 1e-6f);
     TEST_ASSERT_NEAR(command.target_yaw, 0.0f, 1e-6f);
-    TEST_ASSERT(command.steer_mode == 0U);
+    TEST_ASSERT(command.steer_mode == PROTO_STEER_MODE_AUTO_HOLD);
 }
 
 static void test_usb_protocol_to_chassis_task_end_to_end(void) {
@@ -1511,6 +1557,8 @@ static void test_protocol_function_ids_are_partitioned(void) {
     TEST_ASSERT(PROTO_FUNC_ARM_AUX_GPIO == 0x17U);
     TEST_ASSERT(PROTO_FUNC_USB_CDC_PING == 0x21U);
     TEST_ASSERT(PROTO_FUNC_ARM_FEEDBACK == 0x86U);
+    TEST_ASSERT(PROTO_FUNC_WHEEL_STATE == 0x88U);
+    TEST_ASSERT(PROTO_FUNC_CHASSIS_DIAG == 0x89U);
     TEST_ASSERT(PROTO_ROBOT_MODE_REAR_PLACE == 5U);
     TEST_ASSERT(PROTO_ROBOT_MODE_MAX == PROTO_ROBOT_MODE_REAR_PLACE);
 
@@ -1520,6 +1568,8 @@ static void test_protocol_function_ids_are_partitioned(void) {
     TEST_ASSERT(sizeof(payload_wheel_test_t) == 20U);
     TEST_ASSERT(sizeof(payload_arm_aux_gpio_t) == 2U);
     TEST_ASSERT(sizeof(payload_arm_feedback_t) == 17U);
+    TEST_ASSERT(sizeof(payload_wheel_state_t) == 21U);
+    TEST_ASSERT(sizeof(payload_chassis_diag_t) == 48U);
 }
 
 static void test_arm_kinematics_inverse_forward_roundtrip(void) {
@@ -2490,6 +2540,67 @@ static void test_usb_arm_feedback_frame_tx(void) {
     TEST_ASSERT(tx[frame_len - 1] == checksum);
 }
 
+static void test_usb_wheel_feedback_frame_tx(void) {
+    uint8_t tx[64];
+    payload_wheel_state_t payload;
+
+    log_init();
+    bind_stub_motors();
+    TEST_ASSERT(bsp_usb_cdc_init() == APP_OK);
+    task_comm_init();
+    bsp_usb_cdc_test_reset();
+
+    s_stub_devs[MOTOR_ID_FL_WHEEL].state.velocity_rads = 1.25f;
+    s_stub_devs[MOTOR_ID_FR_WHEEL].state.velocity_rads = 2.50f;
+    s_stub_devs[MOTOR_ID_RL_WHEEL].state.velocity_rads = -3.75f;
+    s_stub_devs[MOTOR_ID_RR_WHEEL].state.velocity_rads = -5.00f;
+    s_stub_devs[MOTOR_ID_FR_WHEEL].state.online = 0U;
+
+    int frame_len = task_comm_send_wheel_feedback();
+    TEST_ASSERT(frame_len == 5 + (int)sizeof(payload));
+    TEST_ASSERT(bsp_usb_cdc_test_read_tx(tx, sizeof(tx)) == (uint32_t)frame_len);
+    TEST_ASSERT(tx[0] == PROTO_HEAD1);
+    TEST_ASSERT(tx[1] == PROTO_HEAD2);
+    TEST_ASSERT(tx[2] == PROTO_FUNC_WHEEL_STATE);
+    TEST_ASSERT(tx[3] == sizeof(payload));
+
+    memcpy(&payload, &tx[4], sizeof(payload));
+    TEST_ASSERT_NEAR(payload.fl_velocity_rads, 1.25f, 1e-6f);
+    TEST_ASSERT_NEAR(payload.fr_velocity_rads, 2.50f, 1e-6f);
+    TEST_ASSERT_NEAR(payload.rl_velocity_rads, -3.75f, 1e-6f);
+    TEST_ASSERT_NEAR(payload.rr_velocity_rads, -5.00f, 1e-6f);
+    TEST_ASSERT(payload.online_mask == 0x0DU);
+
+    uint8_t checksum = 0U;
+    for (int i = 0; i < frame_len - 1; i++) {
+        checksum = (uint8_t)(checksum + tx[i]);
+    }
+    TEST_ASSERT(tx[frame_len - 1] == checksum);
+}
+
+static void test_usb_chassis_diag_frame_tx(void) {
+    uint8_t tx[64];
+    payload_chassis_diag_t payload;
+
+    log_init();
+    bind_stub_motors();
+    TEST_ASSERT(bsp_usb_cdc_init() == APP_OK);
+    task_comm_init();
+    bsp_usb_cdc_test_reset();
+
+    int frame_len = task_comm_send_chassis_diag();
+    TEST_ASSERT(frame_len == 5 + (int)sizeof(payload));
+    TEST_ASSERT(bsp_usb_cdc_test_read_tx(tx, sizeof(tx)) == (uint32_t)frame_len);
+    TEST_ASSERT(tx[2] == PROTO_FUNC_CHASSIS_DIAG);
+    TEST_ASSERT(tx[3] == sizeof(payload));
+    memcpy(&payload, &tx[4], sizeof(payload));
+    TEST_ASSERT(payload.speed_scale_permille <= 1000U);
+
+    uint8_t checksum = 0U;
+    for (int i = 0; i < frame_len - 1; i++) checksum = (uint8_t)(checksum + tx[i]);
+    TEST_ASSERT(tx[frame_len - 1] == checksum);
+}
+
 static void test_arm_serial_protocol_legacy_parser_caches_target_and_pump(void) {
     uint8_t target_payload[ARM_PROTOCOL_TARGET_PAYLOAD_LEN];
     uint8_t pump_payload[ARM_PROTOCOL_PUMP_PAYLOAD_LEN] = {1U};
@@ -3358,6 +3469,8 @@ static void test_arm_control_gate_controls_damiao_auto_enable(void) {
 int main(void) {
     test_arm_grasp_j1_forbidden_ranges_repeat_every_turn();
     test_planner_forward_and_turn();
+    test_planner_uses_real_speed_and_common_wheel_scaling();
+    test_gyro_bias_calibration_and_heading_pid_direction();
     test_low_speed_turn_keeps_full_wheels_and_scales_leg_assist();
     test_planner_keeps_vy_as_motion_only();
     test_planner_deadband_zeroes_wheels();
@@ -3418,6 +3531,8 @@ int main(void) {
     test_arm_control_fine_tracking_replans_small_updates();
     test_usb_arm_and_mode_protocol_cache();
     test_usb_arm_feedback_frame_tx();
+    test_usb_wheel_feedback_frame_tx();
+    test_usb_chassis_diag_frame_tx();
     test_usb_wheel_test_protocol_controls_direct_mode();
     test_usb_arm_aux_gpio_protocol_controls_outputs();
     test_usb_mit_rejects_arm_motor_bypass();

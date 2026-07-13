@@ -14,6 +14,8 @@
 #ifndef APP_SERVICE_ATTITUDE_ATTITUDE_ESTIMATOR_H_
 #define APP_SERVICE_ATTITUDE_ATTITUDE_ESTIMATOR_H_
 
+#include <stdint.h>
+
 #include "attitude_if.h"
 #include "err.h"
 
@@ -34,6 +36,8 @@ app_err_t attitude_estimator_update(const float gyro[3], const float accel[3], f
 
 /* 获取当前偏航角 (rad) */
 float attitude_estimator_get_yaw(void);
+uint8_t attitude_estimator_is_calibrated(void);
+void attitude_estimator_get_gyro_bias(float out_bias[3]);
 
 /* 偏航角归零 (用于重置航向参考) */
 void attitude_estimator_reset_yaw(void);

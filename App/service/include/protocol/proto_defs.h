@@ -39,7 +39,13 @@ extern "C" {
 #define PROTO_FUNC_USB_CDC_PONG 0x85
 #define PROTO_FUNC_ARM_FEEDBACK 0x86
 #define PROTO_FUNC_ARM_MOTOR_ANGLES 0x87
+#define PROTO_FUNC_WHEEL_STATE  0x88
+#define PROTO_FUNC_CHASSIS_DIAG 0x89
 #define PROTO_FUNC_EVENT        0x8F
+
+#define PROTO_STEER_MODE_OFF       0u
+#define PROTO_STEER_MODE_ABSOLUTE  1u
+#define PROTO_STEER_MODE_AUTO_HOLD 2u
 
 #define PROTO_ROBOT_MODE_IDLE   0u
 #define PROTO_ROBOT_MODE_NAV    1u
@@ -56,7 +62,7 @@ typedef struct __attribute__((packed)) {
 } payload_chassis_cmd_t;  /* FuncID 0x10, 旧帧 len=12 */
 
 /* 扩展版: 增加 target_yaw + steer_mode (17 bytes)
- *   向后兼容: 旧协议 12 字节帧也接受, steer_mode 默认 0 */
+ *   向后兼容: 旧协议 12 字节帧也接受, steer_mode 默认 AUTO_HOLD */
 #define PROTO_CHASSIS_CMD_LEGACY_LEN   12u
 #define PROTO_CHASSIS_CMD_EXT_LEN      17u
 
@@ -147,6 +153,30 @@ typedef struct __attribute__((packed)) {
     float   j3_angle_rad;
     float   j4_angle_rad;
 } payload_arm_motor_angles_t; /* FuncID 0x87, len=17 */
+
+/* 四轮同步实际转速；online_mask bit0..3 对应 FL/FR/RL/RR。 */
+typedef struct __attribute__((packed)) {
+    uint32_t timestamp_ms;
+    float    fl_velocity_rads;
+    float    fr_velocity_rads;
+    float    rl_velocity_rads;
+    float    rr_velocity_rads;
+    uint8_t  online_mask;
+} payload_wheel_state_t; /* FuncID 0x88, len=21 */
+
+typedef struct __attribute__((packed)) {
+    uint32_t timestamp_ms;
+    int16_t target_mrad_s[GAIT_LEG_NUM];
+    int16_t filtered_mrad_s[GAIT_LEG_NUM];
+    int16_t cmd_current_raw[GAIT_LEG_NUM];
+    int16_t actual_current_raw[GAIT_LEG_NUM];
+    int16_t yaw_mrad;
+    int16_t gyro_z_mrad_s;
+    int16_t effective_wz_mrad_s;
+    int16_t slip_residual_mrad_s;
+    uint16_t speed_scale_permille;
+    uint16_t flags;
+} payload_chassis_diag_t; /* FuncID 0x89, len=48 */
 
 typedef struct __attribute__((packed)) {
     uint8_t req_kind;  /* 0=state, 1=motor, 2=stats */

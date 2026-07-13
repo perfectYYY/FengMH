@@ -14,7 +14,7 @@
 #define PLANNER_MAX_PERIOD_S            3.00f
 #define PLANNER_MAX_STEP_M              0.20f
 #define PLANNER_DEFAULT_LOW_VX_THRESH_M_S 0.05f
-#define PLANNER_DEFAULT_MAX_WHEEL_RADS  4.0f
+#define PLANNER_DEFAULT_MAX_WHEEL_RADS  18.0f
 #define PLANNER_DEFAULT_HALF_TRACK_M    0.15f
 #define PLANNER_DEFAULT_MAX_LEG_STEP_M  0.20f
 #define PLANNER_DEFAULT_TURN_STEP_HEIGHT_M 0.035f
@@ -52,6 +52,8 @@ volatile chassis_stride_cfg_t g_chassis_stride_cfg = {
     .duty = PLANNER_DEFAULT_TRAVEL_DUTY,
 };
 
+volatile float g_chassis_wheel_scale[GAIT_LEG_NUM] = {1.0f, 1.0f, 1.0f, 1.0f};
+
 static float clampf_local(float v, float min_v, float max_v) {
     if (v < min_v) return min_v;
     if (v > max_v) return max_v;
@@ -61,10 +63,25 @@ static float clampf_local(float v, float min_v, float max_v) {
 void chassis_planner_init(void) {
 }
 
-static float planner_limit_wheel(float w) {
+static void planner_scale_wheels_to_limit(chassis_plan_t* out) {
     float max_w = g_chassis_turn_cfg.max_wheel_rads;
-    if (!isfinite(max_w) || max_w <= 0.0f) return w;
-    return clampf_local(w, -max_w, max_w);
+    if (!out || !isfinite(max_w) || max_w <= 0.0f) return;
+
+    float peak = 0.0f;
+    for (int i = 0; i < GAIT_LEG_NUM; i++) {
+        float scale = g_chassis_wheel_scale[i];
+        if (!isfinite(scale)) scale = 1.0f;
+        scale = clampf_local(scale, 0.97f, 1.03f);
+        out->wheel_rads[i] *= scale;
+        peak = fmaxf(peak, fabsf(out->wheel_rads[i]));
+    }
+    if (peak <= max_w) return;
+
+    float common_scale = max_w / peak;
+    for (int i = 0; i < GAIT_LEG_NUM; i++) {
+        out->wheel_rads[i] *= common_scale;
+    }
+    out->wheel_saturated = 1U;
 }
 
 uint8_t chassis_planner_is_low_speed_turn(const chassis_cmd_plan_t* cmd) {
@@ -290,8 +307,9 @@ app_err_t chassis_planner_update(const chassis_cmd_plan_t* cmd,
     if (out->moving && wheel_radius > 1e-6f) {
         for (int i = 0; i < GAIT_LEG_NUM; i++) {
             float wheel_vx = planner_leg_local_vx(cmd, i);
-            out->wheel_rads[i] = planner_limit_wheel(wheel_vx / wheel_radius);
+            out->wheel_rads[i] = wheel_vx / wheel_radius;
         }
+        planner_scale_wheels_to_limit(out);
     }
 
     return APP_OK;

@@ -27,6 +27,7 @@ typedef struct {
     float wheel_rads[GAIT_LEG_NUM];
     uint8_t moving;
     uint8_t low_speed_turn;
+    uint8_t wheel_saturated;
 } chassis_plan_t;
 
 typedef struct {
@@ -56,6 +57,7 @@ typedef struct {
 
 extern volatile chassis_turn_cfg_t g_chassis_turn_cfg;
 extern volatile chassis_stride_cfg_t g_chassis_stride_cfg;
+extern volatile float g_chassis_wheel_scale[GAIT_LEG_NUM];
 
 void chassis_planner_init(void);
 uint8_t chassis_planner_is_low_speed_turn(const chassis_cmd_plan_t* cmd);

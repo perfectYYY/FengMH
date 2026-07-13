@@ -294,6 +294,26 @@ static const m3508_bus_map_t s_m3508_map[M3508_MOTOR_COUNT] = {
     { MOTOR_ID_FR_WHEEL, BSP_FDCAN_2, 4 },
 };
 
+app_err_t motor_m3508_get_wheel_diag(motor_logical_id_t id,
+                                     m3508_wheel_diag_t* out) {
+    if (!out) return APP_ERR_INVALID_ARG;
+    for (int i = 0; i < M3508_MOTOR_COUNT; i++) {
+        if (s_m3508_map[i].logical_id != id) continue;
+        const motor_cfg_t* cfg = motor_get_cfg(id);
+        float sign = cfg ? (float)cfg->dir : 1.0f;
+        const m3508_drv_ctx_t* ctx = &s_m3508_ctxs[i];
+        out->target_velocity_rads = sign * ctx->target_vel_rads;
+        out->filtered_velocity_rads = sign * m3508_rpm_to_rads(ctx->filter_speed)
+                                    / M3508_REDUCTION_RATIO;
+        out->cmd_current_raw = (int16_t)(sign * (float)ctx->cmd_current_raw);
+        out->actual_current_raw = (int16_t)(sign * (float)ctx->actual_current_raw);
+        out->online = s_m3508_devs[i].state.online;
+        return APP_OK;
+    }
+    memset(out, 0, sizeof(*out));
+    return APP_ERR_NOT_FOUND;
+}
+
 /* 速度 PID 默认参数 (转子侧) */
 #define M3508_PID_MOVE_KP   4.0f
 #define M3508_PID_MOVE_KI   8.0f

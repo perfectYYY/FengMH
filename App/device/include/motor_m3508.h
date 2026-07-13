@@ -17,6 +17,7 @@
 #define APP_DEVICE_MOTOR_M3508_H_
 
 #include "motor_if.h"
+#include "motor_registry.h"
 #include "bsp_fdcan.h"
 /* 使用模块路径 include，避免与 Core/Inc/pid.h (旧版 PID_Controller) 冲突 */
 #include "pid/pid.h"
@@ -127,6 +128,17 @@ typedef struct {
 } m3508_trace_buffer_t;
 
 extern volatile m3508_trace_buffer_t g_m3508_trace;
+
+typedef struct {
+    float target_velocity_rads;
+    float filtered_velocity_rads;
+    int16_t cmd_current_raw;
+    int16_t actual_current_raw;
+    uint8_t online;
+} m3508_wheel_diag_t;
+
+app_err_t motor_m3508_get_wheel_diag(motor_logical_id_t id,
+                                     m3508_wheel_diag_t* out);
 
 typedef struct {
     uint8_t  enable;        /* GDB 写 1 启动；完成/异常时固件自动清 0 */

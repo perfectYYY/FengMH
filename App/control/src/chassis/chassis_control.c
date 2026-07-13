@@ -23,12 +23,14 @@
 #include "gait_walk.h"
 #include "imu_bmi088.h"
 #include "leg_controller.h"
+#include "leg_params.h"
 #include "log.h"
 #include "motor_go.h"
 #include "motor_m3508.h"
 #include "steer_controller.h"
 
 #include <math.h>
+#include <stdlib.h>
 #include <string.h>
 
 static const char* TAG = "CHASSIS";
@@ -55,6 +57,18 @@ static const char* TAG = "CHASSIS";
 #define CHASSIS_CMD_SLEW_WZ_RADPS2             1.50f
 #define CHASSIS_WHEEL_TEST_TIMEOUT_MS           500U
 #define CHASSIS_WHEEL_TEST_MAX_RADS             4.0f
+#define HEADING_HOLD_MIN_VX_M_S                  0.05f
+#define HEADING_HOLD_MANUAL_WZ_RAD_S             0.05f
+#define SLIP_FILTER_TAU_S                         0.10f
+#define SLIP_WARN_RAD_S                           0.20f
+#define SLIP_ACTIVE_RAD_S                         0.35f
+#define SLIP_SEVERE_RAD_S                         0.60f
+#define SLIP_WARN_HOLD_S                          0.20f
+#define SLIP_ACTIVE_HOLD_S                        0.30f
+#define SLIP_RECOVER_RAD_S                        0.12f
+#define SLIP_RECOVER_HOLD_S                       1.00f
+#define SLIP_SCALE_DOWN_RATE_S                    1.00f
+#define SLIP_SCALE_UP_RATE_S                      0.20f
 
 typedef enum {
     ACTIVE_STAND = 0,
@@ -102,6 +116,16 @@ static float s_arm_load_filtered_com_x_m = 0.0f;
 static float s_arm_load_filtered_com_y_m = 0.0f;
 static chassis_cmd_plan_t s_slewed_plan_cmd;
 static uint8_t s_slewed_plan_valid = 0U;
+static uint8_t s_heading_latch_valid = 0U;
+static uint8_t s_heading_hold_active = 0U;
+static float s_heading_latched_yaw = 0.0f;
+static float s_slip_residual = 0.0f;
+static float s_slip_warn_elapsed = 0.0f;
+static float s_slip_active_elapsed = 0.0f;
+static float s_slip_severe_elapsed = 0.0f;
+static float s_slip_recover_elapsed = 0.0f;
+static float s_speed_scale = 1.0f;
+static uint16_t s_diagnostic_flags = 0U;
 
 #if APP_OFFLINE_AUTO_MARCH
 static const gait_params_t S_OFFLINE_MARCH_PARAMS = {
@@ -697,28 +721,132 @@ static void apply_rl_single_leg_debug(uint8_t online, const chassis_plan_t* plan
 #endif
 
 /* Read IMU yaw when requested and turn target_yaw into an effective yaw-rate command. */
+static void update_attitude(float dt_s) {
+    imu_bmi088_data_t imu_data;
+    if (imu_bmi088_read(&imu_data) == APP_OK) {
+        (void)attitude_estimator_update(imu_data.gyro, imu_data.accel, dt_s);
+    }
+}
+
+static void set_steer_mode_if_changed(steer_mode_t requested) {
+    if (requested == s_steer_mode) return;
+    s_steer_mode = requested;
+    (void)steer_controller_set_mode(requested);
+}
+
 static void update_steering(float dt_s,
+                            uint8_t online,
                             const chassis_control_command_t* command,
                             float* wz_out) {
     if (!command || !wz_out) return;
 
     *wz_out = command->wz_rad_s;
 
-    imu_bmi088_data_t imu_data;
-    if (imu_bmi088_read(&imu_data) == APP_OK) {
-        attitude_estimator_update(imu_data.gyro, imu_data.accel, dt_s);
+    uint8_t imu_ready = imu_bmi088_is_ready() && attitude_estimator_is_calibrated();
+    const attitude_state_t* attitude = attitude_estimator_get_state();
+    steer_mode_t requested = (command->steer_mode == 1U) ? STEER_MODE_ABSOLUTE
+                           : (command->steer_mode == 2U) ? STEER_MODE_AUTO_HOLD
+                                                        : STEER_MODE_OFF;
+
+    s_heading_hold_active = 0U;
+    if (!online || !imu_ready) {
+        s_heading_latch_valid = 0U;
+        set_steer_mode_if_changed(STEER_MODE_OFF);
+        return;
     }
 
-    steer_mode_t requested = (command->steer_mode == 1U) ? STEER_MODE_YAW : STEER_MODE_OFF;
-    if (requested != s_steer_mode) {
-        s_steer_mode = requested;
-        (void)steer_controller_set_mode(requested);
+    if (requested == STEER_MODE_AUTO_HOLD) {
+        uint8_t straight = fabsf(command->vx_m_s) > HEADING_HOLD_MIN_VX_M_S &&
+                           fabsf(command->wz_rad_s) < HEADING_HOLD_MANUAL_WZ_RAD_S;
+        if (!straight) {
+            s_heading_latch_valid = 0U;
+            set_steer_mode_if_changed(STEER_MODE_OFF);
+            return;
+        }
+        if (!s_heading_latch_valid) {
+            s_heading_latched_yaw = attitude->yaw;
+            s_heading_latch_valid = 1U;
+        }
+        set_steer_mode_if_changed(STEER_MODE_AUTO_HOLD);
+        (void)steer_controller_set_target_yaw(s_heading_latched_yaw);
+        s_heading_hold_active = 1U;
+    } else if (requested == STEER_MODE_ABSOLUTE) {
+        s_heading_latch_valid = 0U;
+        if (steer_controller_set_target_yaw(command->target_yaw_rad) != APP_OK) {
+            set_steer_mode_if_changed(STEER_MODE_OFF);
+            return;
+        }
+        set_steer_mode_if_changed(STEER_MODE_ABSOLUTE);
+        s_heading_hold_active = 1U;
+    } else {
+        s_heading_latch_valid = 0U;
+        set_steer_mode_if_changed(STEER_MODE_OFF);
+        return;
     }
 
-    if (s_steer_mode == STEER_MODE_YAW && imu_bmi088_is_ready()) {
-        (void)steer_controller_set_target_yaw(command->target_yaw_rad);
-        *wz_out = steer_controller_update(attitude_estimator_get_yaw(), dt_s);
+    *wz_out = steer_controller_update(attitude->yaw, attitude->yaw_rate, dt_s);
+}
+
+static void update_slip_control(float dt_s) {
+    static const motor_logical_id_t IDS[GAIT_LEG_NUM] = {
+        MOTOR_ID_FL_WHEEL, MOTOR_ID_FR_WHEEL, MOTOR_ID_RL_WHEEL, MOTOR_ID_RR_WHEEL
+    };
+    m3508_wheel_diag_t wheel[GAIT_LEG_NUM];
+    uint8_t valid = 1U;
+    uint8_t current_limited = 0U;
+    float commanded_wheel_sum = 0.0f;
+    for (int i = 0; i < GAIT_LEG_NUM; i++) {
+        if (motor_m3508_get_wheel_diag(IDS[i], &wheel[i]) != APP_OK || !wheel[i].online) {
+            valid = 0U;
+        }
+        float target = fabsf(wheel[i].target_velocity_rads);
+        commanded_wheel_sum += target;
+        float err = fabsf(wheel[i].target_velocity_rads - wheel[i].filtered_velocity_rads);
+        if (abs(wheel[i].actual_current_raw) > (int)(0.8f * M3508_CURRENT_RAW_MAX) &&
+            target > 0.5f && err > 0.2f * target) {
+            current_limited = 1U;
+        }
     }
+
+    const attitude_state_t* attitude = attitude_estimator_get_state();
+    uint8_t moving = commanded_wheel_sum >= (float)GAIT_LEG_NUM;
+    if (valid && moving && attitude_estimator_is_calibrated()) {
+        float left = 0.5f * (wheel[GAIT_LEG_FL].filtered_velocity_rads +
+                             wheel[GAIT_LEG_RL].filtered_velocity_rads);
+        float right = 0.5f * (wheel[GAIT_LEG_FR].filtered_velocity_rads +
+                              wheel[GAIT_LEG_RR].filtered_velocity_rads);
+        float wheel_wz = (LEG_DIM_DEFAULT.wheel_diameter * 0.5f) * (right - left) /
+                         (2.0f * g_chassis_turn_cfg.half_track_m);
+        float raw_residual = attitude->yaw_rate - wheel_wz;
+        float alpha = dt_s / (SLIP_FILTER_TAU_S + dt_s);
+        s_slip_residual += alpha * (raw_residual - s_slip_residual);
+    } else {
+        s_slip_residual = 0.0f;
+        s_slip_warn_elapsed = 0.0f;
+        s_slip_active_elapsed = 0.0f;
+        s_slip_severe_elapsed = 0.0f;
+    }
+
+    float residual = fabsf(s_slip_residual);
+    s_slip_warn_elapsed = residual > SLIP_WARN_RAD_S ? s_slip_warn_elapsed + dt_s : 0.0f;
+    s_slip_active_elapsed = residual > SLIP_ACTIVE_RAD_S ? s_slip_active_elapsed + dt_s : 0.0f;
+    s_slip_severe_elapsed = residual > SLIP_SEVERE_RAD_S ? s_slip_severe_elapsed + dt_s : 0.0f;
+    s_slip_recover_elapsed = residual < SLIP_RECOVER_RAD_S ? s_slip_recover_elapsed + dt_s : 0.0f;
+
+    float target_scale = s_speed_scale;
+    if (s_slip_severe_elapsed >= SLIP_ACTIVE_HOLD_S) target_scale = 0.4f;
+    else if (s_slip_active_elapsed >= SLIP_ACTIVE_HOLD_S || current_limited) target_scale = 0.6f;
+    else if (s_slip_recover_elapsed >= SLIP_RECOVER_HOLD_S) target_scale = 1.0f;
+    float rate = (target_scale < s_speed_scale) ? SLIP_SCALE_DOWN_RATE_S : SLIP_SCALE_UP_RATE_S;
+    s_speed_scale = ramp_step(s_speed_scale, target_scale, rate * dt_s);
+
+    s_diagnostic_flags = 0U;
+    if (attitude_estimator_is_calibrated()) s_diagnostic_flags |= CHASSIS_DIAG_IMU_READY;
+    if (s_heading_hold_active) s_diagnostic_flags |= CHASSIS_DIAG_HEADING_HOLD;
+    if (s_chassis_plan.wheel_saturated) s_diagnostic_flags |= CHASSIS_DIAG_WHEEL_SATURATED;
+    if (s_slip_warn_elapsed >= SLIP_WARN_HOLD_S) s_diagnostic_flags |= CHASSIS_DIAG_SLIP_WARNING;
+    if (s_slip_active_elapsed >= SLIP_ACTIVE_HOLD_S) s_diagnostic_flags |= CHASSIS_DIAG_SLIP_ACTIVE;
+    if (current_limited) s_diagnostic_flags |= CHASSIS_DIAG_CURRENT_LIMITED;
 }
 
 /* Offline policy keeps manual hold requests; otherwise falls back to a conservative stand. */
@@ -849,9 +977,9 @@ static chassis_control_input_t safe_input_or_zero(const chassis_control_input_t*
 static chassis_cmd_plan_t make_plan_command(const chassis_control_input_t* input,
                                             float effective_wz) {
     chassis_cmd_plan_t plan_cmd = {
-        .vx_m_s = input->command.vx_m_s,
-        .vy_m_s = input->command.vy_m_s,
-        .wz_rad_s = effective_wz,
+        .vx_m_s = input->command.vx_m_s * s_speed_scale,
+        .vy_m_s = input->command.vy_m_s * s_speed_scale,
+        .wz_rad_s = effective_wz * s_speed_scale,
     };
     return plan_cmd;
 }
@@ -1056,6 +1184,14 @@ void chassis_control_init(void) {
     s_arm_load_filtered_com_y_m = 0.0f;
     memset(&s_slewed_plan_cmd, 0, sizeof(s_slewed_plan_cmd));
     s_slewed_plan_valid = 0U;
+    s_heading_latch_valid = 0U;
+    s_heading_hold_active = 0U;
+    s_heading_latched_yaw = 0.0f;
+    s_slip_residual = 0.0f;
+    s_slip_warn_elapsed = s_slip_active_elapsed = 0.0f;
+    s_slip_severe_elapsed = s_slip_recover_elapsed = 0.0f;
+    s_speed_scale = 1.0f;
+    s_diagnostic_flags = 0U;
 #if APP_DEBUG_RL_WHEEL_ONLY
     leg_controller_set_output_options((uint8_t)(1U << GAIT_LEG_RL), 1U, 1U, 1.5f, 0.1f);
     LOGW("debug mode: RL single-leg closed loop; stand locks wheel, vx/wz drives online gait + wheel");
@@ -1097,6 +1233,8 @@ void chassis_control_tick(const chassis_control_input_t* input,
         return;
     }
 
+    update_attitude(dt_s);
+
     if (!update_boot_stand(dt_s)) {
         return;
     }
@@ -1122,11 +1260,10 @@ void chassis_control_tick(const chassis_control_input_t* input,
     }
 
     safe_input = safe_input_or_zero(input);
-
-    update_steering(dt_s, &safe_input.command, &effective_wz);
-
-    update_plan_from_input(&safe_input, effective_wz, dt_s);
     uint8_t online = update_online_state(&safe_input, now_ms);
+    update_slip_control(dt_s);
+    update_steering(dt_s, online, &safe_input.command, &effective_wz);
+    update_plan_from_input(&safe_input, effective_wz, dt_s);
 
 #if APP_DEBUG_RL_WHEEL_ONLY
     update_stand_height_ramp(dt_s);
@@ -1319,7 +1456,15 @@ void chassis_control_get_status(chassis_control_status_t* out) {
     out->active_gait = chassis_control_get_gait_active();
     out->online = s_last_online;
     out->moving = s_chassis_plan.moving;
+    out->heading_hold_active = s_heading_hold_active;
+    out->wheel_saturated = s_chassis_plan.wheel_saturated;
+    out->diagnostic_flags = s_diagnostic_flags;
     out->effective_wz_rad_s = s_last_effective_wz;
+    const attitude_state_t* attitude = attitude_estimator_get_state();
+    out->yaw_rad = attitude->yaw;
+    out->gyro_z_rad_s = attitude->yaw_rate;
+    out->slip_residual_rad_s = s_slip_residual;
+    out->speed_scale = s_speed_scale;
     out->stand_height_m = s_current_stand_height_m;
     out->gait_params = s_chassis_plan.gait_params;
     for (int i = 0; i < GAIT_LEG_NUM; i++) {
