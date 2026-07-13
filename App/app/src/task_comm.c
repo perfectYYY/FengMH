@@ -55,6 +55,10 @@ static const uint32_t STATE_TX_INTERVAL_MS  = 100;  /* 10Hz */
 static const uint32_t MOTOR_TX_INTERVAL_MS  = 200;  /* 5Hz, motor states are round-robin */
 static const uint32_t WHEEL_TX_INTERVAL_MS  = 40;   /* 25Hz, FL/FR/RL/RR synchronized */
 static const uint32_t DIAG_TX_INTERVAL_MS   = 40;   /* 25Hz */
+static const uint8_t TX_STATE_ENABLE        = 0U;   /* 0x80: disabled for pure wheel speed tests */
+static const uint8_t TX_MOTOR_ENABLE        = 0U;   /* 0x81: disabled for pure wheel speed tests */
+static const uint8_t TX_WHEEL_ENABLE        = 1U;   /* 0x88: keep four-wheel velocity telemetry */
+static const uint8_t TX_DIAG_ENABLE         = 1U;   /* 0x89: keep steer diagnostics when present */
 #endif
 
 static void mark_valid_rx(void) {
@@ -602,25 +606,25 @@ void task_comm_entry(void* arg) {
         uint32_t now = (uint32_t)bsp_time_now_ms();
 
         /* 低频发送整机状态，避免串口调试助手被上行帧刷满 */
-        if ((now - s_last_state_tx_ms) >= STATE_TX_INTERVAL_MS) {
+        if (TX_STATE_ENABLE && (now - s_last_state_tx_ms) >= STATE_TX_INTERVAL_MS) {
             send_state_frame();
             s_last_state_tx_ms = now;
         }
 
         /* 低频发送电机状态 (轮流) */
-        if ((now - s_last_motor_tx_ms) >= MOTOR_TX_INTERVAL_MS) {
+        if (TX_MOTOR_ENABLE && (now - s_last_motor_tx_ms) >= MOTOR_TX_INTERVAL_MS) {
             send_motor_frame();
             s_last_motor_tx_ms = now;
         }
 
         /* 四轮同步反馈用于排查直行左右轮速差；USB 忙时下一轮重试。 */
-        if ((now - s_last_wheel_tx_ms) >= WHEEL_TX_INTERVAL_MS) {
+        if (TX_WHEEL_ENABLE && (now - s_last_wheel_tx_ms) >= WHEEL_TX_INTERVAL_MS) {
             if (task_comm_send_wheel_feedback() > 0) {
                 s_last_wheel_tx_ms = now;
             }
         }
 
-        if ((now - s_last_diag_tx_ms) >= DIAG_TX_INTERVAL_MS) {
+        if (TX_DIAG_ENABLE && (now - s_last_diag_tx_ms) >= DIAG_TX_INTERVAL_MS) {
             if (task_comm_send_chassis_diag() > 0) {
                 s_last_diag_tx_ms = now;
             }

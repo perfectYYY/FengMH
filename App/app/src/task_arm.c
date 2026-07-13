@@ -36,6 +36,7 @@ static uint32_t s_place_hold_start_ms;
 
 static const uint32_t ARM_FEEDBACK_TX_INTERVAL_MS = 20U;  /* 50 Hz */
 static const uint32_t ARM_FEEDBACK_RETRY_INTERVAL_MS = 5U;
+static const uint8_t ARM_FEEDBACK_TX_ENABLE = 0U; /* 0x86/0x87: disabled for pure wheel speed tests */
 static const uint32_t ARM_FIXED_ERROR_RETRY_MS = 500U;
 static const uint32_t ARM_DEBUG_SNAPSHOT_INTERVAL_MS = 100U;
 
@@ -435,6 +436,9 @@ static void build_motor_angles_feedback(payload_arm_motor_angles_t* angles) {
 }
 
 static void send_feedback_if_due(uint32_t now_ms) {
+    if (!ARM_FEEDBACK_TX_ENABLE) {
+        return;
+    }
     if ((now_ms - s_last_feedback_tx_ms) < ARM_FEEDBACK_TX_INTERVAL_MS) {
         return;
     }
