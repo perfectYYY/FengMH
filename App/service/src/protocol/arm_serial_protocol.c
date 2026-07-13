@@ -356,7 +356,7 @@ static void send_feedback(uint32_t now) {
     debug_serial_feedback_theta1_rad = angles.theta1_geo;
 
     s_last_feedback_attempt_tick = now;
-#if APP_ARM_LEGACY_SERIAL_FEEDBACK_ENABLE
+#if APP_ARM_LEGACY_SERIAL_FEEDBACK_ENABLE && !APP_USB_CDC_TEXT_DEBUG
     app_err_t err = bsp_usb_cdc_send(frame, sizeof(frame));
     debug_serial_last_tx_result = (uint8_t)(err == APP_OK ? 0U : 1U);
     if (err == APP_OK) {

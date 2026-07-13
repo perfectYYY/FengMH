@@ -1294,7 +1294,9 @@ void chassis_control_init(void) {
     s_last_effective_wz = 0.0f;
     s_boot_stand_done = 0U;
 
-    attitude_estimator_init();
+    if (!attitude_estimator_is_initialized()) {
+        (void)attitude_estimator_init();
+    }
     chassis_odometry_init();
     steer_controller_init();
     chassis_planner_init();
@@ -1317,11 +1319,11 @@ void chassis_control_tick(const chassis_control_input_t* input,
     chassis_control_input_t safe_input;
     float effective_wz = 0.0f;
 
+    update_attitude(dt_s);
+
     if (!go_pre_calibration_ready()) {
         return;
     }
-
-    update_attitude(dt_s);
 
     if (!update_boot_stand(dt_s)) {
         return;

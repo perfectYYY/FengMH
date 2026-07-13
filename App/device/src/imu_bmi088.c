@@ -83,6 +83,7 @@ static imu_bmi088_gyro_range_t  s_gyro_range  = BMI088_GYRO_RANGE_2000;
 static float s_accel_scale = BMI088_ACC_3G_SENS;    /* LSB/g */
 static float s_gyro_scale  = BMI088_GYRO_2000_SENS; /* LSB/(dps) */
 static bool s_initialized = false;
+static bool s_power_on_delay_done = false;
 static imu_bmi088_diag_t s_diag;
 
 static int16_t make_i16(uint8_t lsb, uint8_t msb) {
@@ -463,6 +464,11 @@ app_err_t imu_bmi088_init(void) {
     LOGI("imu_bmi088 init (host mock)");
     return APP_OK;
 #endif
+
+    if (!s_power_on_delay_done) {
+        bsp_time_delay_ms(APP_BMI088_POWER_ON_DELAY_MS);
+        s_power_on_delay_done = true;
+    }
 
     err = accel_init();
     if (err != APP_OK) {

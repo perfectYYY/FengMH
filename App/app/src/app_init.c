@@ -16,6 +16,8 @@
 #include "bsp_usb_cdc.h"
 #include "bsp_spi.h"
 #include "bsp_gpio.h"
+#include "usb_device.h"
+#include "imu_startup.h"
 #include "arm_pump.h"
 #include "motor_registry.h"
 #include "motor_go.h"
@@ -33,18 +35,19 @@ app_err_t app_init(void) {
     bsp_time_init();
 
     /* BSP 层初始化 */
+    bsp_usb_cdc_init();
+    MX_USB_DEVICE_Init();
+#if APP_CHASSIS_ENABLE
+    /* SPI 初始化 (BMI088) */
+    bsp_spi_init(BSP_SPI_2);
+    imu_startup_wait_until_ready();
+#endif
     bsp_fdcan_init();
 #if APP_CHASSIS_ENABLE
     bsp_uart_init(BSP_UART_2);
     bsp_uart_init(BSP_UART_3);
     bsp_uart_init(BSP_UART_4);
     bsp_uart_init(BSP_UART_7);
-#endif
-    bsp_usb_cdc_init();
-
-#if APP_CHASSIS_ENABLE
-    /* SPI 初始化 (BMI088) */
-    bsp_spi_init(BSP_SPI_2);
 #endif
     bsp_gpio_output_init(BSP_GPIO_ARM_PUMP_MAIN);
 
@@ -57,12 +60,7 @@ app_err_t app_init(void) {
 #endif
     motor_damiao_init_all();   /* Damiao:  机械臂 J1-J4, FDCAN3 */
 
-#if APP_CHASSIS_ENABLE
-    app_err_t err = imu_bmi088_init();
-    if (err != APP_OK) {
-        LOGW("BMI088 init failed: %d (steering disabled, robot runs in degraded mode)", (int)err);
-    }
-#else
+#if !APP_CHASSIS_ENABLE
     LOGI("arm-only debug: chassis devices disabled");
 #endif
 

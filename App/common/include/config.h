@@ -75,6 +75,20 @@
 #define APP_IMU_BIAS_TRACK_TAU_S 60.0f
 #endif
 
+/* Startup safety gate and PA11/PA12 USB CDC text diagnostics. */
+#ifndef APP_USB_CDC_TEXT_DEBUG
+#define APP_USB_CDC_TEXT_DEBUG 1
+#endif
+#ifndef APP_BMI088_POWER_ON_DELAY_MS
+#define APP_BMI088_POWER_ON_DELAY_MS 100U
+#endif
+#ifndef APP_IMU_STARTUP_RETRY_MS
+#define APP_IMU_STARTUP_RETRY_MS 500U
+#endif
+#ifndef APP_IMU_STARTUP_SAMPLE_PERIOD_MS
+#define APP_IMU_STARTUP_SAMPLE_PERIOD_MS 5U
+#endif
+
 /* Relative odometry gates. Contact is inferred solely from gait state. */
 #ifndef APP_ODOM_WHEEL_FEEDBACK_TIMEOUT_MS
 #define APP_ODOM_WHEEL_FEEDBACK_TIMEOUT_MS 100U

@@ -8,6 +8,7 @@ set(CMAKE_C_STANDARD_REQUIRED ON)
 add_executable(fengmh_host_tests
     test_main.c
     stubs.c
+    ../App/app/src/usb_debug_text.c
     ../App/app/src/task_chassis.c
     ../App/app/src/task_comm.c
     ../App/app/src/task_arm.c
@@ -53,7 +54,52 @@ add_executable(fengmh_host_tests
 
 target_compile_definitions(fengmh_host_tests PRIVATE
     APP_TARGET_HOST=1
+    APP_USB_CDC_TEXT_DEBUG=0
     LOG_BACKEND_STDIO=0
+)
+
+add_executable(usb_text_host_tests
+    test_usb_text.c
+    ../App/app/src/usb_debug_text.c
+    ../App/bsp/src/bsp_usb_cdc.c
+    ../App/common/src/log.c
+)
+
+add_executable(imu_startup_host_tests
+    test_imu_startup.c
+    ../App/app/src/imu_startup.c
+    ../App/app/src/usb_debug_text.c
+    ../App/bsp/src/bsp_usb_cdc.c
+    ../App/common/src/log.c
+    ../App/control/src/attitude/attitude_estimator.c
+    ../App/control/src/attitude/mahony_ahrs.c
+)
+
+target_compile_definitions(usb_text_host_tests PRIVATE
+    APP_TARGET_HOST=1
+    APP_USB_CDC_TEXT_DEBUG=1
+    LOG_BACKEND_STDIO=0
+)
+
+target_compile_definitions(imu_startup_host_tests PRIVATE
+    APP_TARGET_HOST=1
+    APP_USB_CDC_TEXT_DEBUG=1
+    LOG_BACKEND_STDIO=0
+)
+
+target_include_directories(usb_text_host_tests PRIVATE
+    ../App/app/include
+    ../App/bsp/include
+    ../App/common/include
+)
+
+target_include_directories(imu_startup_host_tests PRIVATE
+    ../App/app/include
+    ../App/bsp/include
+    ../App/common/include
+    ../App/control/include
+    ../App/control/include/attitude
+    ../App/device/include
 )
 
 target_include_directories(fengmh_host_tests PRIVATE
@@ -99,8 +145,12 @@ target_compile_definitions(chassis_odometry_host_tests PRIVATE
 if(UNIX)
     target_link_libraries(fengmh_host_tests PRIVATE m)
     target_link_libraries(chassis_odometry_host_tests PRIVATE m)
+    target_link_libraries(usb_text_host_tests PRIVATE m)
+    target_link_libraries(imu_startup_host_tests PRIVATE m)
 endif()
 
 enable_testing()
 add_test(NAME fengmh_host_tests COMMAND fengmh_host_tests)
 add_test(NAME chassis_odometry_host_tests COMMAND chassis_odometry_host_tests)
+add_test(NAME usb_text_host_tests COMMAND usb_text_host_tests)
+add_test(NAME imu_startup_host_tests COMMAND imu_startup_host_tests)

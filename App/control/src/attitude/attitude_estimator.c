@@ -16,6 +16,7 @@
 static const char* TAG = "ATTEST";
 static attitude_state_t s_state;
 static mahony_ahrs_t s_ahrs;
+static uint8_t s_initialized;
 static uint8_t s_gyro_calibrated;
 static float s_gyro_bias[3];
 static float s_gyro_cal_sum[3];
@@ -70,6 +71,7 @@ app_err_t attitude_estimator_init(void) {
     memset(s_gyro_bias, 0, sizeof(s_gyro_bias));
     reset_boot_calibration();
     s_static_elapsed_s = 0.0f;
+    s_initialized = 1U;
     LOGI("attitude init: Mahony twoKp=%.2f boot_cal=%.1fs",
          (double)APP_IMU_MAHONY_TWO_KP,
          (double)APP_IMU_BOOT_CAL_DURATION_S);
@@ -145,6 +147,7 @@ app_err_t attitude_estimator_update(const float gyro[3], const float accel[3], f
     return publish_state(corrected) ? APP_OK : APP_ERR_GENERIC;
 }
 
+uint8_t attitude_estimator_is_initialized(void) { return s_initialized; }
 float attitude_estimator_get_yaw(void) { return s_state.yaw; }
 uint8_t attitude_estimator_is_calibrated(void) { return s_gyro_calibrated; }
 

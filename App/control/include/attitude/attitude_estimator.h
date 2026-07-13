@@ -13,6 +13,7 @@ extern "C" {
 
 /* Reset quaternion, gyro-bias calibration state, and relative yaw. */
 app_err_t attitude_estimator_init(void);
+uint8_t attitude_estimator_is_initialized(void);
 
 /*
  * Update from BMI088 source-frame measurements. The configured body-axis map

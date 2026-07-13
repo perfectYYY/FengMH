@@ -18,6 +18,8 @@
 #include "pump_control.h"
 #include "task_chassis.h"
 #include "task_safety.h"
+#include "attitude_estimator.h"
+#include "usb_debug_text.h"
 #include "err.h"
 
 #if APP_TARGET_MCU
@@ -36,6 +38,8 @@ static task_comm_arm_target_t s_arm_target;
 static task_comm_arm_pump_t   s_arm_pump;
 static task_comm_mode_cmd_t   s_mode_cmd;
 static volatile uint32_t     s_last_rx_ms = 0;
+static uint32_t              s_last_text_tx_ms;
+static uint8_t               s_text_tx_index;
 
 volatile uint8_t  debug_comm_arm_target_raw[sizeof(payload_arm_target_t)];
 volatile uint8_t  debug_comm_arm_target_type;
@@ -57,6 +61,7 @@ static const uint32_t MOTOR_TX_INTERVAL_MS  = 200;  /* 5Hz, motor states are rou
 static const uint32_t WHEEL_TX_INTERVAL_MS  = 40;   /* 25Hz, FL/FR/RL/RR synchronized */
 static const uint32_t DIAG_TX_INTERVAL_MS   = 40;   /* 25Hz */
 static const uint32_t ODOM_TX_INTERVAL_MS   = 20;   /* 50Hz */
+static const uint32_t TEXT_TX_INTERVAL_MS   = 25;   /* four readable lines at 10Hz each */
 #endif
 
 static void mark_valid_rx(void) {
@@ -480,6 +485,12 @@ static payload_state_t build_state_payload(void) {
 }
 
 static int send_proto_payload(uint8_t func_id, const void* payload, uint8_t len) {
+#if APP_USB_CDC_TEXT_DEBUG
+    (void)func_id;
+    (void)payload;
+    (void)len;
+    return 1;
+#else
     uint8_t buf[64];
     int n = proto_frame_build(func_id, (const uint8_t*)payload, len, buf, sizeof(buf));
     if (n > 0) {
@@ -487,6 +498,60 @@ static int send_proto_payload(uint8_t func_id, const void* payload, uint8_t len)
         if (err != APP_OK) return (int)err;
     }
     return n;
+#endif
+}
+
+static int32_t text_milli(float value) {
+    if (!isfinite(value)) return 0;
+    if (value >= 2147483.0f) return INT32_MAX;
+    if (value <= -2147483.0f) return INT32_MIN;
+    return (int32_t)lroundf(value * 1000.0f);
+}
+
+static int send_text_telemetry(uint32_t now_ms) {
+    chassis_control_status_t status;
+    const attitude_state_t* attitude;
+    float bias[3] = {0.0f, 0.0f, 0.0f};
+
+    memset(&status, 0, sizeof(status));
+    task_chassis_get_control_status(&status);
+    attitude = attitude_estimator_get_state();
+    attitude_estimator_get_gyro_bias(bias);
+
+    switch (s_text_tx_index++ & 0x03U) {
+    case 0U:
+        return app_usb_text_send("IMU,t=%lu,r=%ld,p=%ld,y=%ld,gz=%ld,bz=%ld,c=%u\r\n",
+                                 (unsigned long)now_ms,
+                                 (long)text_milli(attitude->roll),
+                                 (long)text_milli(attitude->pitch),
+                                 (long)text_milli(attitude->yaw),
+                                 (long)text_milli(attitude->yaw_rate),
+                                 (long)text_milli(bias[2]),
+                                 (unsigned)attitude_estimator_is_calibrated());
+    case 1U:
+        return app_usb_text_send("WHL,t=%lu,fl=%ld,fr=%ld,rl=%ld,rr=%ld,on=%02X\r\n",
+                                 (unsigned long)now_ms,
+                                 (long)text_milli(status.wheel_rads[0]),
+                                 (long)text_milli(status.wheel_rads[1]),
+                                 (long)text_milli(status.wheel_rads[2]),
+                                 (long)text_milli(status.wheel_rads[3]),
+                                 (unsigned)status.odometry.wheel_online_mask);
+    case 2U:
+        return app_usb_text_send("POS,t=%lu,x=%ld,y=%ld,a=%ld\r\n",
+                                 (unsigned long)now_ms,
+                                 (long)text_milli(status.odometry.x_m),
+                                 (long)text_milli(status.odometry.y_m),
+                                 (long)text_milli(status.odometry.yaw_rad));
+    default:
+        return app_usb_text_send("NAV,t=%lu,v=%ld,w=%ld,q=%04X,g=%u,s=%02X,o=%02X\r\n",
+                                 (unsigned long)now_ms,
+                                 (long)text_milli(status.odometry.vx_m_s),
+                                 (long)text_milli(status.odometry.yaw_rate_rad_s),
+                                 (unsigned)status.odometry.quality_flags,
+                                 (unsigned)status.active_gait,
+                                 (unsigned)status.odometry.stance_mask,
+                                 (unsigned)status.odometry.wheel_online_mask);
+    }
 }
 
 int task_comm_send_arm_feedback(const payload_arm_feedback_t* feedback) {
@@ -639,6 +704,14 @@ void task_comm_entry(void* arg) {
     for (;;) {
         uint32_t now = (uint32_t)bsp_time_now_ms();
 
+#if APP_USB_CDC_TEXT_DEBUG
+        if ((now - s_last_text_tx_ms) >= TEXT_TX_INTERVAL_MS) {
+            if (send_text_telemetry(now) == APP_OK) {
+                s_last_text_tx_ms = now;
+            }
+        }
+#else
+
         /* 低频发送整机状态，避免串口调试助手被上行帧刷满 */
         if ((now - s_last_state_tx_ms) >= STATE_TX_INTERVAL_MS) {
             send_state_frame();
@@ -670,6 +743,7 @@ void task_comm_entry(void* arg) {
             }
         }
 
+#endif
         bsp_usb_cdc_process();
 
         osDelay(5);
