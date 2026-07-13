@@ -89,8 +89,8 @@ USB CDC 协议入口和遥测发送。
 - `moving` 标志。
 - `low_speed_turn` 标志。
 - walk/trot 通用 gait 参数。
-- 普通行驶 4-5 Hz、`0.055 m` 高度的零平移步长参数。
-- `leg_step_length_m[4]` 每腿转向步长；低速/原地转向保留完整局部步长。
+- 普通行驶和低速 `walk` 转向共用 4-5 Hz 周期调度；普通行驶使用 `0.055 m` 抬脚高度。
+- `leg_step_length_m[4]` 每腿转向步长；低速/原地转向默认使用 `25%` yaw 腿部辅助，轮差速仍使用完整 `wz`。
 - `wheel_rads[4]` 每轮局部滚动速度。
 
 轮速通过 `v_wheel_x = vx - wz * y_leg` 映射到每条腿，默认 `|y_leg| = 0.15 m`。普通行驶足端移除 `vx` 分量，只保留 yaw 步差；`vy` 目前只参与 moving 判断。

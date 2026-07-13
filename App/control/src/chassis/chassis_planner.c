@@ -20,6 +20,7 @@
 #define PLANNER_DEFAULT_TURN_STEP_HEIGHT_M 0.035f
 #define PLANNER_DEFAULT_TURN_PERIOD_S   0.80f
 #define PLANNER_DEFAULT_TURN_DUTY       0.75f
+#define PLANNER_DEFAULT_TURN_LEG_SCALE  0.25f
 #define PLANNER_DEFAULT_SLOW_PERIOD_S   0.25f
 #define PLANNER_DEFAULT_FAST_PERIOD_S   0.20f
 #define PLANNER_DEFAULT_FAST_SPEED_M_S  0.35f
@@ -28,7 +29,8 @@
 
 volatile chassis_turn_cfg_t g_chassis_turn_cfg = {
     .enable_gait_turn = 1U,
-    .reserved = {0U, 0U, 0U},
+    .match_travel_period = 1U,
+    .reserved = {0U, 0U},
     .low_vx_thresh_m_s = PLANNER_DEFAULT_LOW_VX_THRESH_M_S,
     .max_wheel_rads = PLANNER_DEFAULT_MAX_WHEEL_RADS,
     .half_track_m = PLANNER_DEFAULT_HALF_TRACK_M,
@@ -36,6 +38,7 @@ volatile chassis_turn_cfg_t g_chassis_turn_cfg = {
     .turn_step_height_m = PLANNER_DEFAULT_TURN_STEP_HEIGHT_M,
     .turn_period_s = PLANNER_DEFAULT_TURN_PERIOD_S,
     .turn_duty = PLANNER_DEFAULT_TURN_DUTY,
+    .turn_leg_scale = PLANNER_DEFAULT_TURN_LEG_SCALE,
 };
 
 volatile chassis_stride_cfg_t g_chassis_stride_cfg = {
@@ -101,9 +104,19 @@ static float planner_leg_local_vx(const chassis_cmd_plan_t* cmd, int leg_idx) {
     return cmd->vx_m_s - yaw_v;
 }
 
-static float planner_leg_turn_vx(const chassis_cmd_plan_t* cmd, int leg_idx) {
+static float planner_leg_gait_vx(const chassis_cmd_plan_t* cmd,
+                                 int leg_idx,
+                                 uint8_t include_translation,
+                                 float turn_scale) {
     float yaw_v = g_chassis_turn_cfg.enable_gait_turn ? (cmd->wz_rad_s * planner_leg_y_m(leg_idx)) : 0.0f;
-    return -yaw_v;
+    float translation_vx = include_translation ? cmd->vx_m_s : 0.0f;
+    return translation_vx - turn_scale * yaw_v;
+}
+
+static float planner_configured_turn_leg_scale(void) {
+    float scale = g_chassis_turn_cfg.turn_leg_scale;
+    if (!isfinite(scale)) scale = PLANNER_DEFAULT_TURN_LEG_SCALE;
+    return clampf_local(scale, 0.0f, 1.0f);
 }
 
 static void planner_apply_turn_gait(gait_params_t* p) {
@@ -221,11 +234,13 @@ static float planner_right_left_turn_step(const gait_params_t* p) {
 static void planner_fill_leg_steps(const chassis_cmd_plan_t* cmd,
                                    gait_params_t* params,
                                    float period_s,
-                                   uint8_t include_translation) {
+                                   uint8_t include_translation,
+                                   float turn_scale) {
     for (int i = 0; i < GAIT_LEG_NUM; i++) {
-        float local_vx = include_translation
-                       ? planner_leg_local_vx(cmd, i)
-                       : planner_leg_turn_vx(cmd, i);
+        float local_vx = planner_leg_gait_vx(cmd,
+                                             i,
+                                             include_translation,
+                                             turn_scale);
         params->leg_step_length_m[i] = planner_step_from_vx(local_vx, period_s, params->duty);
     }
     params->step_length_m = planner_mean_step(params);
@@ -253,6 +268,9 @@ app_err_t chassis_planner_update(const chassis_cmd_plan_t* cmd,
 
     if (low_speed_turn) {
         planner_apply_turn_gait(&out->gait_params);
+        if (g_chassis_turn_cfg.match_travel_period && g_chassis_stride_cfg.enable) {
+            out->gait_params.period_s = planner_period_from_speed(motion_speed);
+        }
     } else if (motion_speed > PLANNER_MOTION_EPSILON_M_S) {
         planner_apply_stride_schedule(&out->gait_params, motion_speed);
     } else {
@@ -261,10 +279,12 @@ app_err_t chassis_planner_update(const chassis_cmd_plan_t* cmd,
 
     uint8_t include_translation = (low_speed_turn || !g_chassis_stride_cfg.wheel_only_travel)
                                 ? 1U : 0U;
+    float turn_scale = low_speed_turn ? planner_configured_turn_leg_scale() : 1.0f;
     planner_fill_leg_steps(cmd,
                            &out->gait_params,
                            out->gait_params.period_s,
-                           include_translation);
+                           include_translation,
+                           turn_scale);
 
     float wheel_radius = LEG_DIM_DEFAULT.wheel_diameter * 0.5f;
     if (out->moving && wheel_radius > 1e-6f) {

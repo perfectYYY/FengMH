@@ -262,6 +262,16 @@ static void test_arm_grasp_j1_forbidden_ranges_repeat_every_turn(void) {
 }
 
 static void reset_wheel_only_travel_cfg(void) {
+    g_chassis_turn_cfg.enable_gait_turn = 1U;
+    g_chassis_turn_cfg.match_travel_period = 1U;
+    g_chassis_turn_cfg.low_vx_thresh_m_s = 0.05f;
+    g_chassis_turn_cfg.max_wheel_rads = 4.0f;
+    g_chassis_turn_cfg.half_track_m = 0.15f;
+    g_chassis_turn_cfg.max_leg_step_m = 0.20f;
+    g_chassis_turn_cfg.turn_step_height_m = 0.035f;
+    g_chassis_turn_cfg.turn_period_s = 0.80f;
+    g_chassis_turn_cfg.turn_duty = 0.75f;
+    g_chassis_turn_cfg.turn_leg_scale = 0.25f;
     g_chassis_stride_cfg.enable = 1U;
     g_chassis_stride_cfg.wheel_only_travel = 1U;
     g_chassis_stride_cfg.slow_period_s = 0.25f;
@@ -300,11 +310,11 @@ static void test_planner_forward_and_turn(void) {
     TEST_ASSERT(plan.moving == 1U);
     TEST_ASSERT_NEAR(plan.gait_params.step_length_m, 0.0f, 1e-6f);
     TEST_ASSERT_NEAR(plan.gait_params.step_height_m, 0.035f, 1e-6f);
-    TEST_ASSERT_NEAR(plan.gait_params.period_s, 0.80f, 1e-6f);
+    TEST_ASSERT_NEAR(plan.gait_params.period_s, 0.228571f, 1e-5f);
     TEST_ASSERT_NEAR(plan.gait_params.duty, 0.75f, 1e-6f);
     TEST_ASSERT(plan.gait_params.turn_step_m > 0.0f);
-    TEST_ASSERT(plan.gait_params.leg_step_length_m[GAIT_LEG_FL] < 0.0f);
-    TEST_ASSERT(plan.gait_params.leg_step_length_m[GAIT_LEG_FR] > 0.0f);
+    TEST_ASSERT_NEAR(plan.gait_params.leg_step_length_m[GAIT_LEG_FL], -0.006429f, 1e-5f);
+    TEST_ASSERT_NEAR(plan.gait_params.leg_step_length_m[GAIT_LEG_FR], 0.006429f, 1e-5f);
     TEST_ASSERT(plan.wheel_rads[GAIT_LEG_FL] < 0.0f);
     TEST_ASSERT(plan.wheel_rads[GAIT_LEG_FR] > 0.0f);
     TEST_ASSERT_NEAR(plan.wheel_rads[GAIT_LEG_FL], plan.wheel_rads[GAIT_LEG_RL], 1e-6f);
@@ -322,6 +332,39 @@ static void test_planner_forward_and_turn(void) {
     TEST_ASSERT(plan.gait_params.leg_step_length_m[GAIT_LEG_FR] >
                 plan.gait_params.leg_step_length_m[GAIT_LEG_FL]);
     TEST_ASSERT(plan.wheel_rads[GAIT_LEG_FR] > plan.wheel_rads[GAIT_LEG_FL]);
+}
+
+static void test_low_speed_turn_keeps_full_wheels_and_scales_leg_assist(void) {
+    chassis_plan_t wheel_dominant;
+    chassis_plan_t legacy_leg_assist;
+    chassis_cmd_plan_t cmd = {
+        .vx_m_s = 0.0f,
+        .vy_m_s = 0.0f,
+        .wz_rad_s = 1.0f,
+    };
+
+    reset_wheel_only_travel_cfg();
+    TEST_ASSERT(chassis_planner_update(&cmd,
+                                       &GAIT_PARAMS_WALK_DEFAULT,
+                                       &wheel_dominant) == APP_OK);
+
+    g_chassis_turn_cfg.turn_leg_scale = 1.0f;
+    TEST_ASSERT(chassis_planner_update(&cmd,
+                                       &GAIT_PARAMS_WALK_DEFAULT,
+                                       &legacy_leg_assist) == APP_OK);
+
+    for (int i = 0; i < GAIT_LEG_NUM; i++) {
+        TEST_ASSERT_NEAR(wheel_dominant.wheel_rads[i],
+                         legacy_leg_assist.wheel_rads[i],
+                         1e-6f);
+        TEST_ASSERT_NEAR(wheel_dominant.gait_params.leg_step_length_m[i],
+                         legacy_leg_assist.gait_params.leg_step_length_m[i] * 0.25f,
+                         1e-6f);
+    }
+    TEST_ASSERT_NEAR(wheel_dominant.gait_params.period_s,
+                     legacy_leg_assist.gait_params.period_s,
+                     1e-6f);
+    reset_wheel_only_travel_cfg();
 }
 
 static void test_planner_keeps_vy_as_motion_only(void) {
@@ -3315,6 +3358,7 @@ static void test_arm_control_gate_controls_damiao_auto_enable(void) {
 int main(void) {
     test_arm_grasp_j1_forbidden_ranges_repeat_every_turn();
     test_planner_forward_and_turn();
+    test_low_speed_turn_keeps_full_wheels_and_scales_leg_assist();
     test_planner_keeps_vy_as_motion_only();
     test_planner_deadband_zeroes_wheels();
     test_planner_schedules_high_frequency_wheel_only_travel();

@@ -114,7 +114,7 @@ task_comm_get_chassis/mode
 - 普通行驶默认启用 `wheel_only_travel`：足端不使用 `vx`，直行时三个步长字段全部为 0；边行驶边转向时只保留 `-wz * y_leg` 的左右步差。
 - `vy` 只参与 moving 判断，不进入 2DOF 足端横向轨迹。
 - `g_chassis_stride_cfg` 默认把普通行驶周期从 `0.25 s` 调到 `0.20 s`，固定抬脚高度 `0.055 m`、duty `0.60`；可用 `wheel_only_travel=0` 回退旧平移步长。
-- `g_chassis_turn_cfg` 控制低速转向的 walk 周期、抬脚高度、duty 和轮速/步长限幅。
+- `g_chassis_turn_cfg` 默认让低速 `walk` 转向复用普通行进的 `0.25 s -> 0.20 s` 周期调度；轮差速保持完整 `wz`，腿部 yaw 步长默认缩放为旧值的 `25%`。`match_travel_period` 和 `turn_leg_scale` 可用于现场回退或调参。
 
 ## 腿和轮输出
 

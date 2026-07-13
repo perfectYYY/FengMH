@@ -154,7 +154,9 @@ task_chassis_step_for_test()
 
 - `chassis_planner_is_low_speed_turn()` 为 true。
 - 基础 gait 使用 `s_walk_params`。
-- `planner_apply_turn_gait()` 覆盖转向抬脚高度、周期、duty。
+- `planner_apply_turn_gait()` 覆盖转向抬脚高度和 duty。
+- 默认复用普通行进周期调度，按等效转向速度在 `0.25 s` 到 `0.20 s` 之间变化。
+- 四轮仍使用完整 yaw 差速；腿部 yaw 步长默认乘 `turn_leg_scale=0.25`，作为辅助转向。
 - `online_decide()` 选择 `walk`。
 
 局部腿速度：
@@ -170,8 +172,9 @@ wheel_rads = wheel_vx / wheel_radius
   leg_step_length_m[i] = foot_vx * period_s * duty, then clamped
 
 低速/原地 yaw 转向:
-  foot_vx = wheel_vx
-  保持原有 walk 步长、周期、步高和 duty
+  wheel_vx = vx - wz * y_leg
+  foot_vx = vx - turn_leg_scale * wz * y_leg
+  walk 周期默认与普通 trot 行进使用同一套速度调度
 ```
 
 `vy` 当前只参与 moving 判断，不进入足端横向轨迹。
