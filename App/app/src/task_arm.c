@@ -48,6 +48,14 @@ static uint8_t s_last_box_position_select;
 static uint32_t s_fixed_error_ms;
 static uint32_t s_last_debug_snapshot_ms;
 static uint32_t s_power_on_fixed_grasp_start_ms;
+static uint32_t s_active_target_command_seq;
+static uint32_t s_active_pump_command_seq;
+static uint8_t s_active_target_status_terminal;
+static uint8_t s_active_pump_status_terminal;
+static uint8_t s_active_pump_desired;
+static uint8_t s_stow_active;
+
+static void force_main_pump_off(void);
 
 typedef enum {
     ARM_FIXED_PROFILE_PARK = 0,
@@ -347,6 +355,107 @@ static uint8_t arm_usb_commands_allowed(uint8_t robot_mode) {
     return arm_work_mode(robot_mode);
 }
 
+static uint8_t consume_stow_command_if_pending(uint8_t robot_mode) {
+    task_comm_arm_target_t target;
+    task_comm_get_arm_target(&target);
+    if (target.seq == s_last_target_seq ||
+        target.target_type != PROTO_ARM_TARGET_STOW) {
+        return 0U;
+    }
+
+    s_last_target_seq = target.seq;
+    s_active_target_command_seq = target.command_seq;
+    s_active_target_status_terminal = 0U;
+    if (robot_mode != PROTO_ROBOT_MODE_ARM) {
+        (void)task_comm_report_command_status(
+            PROTO_FUNC_ARM_TARGET,
+            target.command_seq,
+            PROTO_COMMAND_STAGE_REJECTED,
+            PROTO_COMMAND_RESULT_WRONG_MODE);
+        s_active_target_status_terminal = 1U;
+        return 1U;
+    }
+
+    Arm_Serial_Protocol_Init();
+    s_last_place_cycle_sequence = Arm_Serial_Protocol_PlaceCycleSequence();
+    force_main_pump_off();
+    s_place_hold_active = 0U;
+    s_stow_active = 1U;
+    reset_fixed_hold(ARM_FIXED_PROFILE_PARK);
+    (void)task_comm_report_command_status(
+        PROTO_FUNC_ARM_TARGET,
+        target.command_seq,
+        PROTO_COMMAND_STAGE_EXECUTING,
+        PROTO_COMMAND_RESULT_OK);
+    return 1U;
+}
+
+static void report_target_progress(void) {
+    if (s_active_target_status_terminal || s_stow_active) return;
+    Arm_Move_Status_t move_status = Arm_Control_GetMoveStatus();
+    if (move_status == ARM_MOVE_REACHED) {
+        (void)task_comm_report_command_status(
+            PROTO_FUNC_ARM_TARGET,
+            s_active_target_command_seq,
+            PROTO_COMMAND_STAGE_COMPLETED,
+            PROTO_COMMAND_RESULT_OK);
+        s_active_target_status_terminal = 1U;
+    } else if (move_status >= ARM_MOVE_ERROR_INVALID_TARGET) {
+        (void)task_comm_report_command_status(
+            PROTO_FUNC_ARM_TARGET,
+            s_active_target_command_seq,
+            PROTO_COMMAND_STAGE_ERROR,
+            PROTO_COMMAND_RESULT_INTERNAL);
+        s_active_target_status_terminal = 1U;
+    }
+}
+
+static void report_stow_progress(void) {
+    if (!s_stow_active || s_active_target_status_terminal) return;
+    if (debug_arm_fixed_state == ARM_FIXED_HOLDING &&
+        s_fixed_profile == ARM_FIXED_PROFILE_PARK) {
+        (void)task_comm_report_command_status(
+            PROTO_FUNC_ARM_TARGET,
+            s_active_target_command_seq,
+            PROTO_COMMAND_STAGE_COMPLETED,
+            PROTO_COMMAND_RESULT_OK);
+        s_active_target_status_terminal = 1U;
+        /* Keep PARK latched after reporting completion. The host needs time to
+         * receive 0x88 and switch to NAV; a new arm target explicitly releases
+         * this latch through consume_new_commands(). */
+    } else if (debug_arm_fixed_state == ARM_FIXED_ERROR) {
+        (void)task_comm_report_command_status(
+            PROTO_FUNC_ARM_TARGET,
+            s_active_target_command_seq,
+            PROTO_COMMAND_STAGE_ERROR,
+            PROTO_COMMAND_RESULT_INTERNAL);
+        s_active_target_status_terminal = 1U;
+        s_stow_active = 0U;
+    }
+}
+
+static void report_pump_progress(void) {
+    if (s_active_pump_status_terminal) return;
+    if (task_comm_watchdog_active() || task_safety_estop_active()) {
+        (void)task_comm_report_command_status(
+            PROTO_FUNC_ARM_PUMP,
+            s_active_pump_command_seq,
+            PROTO_COMMAND_STAGE_ERROR,
+            task_comm_watchdog_active() ? PROTO_COMMAND_RESULT_WATCHDOG :
+                                          PROTO_COMMAND_RESULT_ESTOP);
+        s_active_pump_status_terminal = 1U;
+        return;
+    }
+    if ((Pump_Control_IsEnabled() ? 1U : 0U) == s_active_pump_desired) {
+        (void)task_comm_report_command_status(
+            PROTO_FUNC_ARM_PUMP,
+            s_active_pump_command_seq,
+            PROTO_COMMAND_STAGE_COMPLETED,
+            PROTO_COMMAND_RESULT_OK);
+        s_active_pump_status_terminal = 1U;
+    }
+}
+
 static void consume_new_commands(uint8_t command_allowed) {
     task_comm_arm_target_t target;
     task_comm_arm_pump_t pump;
@@ -361,15 +470,50 @@ static void consume_new_commands(uint8_t command_allowed) {
     }
 
     if (target.seq != s_last_target_seq) {
-        Arm_Serial_Protocol_QueueTarget(target.target_type,
-                                         target.x_m,
-                                         target.y_m,
-                                         target.z_m);
+        if (target.target_type == PROTO_ARM_TARGET_STOW) {
+            s_last_target_seq = target.seq;
+        } else if (arm_control_validate_host_target(target.target_type,
+                                                    target.x_m,
+                                                    target.y_m,
+                                                    target.z_m) != APP_OK) {
+            (void)task_comm_report_command_status(
+                PROTO_FUNC_ARM_TARGET,
+                target.command_seq,
+                PROTO_COMMAND_STAGE_REJECTED,
+                PROTO_COMMAND_RESULT_INVALID_TARGET);
+        } else {
+            Arm_Serial_Protocol_QueueTarget(target.target_type,
+                                             target.x_m,
+                                             target.y_m,
+                                             target.z_m);
+            s_active_target_command_seq = target.command_seq;
+            s_active_target_status_terminal = 0U;
+            s_stow_active = 0U;
+            (void)task_comm_report_command_status(
+                PROTO_FUNC_ARM_TARGET,
+                target.command_seq,
+                PROTO_COMMAND_STAGE_EXECUTING,
+                PROTO_COMMAND_RESULT_OK);
+        }
         s_last_target_seq = target.seq;
     }
 
     if (pump.seq != s_last_pump_seq) {
         Arm_Serial_Protocol_QueuePump(pump.pump_on);
+        s_active_pump_command_seq = pump.command_seq;
+        s_active_pump_desired = pump.pump_on ? 1U : 0U;
+        if (pump.pump_on) {
+            s_active_pump_status_terminal = 0U;
+            (void)task_comm_report_command_status(
+                PROTO_FUNC_ARM_PUMP,
+                pump.command_seq,
+                PROTO_COMMAND_STAGE_EXECUTING,
+                PROTO_COMMAND_RESULT_OK);
+        } else {
+            /* Communication ingress already executed pump-off and published
+             * COMPLETED. Consume it only for PLACE-cycle bookkeeping. */
+            s_active_pump_status_terminal = 1U;
+        }
         s_last_pump_seq = pump.seq;
     }
 }
@@ -505,11 +649,64 @@ static void force_all_pump_outputs_off(void) {
     Pump_Control_SetPA9(0U);
 }
 
+static void force_main_pump_off(void) {
+    Pump_Control_Set(0U);
+}
+
+static void terminate_arm_commands_for_mode_edge(uint8_t result) {
+    task_comm_arm_target_t target;
+    task_comm_arm_pump_t pump;
+    task_comm_get_arm_target(&target);
+    task_comm_get_arm_pump(&pump);
+
+    if (!s_active_target_status_terminal) {
+        (void)task_comm_report_command_status(
+            PROTO_FUNC_ARM_TARGET,
+            s_active_target_command_seq,
+            PROTO_COMMAND_STAGE_ERROR,
+            result);
+    }
+    if (target.seq != s_last_target_seq) {
+        (void)task_comm_report_command_status(
+            PROTO_FUNC_ARM_TARGET,
+            target.command_seq,
+            PROTO_COMMAND_STAGE_ERROR,
+            result);
+        s_last_target_seq = target.seq;
+    }
+
+    if (!s_active_pump_status_terminal) {
+        (void)task_comm_report_command_status(
+            PROTO_FUNC_ARM_PUMP,
+            s_active_pump_command_seq,
+            PROTO_COMMAND_STAGE_ERROR,
+            result);
+    }
+    if (pump.seq != s_last_pump_seq) {
+        /* pump-off already completed synchronously in task_comm ingress. */
+        if (pump.pump_on) {
+            (void)task_comm_report_command_status(
+                PROTO_FUNC_ARM_PUMP,
+                pump.command_seq,
+                PROTO_COMMAND_STAGE_ERROR,
+                result);
+        }
+        s_last_pump_seq = pump.seq;
+    }
+}
+
 static void reset_host_arm_protocol_state(void) {
     Arm_Serial_Protocol_Init();
     s_last_place_cycle_sequence = Arm_Serial_Protocol_PlaceCycleSequence();
-    force_all_pump_outputs_off();
+    /* A/B rear-slot retention survives ARM/NAV/REAR_PLACE mode boundaries. */
+    force_main_pump_off();
     s_place_hold_active = 0U;
+    s_active_target_command_seq = 0U;
+    s_active_pump_command_seq = 0U;
+    s_active_target_status_terminal = 1U;
+    s_active_pump_status_terminal = 1U;
+    s_active_pump_desired = 0U;
+    s_stow_active = 0U;
 }
 
 static void enter_gravity_only_override(void) {
@@ -569,6 +766,12 @@ void task_arm_init(void) {
     s_fixed_error_ms = 0U;
     s_last_debug_snapshot_ms = 0U;
     s_power_on_fixed_grasp_start_ms = 0U;
+    s_active_target_command_seq = 0U;
+    s_active_pump_command_seq = 0U;
+    s_active_target_status_terminal = 1U;
+    s_active_pump_status_terminal = 1U;
+    s_active_pump_desired = 0U;
+    s_stow_active = 0U;
     s_fixed_profile =
 #if APP_ARM_POWER_ON_FIXED_GRASP_TEST
         ARM_FIXED_PROFILE_FIRST_LIFT;
@@ -625,6 +828,14 @@ void task_arm_step_for_test(float dt_s, uint32_t now_ms) {
         (robot_mode == PROTO_ROBOT_MODE_REAR_PLACE) ? 1U : 0U;
     (void)arm_control_set_rear_place_avoidance(
         rear_place_mode);
+    if (switched_arm_work_mode || exited_arm_work_mode) {
+        uint8_t terminal_result = task_comm_watchdog_active() ?
+                                  PROTO_COMMAND_RESULT_WATCHDOG :
+                                  task_safety_estop_active() ?
+                                  PROTO_COMMAND_RESULT_ESTOP :
+                                  PROTO_COMMAND_RESULT_WRONG_MODE;
+        terminate_arm_commands_for_mode_edge(terminal_result);
+    }
     if (entered_arm_mode || switched_arm_work_mode || exited_arm_work_mode) {
         reset_host_arm_protocol_state();
     }
@@ -639,6 +850,17 @@ void task_arm_step_for_test(float dt_s, uint32_t now_ms) {
         }
         /* 急停时不进入 Arm_Control_Process，避免自动重新使能达妙。 */
         Pump_Control_Process();
+        report_pump_progress();
+        if (!s_active_target_status_terminal) {
+            (void)task_comm_report_command_status(
+                PROTO_FUNC_ARM_TARGET,
+                s_active_target_command_seq,
+                PROTO_COMMAND_STAGE_ERROR,
+                task_comm_watchdog_active() ? PROTO_COMMAND_RESULT_WATCHDOG :
+                                              PROTO_COMMAND_RESULT_ESTOP);
+            s_active_target_status_terminal = 1U;
+            s_stow_active = 0U;
+        }
         update_debug_snapshot_if_due(now_ms);
         send_feedback_if_due(now_ms);
         return;
@@ -675,13 +897,18 @@ void task_arm_step_for_test(float dt_s, uint32_t now_ms) {
         leave_gravity_only_override();
     }
 
+    if (arm_work_mode(robot_mode)) {
+        (void)consume_stow_command_if_pending(robot_mode);
+    }
+
 #if APP_ARM_POWER_ON_FIXED_GRASP_TEST
     (void)entered_arm_mode;
     (void)robot_mode;
     process_power_on_fixed_grasp_test();
 #else
-    if (arm_work_mode(robot_mode) &&
-        (entered_arm_mode || s_fixed_profile == ARM_FIXED_PROFILE_PARK)) {
+    if (!s_stow_active && arm_work_mode(robot_mode) &&
+        (entered_arm_mode || switched_arm_work_mode ||
+         s_fixed_profile == ARM_FIXED_PROFILE_PARK)) {
         s_place_hold_active = 0U;
         reset_fixed_hold(ARM_FIXED_PROFILE_FIRST_LIFT);
     } else if (!APP_ARM_POWER_ON_HOST_READY_ENABLE &&
@@ -731,6 +958,8 @@ void task_arm_step_for_test(float dt_s, uint32_t now_ms) {
     Pump_Control_Process();
     /* 保留运动完成后 PLACE/关泵的同拍处理语义。 */
     Arm_Serial_Protocol_Process();
+    report_target_progress();
+    report_pump_progress();
     /*
      * A completed PLACE cycle has already switched the payload model to
      * no-box gravity compensation and turned the pump off. Start the same
@@ -773,6 +1002,7 @@ void task_arm_step_for_test(float dt_s, uint32_t now_ms) {
         process_fixed_hold(now_ms);
 #endif
     }
+    report_stow_progress();
     update_debug_snapshot_if_due(now_ms);
     send_feedback_if_due(now_ms);
 }

@@ -32,8 +32,10 @@ void task_comm_get_chassis(task_comm_chassis_cmd_t* out);
 
 /* 当前最近一次的 arm target 指令；后续 task_arm 读取 */
 typedef struct {
-    uint8_t target_type;      /* 0=grasp, 1=place */
+    uint8_t target_type;      /* 0=grasp, 1=place, 2=stow */
     float x_m, y_m, z_m;      /* arm_base, m */
+    uint32_t command_seq;     /* V2 wire sequence; 0 for legacy frames */
+    uint8_t sequenced;        /* 1 when command_seq came from a V2 frame */
     uint32_t seq;
 } task_comm_arm_target_t;
 
@@ -50,7 +52,9 @@ void task_comm_get_arm_target(task_comm_arm_target_t* out);
 
 /* 当前最近一次的 pump 指令；后续 task_arm 读取 */
 typedef struct {
-    uint8_t pump_on;          /* 1=vacuum on, 0=release */
+    uint8_t pump_on;          /* 1=task lifecycle; 0=ingress-terminal safe off */
+    uint32_t command_seq;
+    uint8_t sequenced;
     uint32_t seq;
 } task_comm_arm_pump_t;
 
@@ -59,6 +63,8 @@ void task_comm_get_arm_pump(task_comm_arm_pump_t* out);
 /* 上位机请求的整机模式；后续 safety/mode manager 读取并做本地互锁 */
 typedef struct {
     uint8_t mode;             /* PROTO_ROBOT_MODE_* */
+    uint32_t command_seq;
+    uint8_t sequenced;
     uint32_t seq;
 } task_comm_mode_cmd_t;
 
@@ -68,6 +74,7 @@ void task_comm_get_mode_cmd(task_comm_mode_cmd_t* out);
 int task_comm_send_arm_feedback(const payload_arm_feedback_t* feedback);
 /* 机械臂 J1..J4 原始电机角度上行；FuncID=PROTO_FUNC_ARM_MOTOR_ANGLES。 */
 int task_comm_send_arm_motor_angles(const payload_arm_motor_angles_t* angles);
+int task_comm_send_system_status(uint32_t now_ms);
 
 /* 四轮实际转速上行；顺序固定为 FL/FR/RL/RR，单位 rad/s。 */
 int task_comm_send_wheel_feedback(void);
@@ -76,6 +83,18 @@ int task_comm_send_odometry(void);
 
 /* 最近一次"任何有效帧"的 ms 时戳；用于心跳超时判定 */
 uint32_t task_comm_last_rx_ms(void);
+
+/* V2 command lifecycle and periodic real-MCU status. Legacy commands use seq=0. */
+int task_comm_report_command_status(uint8_t command_func,
+                                    uint32_t command_seq,
+                                    uint8_t stage,
+                                    uint8_t result);
+uint32_t task_comm_boot_id(void);
+uint8_t task_comm_actual_mode(void);
+
+/* Communication-loss latch. Only an explicit IDLE mode command clears it. */
+void task_comm_watchdog_step(uint32_t now_ms);
+uint8_t task_comm_watchdog_active(void);
 
 #ifdef __cplusplus
 }

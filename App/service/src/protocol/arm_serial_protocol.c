@@ -67,6 +67,7 @@ static uint8_t s_waiting_for_next_grasp;
 static uint8_t s_rear_place_mode;
 static volatile uint32_t s_place_cycle_sequence;
 static place_slot_t s_active_place_slot;
+static place_slot_t s_pending_rear_release_slot;
 static uint32_t s_last_feedback_tick;
 static uint32_t s_last_feedback_attempt_tick;
 
@@ -243,13 +244,14 @@ static void process_pending_target(void) {
         .pitch = 0.0f,
     };
     if (s_rear_place_mode && s_pending_target.type == 0U) {
-        if (s_pending_target.y_m > 0.0f) {
-            Pump_Control_SetPA8(0U);
-        } else if (s_pending_target.y_m < 0.0f) {
-            Pump_Control_SetPC9(0U);
-        }
+        /* Keep the cargo slot energized until the end effector is in place and
+         * its main pump is on. Releasing here can drop the box during approach. */
+        s_pending_rear_release_slot = (s_pending_target.y_m < 0.0f) ?
+                                      PLACE_SLOT_1_NEGATIVE_Y :
+                                      PLACE_SLOT_2_POSITIVE_Y;
         s_active_place_slot = PLACE_SLOT_NONE;
     } else if (s_pending_target.type == 1U) {
+        s_pending_rear_release_slot = PLACE_SLOT_NONE;
         s_active_place_slot = (s_pending_target.y_m < 0.0f) ?
                               PLACE_SLOT_1_NEGATIVE_Y :
                               PLACE_SLOT_2_POSITIVE_Y;
@@ -258,9 +260,27 @@ static void process_pending_target(void) {
             Pump_Control_SetPC9(1U);
         }
     } else {
+        s_pending_rear_release_slot = PLACE_SLOT_NONE;
         s_active_place_slot = PLACE_SLOT_NONE;
     }
     (void)Arm_Control_MoveToTypedPose(&pose, s_pending_target.type);
+}
+
+static void release_matching_rear_slot_if_ready(void) {
+    if (!s_rear_place_mode ||
+        s_pending_rear_release_slot == PLACE_SLOT_NONE ||
+        !Pump_Control_IsEnabled() ||
+        Arm_Control_GetMoveStatus() != ARM_MOVE_REACHED) {
+        return;
+    }
+
+    if (s_pending_rear_release_slot == PLACE_SLOT_2_POSITIVE_Y) {
+        Pump_Control_SetPA8(0U);
+    } else if (s_pending_rear_release_slot == PLACE_SLOT_1_NEGATIVE_Y) {
+        Pump_Control_SetPC8(0U);
+        Pump_Control_SetPC9(0U);
+    }
+    s_pending_rear_release_slot = PLACE_SLOT_NONE;
 }
 
 static void finish_place_cycle(void) {
@@ -305,6 +325,7 @@ static void process_pending_pump(void) {
             s_deferred_pump_off = 0U;
             debug_serial_pump_off_deferred = 0U;
             Pump_Control_Set(1U);
+            release_matching_rear_slot_if_ready();
         } else if (s_pending_target.type == 1U &&
                    Arm_Control_GetMoveStatus() != ARM_MOVE_REACHED) {
             s_deferred_pump_off = 1U;
@@ -322,6 +343,7 @@ static void process_pending_pump(void) {
         Arm_Control_GetMoveStatus() == ARM_MOVE_REACHED) {
         finish_place_cycle();
     }
+    release_matching_rear_slot_if_ready();
 }
 
 static void send_feedback(uint32_t now) {
@@ -385,6 +407,7 @@ void Arm_Serial_Protocol_Init(void) {
     s_rear_place_mode = 0U;
     s_place_cycle_sequence = 0U;
     s_active_place_slot = PLACE_SLOT_NONE;
+    s_pending_rear_release_slot = PLACE_SLOT_NONE;
     debug_serial_target_type = 0U;
     debug_serial_target_x_m = 0.0f;
     debug_serial_target_y_m = 0.0f;

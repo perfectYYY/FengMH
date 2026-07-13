@@ -56,6 +56,7 @@ static const char* TAG = "CHASSIS";
 #define CHASSIS_CMD_SLEW_VX_MPS2               0.80f
 #define CHASSIS_CMD_SLEW_VY_MPS2               0.60f
 #define CHASSIS_CMD_SLEW_WZ_RADPS2             1.50f
+#define CHASSIS_CMD_MOTION_EPS                  1.0e-6f
 #define CHASSIS_WHEEL_TEST_TIMEOUT_MS           500U
 #define CHASSIS_WHEEL_TEST_MAX_RADS             4.0f
 #define HEADING_HOLD_MIN_VX_M_S                  0.05f
@@ -997,6 +998,33 @@ static float slew_limit_axis(float current, float target, float rate_abs, float 
     return ramp_step(current, target, rate_abs * dt_s);
 }
 
+static uint8_t plan_translation_active(const chassis_cmd_plan_t* command) {
+    if (!command) return 0U;
+    return (fabsf(command->vx_m_s) > CHASSIS_CMD_MOTION_EPS ||
+            fabsf(command->vy_m_s) > CHASSIS_CMD_MOTION_EPS) ? 1U : 0U;
+}
+
+static uint8_t plan_rotation_active(const chassis_cmd_plan_t* command) {
+    if (!command) return 0U;
+    return (fabsf(command->wz_rad_s) > CHASSIS_CMD_MOTION_EPS) ? 1U : 0U;
+}
+
+static chassis_cmd_plan_t finite_plan_command(const chassis_cmd_plan_t* command) {
+    chassis_cmd_plan_t sanitized = {0};
+    if (!command) return sanitized;
+    sanitized.vx_m_s = isfinite(command->vx_m_s) ? command->vx_m_s : 0.0f;
+    sanitized.vy_m_s = isfinite(command->vy_m_s) ? command->vy_m_s : 0.0f;
+    sanitized.wz_rad_s = isfinite(command->wz_rad_s) ? command->wz_rad_s : 0.0f;
+    /* A mixed upstream command is interpreted as rotate-first. */
+    if (plan_rotation_active(&sanitized)) {
+        sanitized.vx_m_s = 0.0f;
+        sanitized.vy_m_s = 0.0f;
+    } else {
+        sanitized.wz_rad_s = 0.0f;
+    }
+    return sanitized;
+}
+
 static chassis_cmd_plan_t slew_plan_command(const chassis_cmd_plan_t* target,
                                             float dt_s) {
     if (!target) {
@@ -1010,18 +1038,72 @@ static chassis_cmd_plan_t slew_plan_command(const chassis_cmd_plan_t* target,
         s_slewed_plan_valid = 1U;
     }
 
-    s_slewed_plan_cmd.vx_m_s = slew_limit_axis(s_slewed_plan_cmd.vx_m_s,
-                                               target->vx_m_s,
-                                               CHASSIS_CMD_SLEW_VX_MPS2,
-                                               dt_s);
-    s_slewed_plan_cmd.vy_m_s = slew_limit_axis(s_slewed_plan_cmd.vy_m_s,
-                                               target->vy_m_s,
-                                               CHASSIS_CMD_SLEW_VY_MPS2,
-                                               dt_s);
-    s_slewed_plan_cmd.wz_rad_s = slew_limit_axis(s_slewed_plan_cmd.wz_rad_s,
-                                                 target->wz_rad_s,
-                                                 CHASSIS_CMD_SLEW_WZ_RADPS2,
-                                                 dt_s);
+    chassis_cmd_plan_t desired = finite_plan_command(target);
+    const uint8_t wants_rotation = plan_rotation_active(&desired);
+    const uint8_t wants_translation = plan_translation_active(&desired);
+    const uint8_t has_rotation = plan_rotation_active(&s_slewed_plan_cmd);
+    const uint8_t has_translation = plan_translation_active(&s_slewed_plan_cmd);
+
+    if (wants_rotation) {
+        if (has_translation) {
+            /* Finish the current translation before rotation can ramp up. */
+            s_slewed_plan_cmd.wz_rad_s = 0.0f;
+            s_slewed_plan_cmd.vx_m_s = slew_limit_axis(
+                s_slewed_plan_cmd.vx_m_s, 0.0f, CHASSIS_CMD_SLEW_VX_MPS2, dt_s);
+            s_slewed_plan_cmd.vy_m_s = slew_limit_axis(
+                s_slewed_plan_cmd.vy_m_s, 0.0f, CHASSIS_CMD_SLEW_VY_MPS2, dt_s);
+        } else {
+            s_slewed_plan_cmd.vx_m_s = 0.0f;
+            s_slewed_plan_cmd.vy_m_s = 0.0f;
+            s_slewed_plan_cmd.wz_rad_s = slew_limit_axis(
+                s_slewed_plan_cmd.wz_rad_s,
+                desired.wz_rad_s,
+                CHASSIS_CMD_SLEW_WZ_RADPS2,
+                dt_s);
+        }
+    } else if (wants_translation) {
+        if (has_rotation) {
+            /* Finish the current rotation before translation can ramp up. */
+            s_slewed_plan_cmd.vx_m_s = 0.0f;
+            s_slewed_plan_cmd.vy_m_s = 0.0f;
+            s_slewed_plan_cmd.wz_rad_s = slew_limit_axis(
+                s_slewed_plan_cmd.wz_rad_s, 0.0f, CHASSIS_CMD_SLEW_WZ_RADPS2, dt_s);
+        } else {
+            s_slewed_plan_cmd.wz_rad_s = 0.0f;
+            s_slewed_plan_cmd.vx_m_s = slew_limit_axis(
+                s_slewed_plan_cmd.vx_m_s,
+                desired.vx_m_s,
+                CHASSIS_CMD_SLEW_VX_MPS2,
+                dt_s);
+            s_slewed_plan_cmd.vy_m_s = slew_limit_axis(
+                s_slewed_plan_cmd.vy_m_s,
+                desired.vy_m_s,
+                CHASSIS_CMD_SLEW_VY_MPS2,
+                dt_s);
+        }
+    } else if (has_rotation) {
+        s_slewed_plan_cmd.vx_m_s = 0.0f;
+        s_slewed_plan_cmd.vy_m_s = 0.0f;
+        s_slewed_plan_cmd.wz_rad_s = slew_limit_axis(
+            s_slewed_plan_cmd.wz_rad_s, 0.0f, CHASSIS_CMD_SLEW_WZ_RADPS2, dt_s);
+    } else {
+        s_slewed_plan_cmd.wz_rad_s = 0.0f;
+        s_slewed_plan_cmd.vx_m_s = slew_limit_axis(
+            s_slewed_plan_cmd.vx_m_s, 0.0f, CHASSIS_CMD_SLEW_VX_MPS2, dt_s);
+        s_slewed_plan_cmd.vy_m_s = slew_limit_axis(
+            s_slewed_plan_cmd.vy_m_s, 0.0f, CHASSIS_CMD_SLEW_VY_MPS2, dt_s);
+    }
+
+    /* Defensive cleanup for any mixed state inherited from earlier firmware. */
+    if (plan_translation_active(&s_slewed_plan_cmd) &&
+        plan_rotation_active(&s_slewed_plan_cmd)) {
+        if (wants_rotation) {
+            s_slewed_plan_cmd.wz_rad_s = 0.0f;
+        } else {
+            s_slewed_plan_cmd.vx_m_s = 0.0f;
+            s_slewed_plan_cmd.vy_m_s = 0.0f;
+        }
+    }
     return s_slewed_plan_cmd;
 }
 
@@ -1367,6 +1449,13 @@ void chassis_control_tick(const chassis_control_input_t* input,
 }
 
 void chassis_control_set_mode(chassis_mode_t mode) {
+    if (mode == CHASSIS_MODE_STANDALONE) {
+        memset(&s_slewed_plan_cmd, 0, sizeof(s_slewed_plan_cmd));
+        s_slewed_plan_valid = 0U;
+        memset(&s_chassis_plan, 0, sizeof(s_chassis_plan));
+        s_chassis_plan.gait_params = GAIT_PARAMS_STAND_DEFAULT;
+        s_last_effective_wz = 0.0f;
+    }
     if (mode == s_mode) return;
     s_mode = mode;
     LOGI("mode -> %d", (int)mode);
@@ -1582,6 +1671,8 @@ void chassis_control_get_status(chassis_control_status_t* out) {
     out->heading_hold_active = s_heading_hold_active;
     out->wheel_saturated = s_chassis_plan.wheel_saturated;
     out->diagnostic_flags = s_diagnostic_flags;
+    out->effective_vx_m_s = s_slewed_plan_cmd.vx_m_s;
+    out->effective_vy_m_s = s_slewed_plan_cmd.vy_m_s;
     out->effective_wz_rad_s = s_last_effective_wz;
     const attitude_state_t* attitude = attitude_estimator_get_state();
     out->yaw_rad = attitude->yaw;

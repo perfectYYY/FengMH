@@ -40,9 +40,11 @@ extern "C" {
 #define PROTO_FUNC_USB_CDC_PONG 0x85
 #define PROTO_FUNC_ARM_FEEDBACK 0x86
 #define PROTO_FUNC_ARM_MOTOR_ANGLES 0x87
-#define PROTO_FUNC_WHEEL_STATE  0x88
-#define PROTO_FUNC_CHASSIS_DIAG 0x89
-#define PROTO_FUNC_ODOMETRY      0x8A
+#define PROTO_FUNC_COMMAND_STATUS 0x88
+#define PROTO_FUNC_SYSTEM_STATUS  0x89
+#define PROTO_FUNC_ODOMETRY       0x8A
+#define PROTO_FUNC_WHEEL_STATE    0x8B
+#define PROTO_FUNC_CHASSIS_DIAG   0x8C
 #define PROTO_FUNC_EVENT        0x8F
 
 #define PROTO_STEER_MODE_OFF       0u
@@ -64,7 +66,7 @@ typedef struct __attribute__((packed)) {
 } payload_chassis_cmd_t;  /* FuncID 0x10, 旧帧 len=12 */
 
 /* 扩展版: 增加 target_yaw + steer_mode (17 bytes)
- *   向后兼容: 旧协议 12 字节帧也接受, steer_mode 默认 AUTO_HOLD */
+ *   向后兼容: 旧协议 12 字节帧也接受, 比赛默认 steer_mode=OFF */
 #define PROTO_CHASSIS_CMD_LEGACY_LEN   12u
 #define PROTO_CHASSIS_CMD_EXT_LEN      17u
 
@@ -97,7 +99,7 @@ typedef struct __attribute__((packed)) {
 } payload_mit_cmd_t;   /* FuncID 0x13, len=21 */
 
 typedef struct __attribute__((packed)) {
-    uint8_t target_type;  /* 0=grasp, 1=place */
+    uint8_t target_type;  /* 0=grasp, 1=place, 2=stow (V2 only) */
     float   x_m;          /* arm_base x, m */
     float   y_m;          /* arm_base y, m */
     float   z_m;          /* arm_base z, m */
@@ -105,14 +107,30 @@ typedef struct __attribute__((packed)) {
 
 #define PROTO_ARM_TARGET_GRASP 0u
 #define PROTO_ARM_TARGET_PLACE 1u
+#define PROTO_ARM_TARGET_STOW  2u
+
+typedef struct __attribute__((packed)) {
+    payload_arm_target_t target;
+    uint32_t command_seq;
+} payload_arm_target_v2_t; /* FuncID 0x11, len=17 */
 
 typedef struct __attribute__((packed)) {
     uint8_t pump_on;      /* 1=vacuum on, 0=release */
 } payload_arm_pump_t;    /* FuncID 0x14, len=1 */
 
 typedef struct __attribute__((packed)) {
+    uint8_t pump_on;
+    uint32_t command_seq;
+} payload_arm_pump_v2_t; /* FuncID 0x14, len=5 */
+
+typedef struct __attribute__((packed)) {
     uint8_t mode;         /* PROTO_ROBOT_MODE_* */
 } payload_mode_cmd_t;    /* FuncID 0x15, len=1 */
+
+typedef struct __attribute__((packed)) {
+    uint8_t mode;
+    uint32_t command_seq;
+} payload_mode_cmd_v2_t; /* FuncID 0x15, len=5 */
 
 #define PROTO_WHEEL_TEST_DISABLE 0u
 #define PROTO_WHEEL_TEST_ENABLE  1u
@@ -170,7 +188,7 @@ typedef struct __attribute__((packed)) {
     float    rl_velocity_rads;
     float    rr_velocity_rads;
     uint8_t  online_mask;
-} payload_wheel_state_t; /* FuncID 0x88, len=21 */
+} payload_wheel_state_t; /* FuncID 0x8B, len=21 */
 
 typedef struct __attribute__((packed)) {
     uint32_t timestamp_ms;
@@ -184,7 +202,7 @@ typedef struct __attribute__((packed)) {
     int16_t slip_residual_mrad_s;
     uint16_t speed_scale_permille;
     uint16_t flags;
-} payload_chassis_diag_t; /* FuncID 0x89, len=48 */
+} payload_chassis_diag_t; /* FuncID 0x8C, len=48 */
 
 typedef struct __attribute__((packed)) {
     uint32_t timestamp_ms;
@@ -198,6 +216,48 @@ typedef struct __attribute__((packed)) {
     uint8_t stance_mask;
     uint8_t wheel_online_mask;
 } payload_odometry_t; /* FuncID 0x8A, len=32 */
+
+#define PROTO_COMMAND_STAGE_RECEIVED   0u
+#define PROTO_COMMAND_STAGE_EXECUTING  1u
+#define PROTO_COMMAND_STAGE_COMPLETED  2u
+#define PROTO_COMMAND_STAGE_REJECTED   3u
+#define PROTO_COMMAND_STAGE_ERROR      4u
+
+#define PROTO_COMMAND_RESULT_OK             0u
+#define PROTO_COMMAND_RESULT_BAD_LENGTH     1u
+#define PROTO_COMMAND_RESULT_BAD_VALUE      2u
+#define PROTO_COMMAND_RESULT_WRONG_MODE     3u
+#define PROTO_COMMAND_RESULT_INVALID_TARGET 4u
+#define PROTO_COMMAND_RESULT_BUSY           5u
+#define PROTO_COMMAND_RESULT_WATCHDOG       6u
+#define PROTO_COMMAND_RESULT_ESTOP          7u
+#define PROTO_COMMAND_RESULT_INTERNAL       8u
+#define PROTO_COMMAND_RESULT_STALE_SEQUENCE 9u
+
+typedef struct __attribute__((packed)) {
+    uint32_t boot_id;
+    uint32_t command_seq;
+    uint8_t command_func;
+    uint8_t stage;
+    uint8_t result;
+    uint8_t actual_mode;
+} payload_command_status_t; /* FuncID 0x88, len=12 */
+
+#define PROTO_SAFETY_FLAG_ESTOP_ACTIVE  (1u << 0)
+#define PROTO_SAFETY_FLAG_COMM_WATCHDOG (1u << 1)
+#define PROTO_SAFETY_FLAG_ARM_ERROR     (1u << 2)
+#define PROTO_SAFETY_FLAG_CHASSIS_OFFLINE (1u << 3)
+#define PROTO_SAFETY_FLAG_REAR_SLOT_A_HELD (1u << 4)
+#define PROTO_SAFETY_FLAG_REAR_SLOT_B_HELD (1u << 5)
+
+typedef struct __attribute__((packed)) {
+    uint32_t boot_id;
+    uint32_t uptime_ms;
+    uint8_t actual_mode;
+    uint8_t safety_flags;
+    uint8_t main_pump_on;
+    uint8_t reserved;
+} payload_system_status_t; /* FuncID 0x89, len=12 */
 
 typedef struct __attribute__((packed)) {
     uint8_t req_kind;  /* 0=state, 1=motor, 2=stats */

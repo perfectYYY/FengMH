@@ -22,7 +22,7 @@
 #include "usbd_cdc_if.h"
 
 /* USER CODE BEGIN INCLUDE */
-
+#include "bsp_usb_cdc.h"
 /* USER CODE END INCLUDE */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -169,6 +169,7 @@ static int8_t CDC_Init_HS(void)
 static int8_t CDC_DeInit_HS(void)
 {
   /* USER CODE BEGIN 9 */
+  bsp_usb_cdc_on_disconnect();
   return (USBD_OK);
   /* USER CODE END 9 */
 }
@@ -316,7 +317,6 @@ static int8_t CDC_TransmitCplt_HS(uint8_t *Buf, uint32_t *Len, uint8_t epnum)
   UNUSED(Buf);
   UNUSED(Len);
   UNUSED(epnum);
-  extern void bsp_usb_cdc_on_tx_complete(void);
   bsp_usb_cdc_on_tx_complete();
   /* USER CODE END 14 */
   return result;

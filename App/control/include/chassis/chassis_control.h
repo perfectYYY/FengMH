@@ -42,6 +42,8 @@ typedef struct {
     uint8_t heading_hold_active;
     uint8_t wheel_saturated;
     uint16_t diagnostic_flags;
+    float effective_vx_m_s;
+    float effective_vy_m_s;
     float effective_wz_rad_s;
     float yaw_rad;
     float gyro_z_rad_s;

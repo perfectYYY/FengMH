@@ -253,4 +253,9 @@
 #define APP_SAFETY_DAMIAO_TIMEOUT_MS APP_ARM_MOTION_FEEDBACK_ABORT_MS
 #endif
 
+/* Host control frames are repeated at 5 Hz; 500 ms tolerates one lost frame. */
+#ifndef APP_COMM_WATCHDOG_TIMEOUT_MS
+#define APP_COMM_WATCHDOG_TIMEOUT_MS 500U
+#endif
+
 #endif /* APP_COMMON_CONFIG_H_ */

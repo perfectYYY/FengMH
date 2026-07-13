@@ -212,6 +212,27 @@ static arm_joint_angles_t arm_test_fixed_angles(float theta1_motor_rad) {
     return target;
 }
 
+static arm_joint_angles_t arm_test_park_angles(void) {
+    arm_joint_angles_t target;
+    memset(&target, 0, sizeof(target));
+    target.theta1_motor_rad = APP_ARM_DEG2RAD(APP_ARM_PARK_J1_MOTOR_DEG);
+    target.theta1_geo_rad =
+        target.theta1_motor_rad + ARM_KINEMATICS_DEFAULT_OFFSET.theta1_offset_rad;
+    target.theta2_motor_rad = APP_ARM_DEG2RAD(APP_ARM_PARK_J2_MOTOR_DEG);
+    target.theta3_motor_rad = ARM_KINEMATICS_MOTOR3_TO_LOGICAL(
+        APP_ARM_DEG2RAD(APP_ARM_PARK_J3_MOTOR_DEG));
+    target.theta4_motor_rad = arm_kinematics_compute_t4_from_t3(
+        &ARM_KINEMATICS_DEFAULT_OFFSET,
+        target.theta3_motor_rad);
+    target.theta2_geo_rad =
+        target.theta2_motor_rad + ARM_KINEMATICS_DEFAULT_OFFSET.theta2_offset_rad;
+    target.theta3_geo_rad =
+        target.theta3_motor_rad + ARM_KINEMATICS_DEFAULT_OFFSET.theta3_offset_rad;
+    target.theta4_geo_rad =
+        target.theta4_motor_rad + ARM_KINEMATICS_DEFAULT_OFFSET.theta4_offset_rad;
+    return target;
+}
+
 static arm_joint_angles_t arm_test_ik_target(float x_m, float y_m, float z_m) {
     arm_pose_t target = {
         .x_m = x_m,
@@ -255,11 +276,11 @@ static arm_joint_angles_t arm_test_home_angles(void) {
 static void test_arm_grasp_j1_forbidden_ranges_repeat_every_turn(void) {
     TEST_ASSERT(arm_control_grasp_j1_angle_forbidden(APP_ARM_DEG2RAD(-57.0f)) == 1U);
     TEST_ASSERT(arm_control_grasp_j1_angle_forbidden(APP_ARM_DEG2RAD(44.0f)) == 1U);
-    TEST_ASSERT(arm_control_grasp_j1_angle_forbidden(APP_ARM_DEG2RAD(-180.0f)) == 1U);
-    TEST_ASSERT(arm_control_grasp_j1_angle_forbidden(APP_ARM_DEG2RAD(-227.0f)) == 1U);
-    TEST_ASSERT(arm_control_grasp_j1_angle_forbidden(APP_ARM_DEG2RAD(-136.0f)) == 1U);
+    TEST_ASSERT(arm_control_grasp_j1_angle_forbidden(APP_ARM_DEG2RAD(-180.0f)) == 0U);
+    TEST_ASSERT(arm_control_grasp_j1_angle_forbidden(APP_ARM_DEG2RAD(-227.0f)) == 0U);
+    TEST_ASSERT(arm_control_grasp_j1_angle_forbidden(APP_ARM_DEG2RAD(-136.0f)) == 0U);
     TEST_ASSERT(arm_control_grasp_j1_angle_forbidden(APP_ARM_DEG2RAD(-57.0f + 360.0f)) == 1U);
-    TEST_ASSERT(arm_control_grasp_j1_angle_forbidden(APP_ARM_DEG2RAD(-180.0f - 720.0f)) == 1U);
+    TEST_ASSERT(arm_control_grasp_j1_angle_forbidden(APP_ARM_DEG2RAD(-180.0f - 720.0f)) == 0U);
     TEST_ASSERT(arm_control_grasp_j1_angle_forbidden(APP_ARM_DEG2RAD(90.0f)) == 0U);
     TEST_ASSERT(arm_control_grasp_j1_angle_forbidden(APP_ARM_DEG2RAD(270.0f + 720.0f)) == 0U);
 }
@@ -412,12 +433,14 @@ static void test_mahony_tilt_yaw_and_reset(void) {
     state = attitude_estimator_get_state();
     TEST_ASSERT_NEAR(state->yaw, 1.57079633f, 0.03f);
     TEST_ASSERT_NEAR(state->yaw_rate, 1.57079633f, 1e-4f);
+    const float roll_before_reset = state->roll;
+    const float pitch_before_reset = state->pitch;
 
     attitude_estimator_reset_yaw();
     state = attitude_estimator_get_state();
     TEST_ASSERT_NEAR(state->yaw, 0.0f, 1e-4f);
-    TEST_ASSERT_NEAR(state->roll, roll_expected, 1e-3f);
-    TEST_ASSERT_NEAR(state->pitch, pitch_expected, 1e-3f);
+    TEST_ASSERT_NEAR(state->roll, roll_before_reset, 1e-6f);
+    TEST_ASSERT_NEAR(state->pitch, pitch_before_reset, 1e-6f);
 }
 
 static void test_stationary_gyro_drift_is_suppressed(void) {
@@ -1374,6 +1397,74 @@ static void test_chassis_motion_gait_switch_keeps_continuous_wheel_drive(void) {
     TEST_ASSERT(switched_to_walk == 1U);
 }
 
+static void test_chassis_translation_rotation_transitions_are_strictly_exclusive(void) {
+    chassis_control_input_t input;
+    chassis_control_status_t status;
+    uint8_t saw_rotation = 0U;
+    uint8_t saw_translation_again = 0U;
+    memset(&input, 0, sizeof(input));
+
+    reset_wheel_only_travel_cfg();
+    log_init();
+    bind_stub_motors();
+    chassis_control_init();
+    chassis_control_set_mode(CHASSIS_MODE_ONLINE);
+    input.valid_frame_count = 1U;
+    input.command.vx_m_s = 0.25f;
+
+    for (uint32_t tick = 0U; tick < 2200U; tick++) {
+        chassis_control_tick(&input, 0.002f, tick * 2U);
+    }
+    chassis_control_get_status(&status);
+    TEST_ASSERT(status.effective_vx_m_s > 0.20f);
+    TEST_ASSERT_NEAR(status.effective_wz_rad_s, 0.0f, 1e-6f);
+
+    /* A mixed upstream request is rotate-first, but only after translation is zero. */
+    input.command.vx_m_s = 0.25f;
+    input.command.wz_rad_s = 1.0f;
+    for (uint32_t tick = 1U; tick <= 500U; tick++) {
+        chassis_control_tick(&input, 0.002f, 4400U + tick * 2U);
+        chassis_control_get_status(&status);
+        const uint8_t translating =
+            (fabsf(status.effective_vx_m_s) > 1e-6f ||
+             fabsf(status.effective_vy_m_s) > 1e-6f) ? 1U : 0U;
+        const uint8_t rotating =
+            (fabsf(status.effective_wz_rad_s) > 1e-6f) ? 1U : 0U;
+        TEST_ASSERT(!(translating && rotating));
+        if (rotating) {
+            saw_rotation = 1U;
+            TEST_ASSERT(!translating);
+        }
+    }
+    TEST_ASSERT(saw_rotation == 1U);
+
+    input.command.wz_rad_s = 0.0f;
+    input.command.vx_m_s = -0.20f;
+    for (uint32_t tick = 1U; tick <= 900U; tick++) {
+        chassis_control_tick(&input, 0.002f, 5400U + tick * 2U);
+        chassis_control_get_status(&status);
+        const uint8_t translating =
+            (fabsf(status.effective_vx_m_s) > 1e-6f ||
+             fabsf(status.effective_vy_m_s) > 1e-6f) ? 1U : 0U;
+        const uint8_t rotating =
+            (fabsf(status.effective_wz_rad_s) > 1e-6f) ? 1U : 0U;
+        TEST_ASSERT(!(translating && rotating));
+        if (translating) {
+            saw_translation_again = 1U;
+            TEST_ASSERT(!rotating);
+        }
+    }
+    TEST_ASSERT(saw_translation_again == 1U);
+    TEST_ASSERT(status.effective_vx_m_s < -0.15f);
+    TEST_ASSERT_NEAR(status.effective_wz_rad_s, 0.0f, 1e-6f);
+
+    chassis_control_set_mode(CHASSIS_MODE_STANDALONE);
+    chassis_control_get_status(&status);
+    TEST_ASSERT_NEAR(status.effective_vx_m_s, 0.0f, 1e-6f);
+    TEST_ASSERT_NEAR(status.effective_vy_m_s, 0.0f, 1e-6f);
+    TEST_ASSERT_NEAR(status.effective_wz_rad_s, 0.0f, 1e-6f);
+}
+
 static void test_direct_wheel_test_bypasses_gait_and_times_out_to_hold(void) {
     chassis_control_input_t input;
     float wheel_rads[GAIT_LEG_NUM] = {0.5f, -0.7f, 1.0f, -1.2f};
@@ -1544,7 +1635,35 @@ static void test_exact_vx_0p1_frame_decodes_without_yaw(void) {
     TEST_ASSERT_NEAR(command.vy, 0.0f, 1e-6f);
     TEST_ASSERT_NEAR(command.wz, 0.0f, 1e-6f);
     TEST_ASSERT_NEAR(command.target_yaw, 0.0f, 1e-6f);
-    TEST_ASSERT(command.steer_mode == PROTO_STEER_MODE_AUTO_HOLD);
+    TEST_ASSERT(command.steer_mode == PROTO_STEER_MODE_OFF);
+}
+
+static void test_chassis_command_rejects_ambiguous_payload_length(void) {
+    uint8_t frame[64];
+    uint8_t payload[PROTO_CHASSIS_CMD_LEGACY_LEN + 1U] = {0U};
+    payload_chassis_cmd_t cmd = {
+        .vx = 0.2f,
+        .vy = 0.0f,
+        .wz = 0.0f,
+    };
+    task_comm_chassis_cmd_t command;
+    memcpy(payload, &cmd, sizeof(cmd));
+
+    TEST_ASSERT(bsp_usb_cdc_init() == APP_OK);
+    task_comm_init();
+    int frame_len = proto_frame_build(PROTO_FUNC_CHASSIS_CMD,
+                                      payload,
+                                      (uint8_t)sizeof(payload),
+                                      frame,
+                                      sizeof(frame));
+    TEST_ASSERT(frame_len > 0);
+    bsp_usb_cdc_test_inject_rx(frame, (uint32_t)frame_len);
+    task_comm_get_chassis(&command);
+
+    TEST_ASSERT(task_comm_dispatch_hit() == 1U);
+    TEST_ASSERT(command.seq == 0U);
+    TEST_ASSERT_NEAR(command.vx, 0.0f, 1e-6f);
+    TEST_ASSERT(command.steer_mode == PROTO_STEER_MODE_OFF);
 }
 
 static void test_usb_protocol_to_chassis_task_end_to_end(void) {
@@ -1629,6 +1748,14 @@ static void test_usb_gait_action_can_start_walk(void) {
 }
 
 static void test_protocol_function_ids_are_partitioned(void) {
+    const uint8_t competition_uplink_ids[] = {
+        PROTO_FUNC_COMMAND_STATUS,
+        PROTO_FUNC_SYSTEM_STATUS,
+        PROTO_FUNC_ODOMETRY,
+        PROTO_FUNC_WHEEL_STATE,
+        PROTO_FUNC_CHASSIS_DIAG,
+    };
+
     TEST_ASSERT(PROTO_FUNC_CHASSIS_CMD == 0x10U);
     TEST_ASSERT(PROTO_FUNC_ARM_TARGET == 0x11U);
     TEST_ASSERT(PROTO_FUNC_ARM_CMD == PROTO_FUNC_ARM_TARGET);
@@ -1641,11 +1768,23 @@ static void test_protocol_function_ids_are_partitioned(void) {
     TEST_ASSERT(PROTO_FUNC_ODOM_RESET == 0x18U);
     TEST_ASSERT(PROTO_FUNC_USB_CDC_PING == 0x21U);
     TEST_ASSERT(PROTO_FUNC_ARM_FEEDBACK == 0x86U);
-    TEST_ASSERT(PROTO_FUNC_WHEEL_STATE == 0x88U);
-    TEST_ASSERT(PROTO_FUNC_CHASSIS_DIAG == 0x89U);
+    TEST_ASSERT(PROTO_FUNC_COMMAND_STATUS == 0x88U);
+    TEST_ASSERT(PROTO_FUNC_SYSTEM_STATUS == 0x89U);
     TEST_ASSERT(PROTO_FUNC_ODOMETRY == 0x8AU);
+    TEST_ASSERT(PROTO_FUNC_WHEEL_STATE == 0x8BU);
+    TEST_ASSERT(PROTO_FUNC_CHASSIS_DIAG == 0x8CU);
     TEST_ASSERT(PROTO_ROBOT_MODE_REAR_PLACE == 5U);
     TEST_ASSERT(PROTO_ROBOT_MODE_MAX == PROTO_ROBOT_MODE_REAR_PLACE);
+
+    for (size_t i = 0U;
+         i < sizeof(competition_uplink_ids) / sizeof(competition_uplink_ids[0]);
+         i++) {
+        for (size_t j = i + 1U;
+             j < sizeof(competition_uplink_ids) / sizeof(competition_uplink_ids[0]);
+             j++) {
+            TEST_ASSERT(competition_uplink_ids[i] != competition_uplink_ids[j]);
+        }
+    }
 
     TEST_ASSERT(sizeof(payload_arm_target_t) == 13U);
     TEST_ASSERT(sizeof(payload_arm_pump_t) == 1U);
@@ -1657,6 +1796,26 @@ static void test_protocol_function_ids_are_partitioned(void) {
     TEST_ASSERT(sizeof(payload_chassis_diag_t) == 48U);
     TEST_ASSERT(sizeof(payload_odom_reset_t) == 12U);
     TEST_ASSERT(sizeof(payload_odometry_t) == 32U);
+}
+
+static void test_usb_tx_priority_classification(void) {
+    uint8_t frame[] = {
+        PROTO_HEAD1,
+        PROTO_HEAD2,
+        PROTO_FUNC_COMMAND_STATUS,
+        0U,
+        0U,
+    };
+
+    TEST_ASSERT(bsp_usb_cdc_test_priority_class(frame, sizeof(frame)) == 2U);
+    frame[2] = PROTO_FUNC_SYSTEM_STATUS;
+    TEST_ASSERT(bsp_usb_cdc_test_priority_class(frame, sizeof(frame)) == 1U);
+    frame[2] = PROTO_FUNC_ODOMETRY;
+    TEST_ASSERT(bsp_usb_cdc_test_priority_class(frame, sizeof(frame)) == 0U);
+    frame[2] = PROTO_FUNC_WHEEL_STATE;
+    TEST_ASSERT(bsp_usb_cdc_test_priority_class(frame, sizeof(frame)) == 0U);
+    frame[2] = PROTO_FUNC_CHASSIS_DIAG;
+    TEST_ASSERT(bsp_usb_cdc_test_priority_class(frame, sizeof(frame)) == 0U);
 }
 
 static chassis_odometry_input_t odometry_test_input(void) {
@@ -2287,7 +2446,7 @@ static void test_arm_control_internal_hold_survives_settle_timeout(void) {
     arm_control_status_t status;
     payload_arm_feedback_t feedback;
     arm_joint_angles_t measured = arm_test_home_angles();
-    arm_joint_angles_t fixed = arm_test_fixed_angles(measured.theta1_motor_rad);
+    arm_joint_angles_t fixed = arm_test_park_angles();
 
     bind_stub_motors();
     set_arm_stub_feedback_from_angles(&measured, 0U);
@@ -2565,7 +2724,15 @@ static void test_usb_arm_and_mode_protocol_cache(void) {
     TEST_ASSERT(bsp_usb_cdc_init() == APP_OK);
     task_comm_init();
 
-    int frame_len = proto_frame_build(PROTO_FUNC_ARM_TARGET,
+    int frame_len = proto_frame_build(PROTO_FUNC_MODE_CMD,
+                                      (const uint8_t*)&mode,
+                                      (uint8_t)sizeof(mode),
+                                      frame,
+                                      sizeof(frame));
+    TEST_ASSERT(frame_len > 0);
+    bsp_usb_cdc_test_inject_rx(frame, (uint32_t)frame_len);
+
+    frame_len = proto_frame_build(PROTO_FUNC_ARM_TARGET,
                                       (const uint8_t*)&target,
                                       (uint8_t)sizeof(target),
                                       frame,
@@ -2617,14 +2784,6 @@ static void test_usb_arm_and_mode_protocol_cache(void) {
     task_comm_get_arm_pump(&cached_pump);
     TEST_ASSERT(cached_pump.seq == 1U);
     TEST_ASSERT(cached_pump.pump_on == 1U);
-
-    frame_len = proto_frame_build(PROTO_FUNC_MODE_CMD,
-                                  (const uint8_t*)&mode,
-                                  (uint8_t)sizeof(mode),
-                                  frame,
-                                  sizeof(frame));
-    TEST_ASSERT(frame_len > 0);
-    bsp_usb_cdc_test_inject_rx(frame, (uint32_t)frame_len);
 
     task_comm_get_mode_cmd(&cached_mode);
     TEST_ASSERT(cached_mode.seq == 1U);
@@ -2812,6 +2971,437 @@ static void inject_proto_frame(uint8_t func_id, const void* payload, uint8_t len
     bsp_usb_cdc_test_inject_rx(frame, (uint32_t)frame_len);
 }
 
+static uint8_t find_last_tx_payload(uint8_t wanted_func,
+                                    void* payload_out,
+                                    uint8_t expected_len) {
+    uint8_t stream[512];
+    uint32_t size = bsp_usb_cdc_test_read_tx(stream, sizeof(stream));
+    uint8_t found = 0U;
+    uint32_t offset = 0U;
+
+    while (offset + 5U <= size) {
+        if (stream[offset] != PROTO_HEAD1 || stream[offset + 1U] != PROTO_HEAD2) {
+            offset++;
+            continue;
+        }
+        const uint8_t payload_len = stream[offset + 3U];
+        const uint32_t frame_len = (uint32_t)payload_len + 5U;
+        if (offset + frame_len > size) break;
+
+        uint8_t checksum = 0U;
+        for (uint32_t i = 0U; i + 1U < frame_len; i++) {
+            checksum = (uint8_t)(checksum + stream[offset + i]);
+        }
+        if (checksum == stream[offset + frame_len - 1U] &&
+            stream[offset + 2U] == wanted_func &&
+            payload_len == expected_len) {
+            if (payload_out && expected_len > 0U) {
+                memcpy(payload_out, &stream[offset + 4U], expected_len);
+            }
+            found = 1U;
+        }
+        offset += frame_len;
+    }
+    return found;
+}
+
+static void test_v2_payload_sizes_and_command_status_fields(void) {
+    payload_mode_cmd_v2_t mode = {
+        .mode = PROTO_ROBOT_MODE_ARM,
+        .command_seq = 0x10203040U,
+    };
+    payload_command_status_t status;
+    task_comm_mode_cmd_t cached;
+
+    TEST_ASSERT(sizeof(payload_arm_target_v2_t) == 17U);
+    TEST_ASSERT(sizeof(payload_arm_pump_v2_t) == 5U);
+    TEST_ASSERT(sizeof(payload_mode_cmd_v2_t) == 5U);
+    TEST_ASSERT(sizeof(payload_command_status_t) == 12U);
+    TEST_ASSERT(sizeof(payload_system_status_t) == 12U);
+
+    task_safety_estop_set(false);
+    bsp_time_init();
+    bind_stub_motors();
+    TEST_ASSERT(bsp_usb_cdc_init() == APP_OK);
+    task_comm_init();
+    task_chassis_init();
+    bsp_usb_cdc_test_reset();
+
+    inject_proto_frame(PROTO_FUNC_MODE_CMD, &mode, (uint8_t)sizeof(mode));
+    task_comm_get_mode_cmd(&cached);
+    TEST_ASSERT(cached.seq == 1U);
+    TEST_ASSERT(cached.sequenced == 1U);
+    TEST_ASSERT(cached.command_seq == mode.command_seq);
+    TEST_ASSERT(cached.mode == PROTO_ROBOT_MODE_ARM);
+    TEST_ASSERT(find_last_tx_payload(PROTO_FUNC_COMMAND_STATUS,
+                                     &status,
+                                     (uint8_t)sizeof(status)) == 1U);
+    TEST_ASSERT(status.boot_id == task_comm_boot_id());
+    TEST_ASSERT(status.command_seq == mode.command_seq);
+    TEST_ASSERT(status.command_func == PROTO_FUNC_MODE_CMD);
+    TEST_ASSERT(status.stage == PROTO_COMMAND_STAGE_COMPLETED);
+    TEST_ASSERT(status.result == PROTO_COMMAND_RESULT_OK);
+    TEST_ASSERT(status.actual_mode == PROTO_ROBOT_MODE_ARM);
+}
+
+static void test_v2_target_duplicate_and_stale_sequences_never_reexecute(void) {
+    payload_mode_cmd_v2_t mode = {
+        .mode = PROTO_ROBOT_MODE_ARM,
+        .command_seq = 10U,
+    };
+    payload_arm_target_v2_t first = {
+        .target = {
+            .target_type = PROTO_ARM_TARGET_GRASP,
+            .x_m = 0.21f,
+            .y_m = 0.10f,
+            .z_m = 0.34f,
+        },
+        .command_seq = 100U,
+    };
+    payload_arm_target_v2_t second = first;
+    task_comm_arm_target_t cached;
+    payload_command_status_t status;
+
+    second.target.x_m = 0.24f;
+    second.command_seq = 101U;
+
+    task_safety_estop_set(false);
+    bsp_time_init();
+    bind_stub_motors();
+    TEST_ASSERT(bsp_usb_cdc_init() == APP_OK);
+    task_comm_init();
+    task_chassis_init();
+    inject_proto_frame(PROTO_FUNC_MODE_CMD, &mode, (uint8_t)sizeof(mode));
+    bsp_usb_cdc_test_reset();
+
+    inject_proto_frame(PROTO_FUNC_ARM_TARGET, &first, (uint8_t)sizeof(first));
+    task_comm_get_arm_target(&cached);
+    TEST_ASSERT(cached.seq == 1U);
+    TEST_ASSERT(cached.command_seq == first.command_seq);
+
+    first.target.y_m = -0.10f;
+    inject_proto_frame(PROTO_FUNC_ARM_TARGET, &first, (uint8_t)sizeof(first));
+    task_comm_get_arm_target(&cached);
+    TEST_ASSERT(cached.seq == 1U);
+    TEST_ASSERT_NEAR(cached.y_m, 0.10f, 1e-6f);
+
+    inject_proto_frame(PROTO_FUNC_ARM_TARGET, &second, (uint8_t)sizeof(second));
+    task_comm_get_arm_target(&cached);
+    TEST_ASSERT(cached.seq == 2U);
+    TEST_ASSERT(cached.command_seq == second.command_seq);
+    TEST_ASSERT_NEAR(cached.x_m, second.target.x_m, 1e-6f);
+
+    bsp_usb_cdc_test_reset();
+    inject_proto_frame(PROTO_FUNC_ARM_TARGET, &first, (uint8_t)sizeof(first));
+    task_comm_get_arm_target(&cached);
+    TEST_ASSERT(cached.seq == 2U);
+    TEST_ASSERT(cached.command_seq == second.command_seq);
+    TEST_ASSERT(debug_comm_arm_target_accept_count == 2U);
+    TEST_ASSERT(find_last_tx_payload(PROTO_FUNC_COMMAND_STATUS,
+                                     &status,
+                                     (uint8_t)sizeof(status)) == 1U);
+    TEST_ASSERT(status.command_seq == first.command_seq);
+    TEST_ASSERT(status.stage == PROTO_COMMAND_STAGE_REJECTED);
+    TEST_ASSERT(status.result == PROTO_COMMAND_RESULT_STALE_SEQUENCE);
+}
+
+static void test_v2_mode_heartbeat_feeds_watchdog_and_idle_alone_recovers(void) {
+    payload_mode_cmd_v2_t nav = {
+        .mode = PROTO_ROBOT_MODE_NAV,
+        .command_seq = 1000U,
+    };
+    payload_mode_cmd_v2_t rejected_nav = nav;
+    payload_mode_cmd_v2_t idle = nav;
+    task_comm_mode_cmd_t cached;
+
+    rejected_nav.command_seq = 1001U;
+    idle.mode = PROTO_ROBOT_MODE_IDLE;
+    idle.command_seq = 1002U;
+
+    task_safety_estop_set(false);
+    bsp_time_init();
+    bind_stub_motors();
+    TEST_ASSERT(bsp_usb_cdc_init() == APP_OK);
+    task_comm_init();
+    task_chassis_init();
+
+    inject_proto_frame(PROTO_FUNC_MODE_CMD, &nav, (uint8_t)sizeof(nav));
+    task_comm_get_mode_cmd(&cached);
+    TEST_ASSERT(cached.seq == 1U);
+
+    bsp_time_test_advance_ms(400U);
+    inject_proto_frame(PROTO_FUNC_MODE_CMD, &nav, (uint8_t)sizeof(nav));
+    task_comm_get_mode_cmd(&cached);
+    TEST_ASSERT(cached.seq == 1U);
+    bsp_time_test_advance_ms(400U);
+    task_comm_watchdog_step((uint32_t)bsp_time_now_ms());
+    TEST_ASSERT(task_comm_watchdog_active() == 0U);
+
+    bsp_time_test_advance_ms(200U);
+    task_comm_watchdog_step((uint32_t)bsp_time_now_ms());
+    TEST_ASSERT(task_comm_watchdog_active() == 1U);
+    TEST_ASSERT(task_safety_estop_active());
+    TEST_ASSERT(task_comm_actual_mode() == PROTO_ROBOT_MODE_ERROR);
+
+    inject_proto_frame(PROTO_FUNC_MODE_CMD, &nav, (uint8_t)sizeof(nav));
+    TEST_ASSERT(task_comm_watchdog_active() == 1U);
+    inject_proto_frame(PROTO_FUNC_MODE_CMD,
+                       &rejected_nav,
+                       (uint8_t)sizeof(rejected_nav));
+    TEST_ASSERT(task_comm_watchdog_active() == 1U);
+    TEST_ASSERT(task_comm_actual_mode() == PROTO_ROBOT_MODE_ERROR);
+
+    inject_proto_frame(PROTO_FUNC_MODE_CMD, &idle, (uint8_t)sizeof(idle));
+    TEST_ASSERT(task_comm_watchdog_active() == 0U);
+    TEST_ASSERT(!task_safety_estop_active());
+    TEST_ASSERT(task_comm_actual_mode() == PROTO_ROBOT_MODE_IDLE);
+}
+
+static void test_v2_pump_off_completes_in_watchdog_error_before_idle_reset(void) {
+    payload_mode_cmd_v2_t arm = {
+        .mode = PROTO_ROBOT_MODE_ARM,
+        .command_seq = 500U,
+    };
+    payload_arm_pump_v2_t pump_off = {
+        .pump_on = 0U,
+        .command_seq = 700U,
+    };
+    payload_mode_cmd_v2_t session_idle = {
+        .mode = PROTO_ROBOT_MODE_IDLE,
+        .command_seq = 1U,
+    };
+    task_comm_arm_pump_t cached_pump;
+    task_comm_mode_cmd_t cached_mode;
+    payload_command_status_t status;
+    arm_joint_angles_t park = arm_test_park_angles();
+
+    task_safety_estop_set(false);
+    bsp_time_init();
+    log_init();
+    bsp_gpio_test_reset();
+    TEST_ASSERT(bsp_usb_cdc_init() == APP_OK);
+    task_comm_init();
+    bind_stub_motors();
+    task_chassis_init();
+    set_arm_stub_feedback_from_angles(&park, 0U);
+    task_arm_init();
+    Pump_Control_SetPA8(1U);
+
+    inject_proto_frame(PROTO_FUNC_MODE_CMD, &arm, (uint8_t)sizeof(arm));
+    bsp_time_test_advance_ms(APP_COMM_WATCHDOG_TIMEOUT_MS + 1U);
+    task_comm_watchdog_step((uint32_t)bsp_time_now_ms());
+    TEST_ASSERT(task_comm_watchdog_active() == 1U);
+    TEST_ASSERT(task_safety_estop_active());
+    TEST_ASSERT(task_comm_actual_mode() == PROTO_ROBOT_MODE_ERROR);
+
+    /* Prove ingress pump-off is effective even while the arm task is gated. */
+    Pump_Control_Set(1U);
+    bsp_usb_cdc_test_reset();
+    inject_proto_frame(PROTO_FUNC_ARM_PUMP,
+                       &pump_off,
+                       (uint8_t)sizeof(pump_off));
+    task_comm_get_arm_pump(&cached_pump);
+    TEST_ASSERT(cached_pump.seq == 1U);
+    TEST_ASSERT(cached_pump.command_seq == pump_off.command_seq);
+    TEST_ASSERT(cached_pump.pump_on == 0U);
+    TEST_ASSERT(arm_pump_is_enabled() == 0U);
+    TEST_ASSERT(arm_pump_aux_is_enabled(ARM_PUMP_AUX_PA8) == 1U);
+    TEST_ASSERT(find_last_tx_payload(PROTO_FUNC_COMMAND_STATUS,
+                                     &status,
+                                     (uint8_t)sizeof(status)) == 1U);
+    TEST_ASSERT(status.command_seq == pump_off.command_seq);
+    TEST_ASSERT(status.command_func == PROTO_FUNC_ARM_PUMP);
+    TEST_ASSERT(status.stage == PROTO_COMMAND_STAGE_COMPLETED);
+    TEST_ASSERT(status.result == PROTO_COMMAND_RESULT_OK);
+    TEST_ASSERT(status.actual_mode == PROTO_ROBOT_MODE_ERROR);
+
+    /* ESTOP consumption must not replace the ingress terminal status. */
+    task_arm_step_for_test(0.010f, (uint32_t)bsp_time_now_ms());
+    TEST_ASSERT(find_last_tx_payload(PROTO_FUNC_COMMAND_STATUS,
+                                     &status,
+                                     (uint8_t)sizeof(status)) == 1U);
+    TEST_ASSERT(status.command_seq == pump_off.command_seq);
+    TEST_ASSERT(status.stage == PROTO_COMMAND_STAGE_COMPLETED);
+    TEST_ASSERT(status.result == PROTO_COMMAND_RESULT_OK);
+
+    /* Duplicate retries recover COMPLETED without another task-side lifecycle. */
+    bsp_usb_cdc_test_reset();
+    inject_proto_frame(PROTO_FUNC_ARM_PUMP,
+                       &pump_off,
+                       (uint8_t)sizeof(pump_off));
+    task_comm_get_arm_pump(&cached_pump);
+    TEST_ASSERT(cached_pump.seq == 1U);
+    TEST_ASSERT(find_last_tx_payload(PROTO_FUNC_COMMAND_STATUS,
+                                     &status,
+                                     (uint8_t)sizeof(status)) == 1U);
+    TEST_ASSERT(status.command_seq == pump_off.command_seq);
+    TEST_ASSERT(status.stage == PROTO_COMMAND_STAGE_COMPLETED);
+
+    /* A restarted host can now complete its stale-IDLE session reset. */
+    bsp_usb_cdc_test_reset();
+    inject_proto_frame(PROTO_FUNC_MODE_CMD,
+                       &session_idle,
+                       (uint8_t)sizeof(session_idle));
+    task_comm_get_mode_cmd(&cached_mode);
+    TEST_ASSERT(cached_mode.command_seq == session_idle.command_seq);
+    TEST_ASSERT(cached_mode.mode == PROTO_ROBOT_MODE_IDLE);
+    TEST_ASSERT(task_comm_watchdog_active() == 0U);
+    TEST_ASSERT(!task_safety_estop_active());
+    TEST_ASSERT(task_comm_actual_mode() == PROTO_ROBOT_MODE_IDLE);
+    TEST_ASSERT(arm_pump_is_enabled() == 0U);
+    TEST_ASSERT(find_last_tx_payload(PROTO_FUNC_COMMAND_STATUS,
+                                     &status,
+                                     (uint8_t)sizeof(status)) == 1U);
+    TEST_ASSERT(status.command_seq == session_idle.command_seq);
+    TEST_ASSERT(status.command_func == PROTO_FUNC_MODE_CMD);
+    TEST_ASSERT(status.stage == PROTO_COMMAND_STAGE_COMPLETED);
+    TEST_ASSERT(status.result == PROTO_COMMAND_RESULT_OK);
+}
+
+static void test_v2_stale_idle_resets_host_session_but_stale_non_idle_rejects(void) {
+    payload_mode_cmd_v2_t arm = {
+        .mode = PROTO_ROBOT_MODE_ARM,
+        .command_seq = 500U,
+    };
+    payload_mode_cmd_v2_t stale_nav = {
+        .mode = PROTO_ROBOT_MODE_NAV,
+        .command_seq = 1U,
+    };
+    payload_mode_cmd_v2_t session_idle = {
+        .mode = PROTO_ROBOT_MODE_IDLE,
+        .command_seq = 1U,
+    };
+    payload_arm_target_v2_t target = {
+        .target = {
+            .target_type = PROTO_ARM_TARGET_GRASP,
+            .x_m = 0.21f,
+            .y_m = 0.10f,
+            .z_m = 0.34f,
+        },
+        .command_seq = 700U,
+    };
+    payload_arm_pump_v2_t pump = {
+        .pump_on = 1U,
+        .command_seq = 800U,
+    };
+    task_comm_mode_cmd_t cached_mode;
+    task_comm_arm_target_t cached_target;
+    task_comm_arm_pump_t cached_pump;
+    payload_command_status_t status;
+
+    task_safety_estop_set(false);
+    bsp_time_init();
+    bsp_gpio_test_reset();
+    bind_stub_motors();
+    arm_gravity_comp_init();
+    Pump_Control_Init();
+    TEST_ASSERT(bsp_usb_cdc_init() == APP_OK);
+    task_comm_init();
+    task_chassis_init();
+
+    inject_proto_frame(PROTO_FUNC_MODE_CMD, &arm, (uint8_t)sizeof(arm));
+    inject_proto_frame(PROTO_FUNC_ARM_TARGET, &target, (uint8_t)sizeof(target));
+    inject_proto_frame(PROTO_FUNC_ARM_PUMP, &pump, (uint8_t)sizeof(pump));
+    task_comm_get_arm_target(&cached_target);
+    task_comm_get_arm_pump(&cached_pump);
+    TEST_ASSERT(cached_target.command_seq == 700U);
+    TEST_ASSERT(cached_pump.command_seq == 800U);
+
+    /* A restarted host may not use a stale motion-bearing mode as its reset. */
+    bsp_usb_cdc_test_reset();
+    inject_proto_frame(PROTO_FUNC_MODE_CMD,
+                       &stale_nav,
+                       (uint8_t)sizeof(stale_nav));
+    task_comm_get_mode_cmd(&cached_mode);
+    TEST_ASSERT(cached_mode.seq == 1U);
+    TEST_ASSERT(cached_mode.mode == PROTO_ROBOT_MODE_ARM);
+    TEST_ASSERT(task_comm_actual_mode() == PROTO_ROBOT_MODE_ARM);
+    TEST_ASSERT(find_last_tx_payload(PROTO_FUNC_COMMAND_STATUS,
+                                     &status,
+                                     (uint8_t)sizeof(status)) == 1U);
+    TEST_ASSERT(status.command_seq == stale_nav.command_seq);
+    TEST_ASSERT(status.stage == PROTO_COMMAND_STAGE_REJECTED);
+    TEST_ASSERT(status.result == PROTO_COMMAND_RESULT_STALE_SEQUENCE);
+
+    /* Stale IDLE parks the robot and opens a fresh three-lane V2 session. */
+    bsp_usb_cdc_test_reset();
+    inject_proto_frame(PROTO_FUNC_MODE_CMD,
+                       &session_idle,
+                       (uint8_t)sizeof(session_idle));
+    task_comm_get_mode_cmd(&cached_mode);
+    TEST_ASSERT(cached_mode.seq == 2U);
+    TEST_ASSERT(cached_mode.command_seq == session_idle.command_seq);
+    TEST_ASSERT(cached_mode.mode == PROTO_ROBOT_MODE_IDLE);
+    TEST_ASSERT(task_comm_actual_mode() == PROTO_ROBOT_MODE_IDLE);
+    TEST_ASSERT(find_last_tx_payload(PROTO_FUNC_COMMAND_STATUS,
+                                     &status,
+                                     (uint8_t)sizeof(status)) == 1U);
+    TEST_ASSERT(status.command_seq == session_idle.command_seq);
+    TEST_ASSERT(status.stage == PROTO_COMMAND_STAGE_COMPLETED);
+    TEST_ASSERT(status.result == PROTO_COMMAND_RESULT_OK);
+
+    /* The exact retry is idempotent and recovers the cached terminal status. */
+    bsp_usb_cdc_test_reset();
+    inject_proto_frame(PROTO_FUNC_MODE_CMD,
+                       &session_idle,
+                       (uint8_t)sizeof(session_idle));
+    task_comm_get_mode_cmd(&cached_mode);
+    TEST_ASSERT(cached_mode.seq == 2U);
+    TEST_ASSERT(find_last_tx_payload(PROTO_FUNC_COMMAND_STATUS,
+                                     &status,
+                                     (uint8_t)sizeof(status)) == 1U);
+    TEST_ASSERT(status.stage == PROTO_COMMAND_STAGE_COMPLETED);
+
+    /* Late completions from the retired session cannot repopulate its cache. */
+    bsp_usb_cdc_test_reset();
+    TEST_ASSERT(task_comm_report_command_status(
+                    PROTO_FUNC_ARM_TARGET,
+                    700U,
+                    PROTO_COMMAND_STAGE_COMPLETED,
+                    PROTO_COMMAND_RESULT_OK) == APP_ERR_BUSY);
+    TEST_ASSERT(bsp_usb_cdc_test_tx_size() == 0U);
+
+    arm.command_seq = 2U;
+    target.command_seq = 1U;
+    pump.command_seq = 1U;
+    inject_proto_frame(PROTO_FUNC_MODE_CMD, &arm, (uint8_t)sizeof(arm));
+    inject_proto_frame(PROTO_FUNC_ARM_TARGET, &target, (uint8_t)sizeof(target));
+    inject_proto_frame(PROTO_FUNC_ARM_PUMP, &pump, (uint8_t)sizeof(pump));
+    task_comm_get_arm_target(&cached_target);
+    task_comm_get_arm_pump(&cached_pump);
+    TEST_ASSERT(cached_target.seq == 2U);
+    TEST_ASSERT(cached_target.command_seq == 1U);
+    TEST_ASSERT(cached_pump.seq == 2U);
+    TEST_ASSERT(cached_pump.command_seq == 1U);
+}
+
+static void test_system_status_reports_mode_pump_and_rear_slots(void) {
+    payload_system_status_t status;
+
+    task_safety_estop_set(false);
+    bsp_time_init();
+    bsp_gpio_test_reset();
+    TEST_ASSERT(bsp_usb_cdc_init() == APP_OK);
+    arm_gravity_comp_init();
+    Pump_Control_Init();
+    task_comm_init();
+    Pump_Control_Set(1U);
+    Pump_Control_SetPA8(1U);
+    Pump_Control_SetPC8(1U);
+    bsp_usb_cdc_test_reset();
+
+    TEST_ASSERT(task_comm_send_system_status(1234U) > 0);
+    TEST_ASSERT(find_last_tx_payload(PROTO_FUNC_SYSTEM_STATUS,
+                                     &status,
+                                     (uint8_t)sizeof(status)) == 1U);
+    TEST_ASSERT(status.boot_id == task_comm_boot_id());
+    TEST_ASSERT(status.uptime_ms == 1234U);
+    TEST_ASSERT(status.actual_mode == PROTO_ROBOT_MODE_IDLE);
+    TEST_ASSERT(status.main_pump_on == 1U);
+    TEST_ASSERT((status.safety_flags & PROTO_SAFETY_FLAG_REAR_SLOT_A_HELD) != 0U);
+    TEST_ASSERT((status.safety_flags & PROTO_SAFETY_FLAG_REAR_SLOT_B_HELD) != 0U);
+}
+
 static void test_usb_wheel_test_protocol_controls_direct_mode(void) {
     payload_wheel_test_t cmd = {
         .enable = PROTO_WHEEL_TEST_ENABLE,
@@ -2907,7 +3497,7 @@ static void test_task_arm_startup_requests_fixed_pose_immediately(void) {
     measured.theta1_motor_rad = 0.15f;
     measured.theta1_geo_rad =
         measured.theta1_motor_rad + ARM_KINEMATICS_DEFAULT_OFFSET.theta1_offset_rad;
-    arm_joint_angles_t fixed = arm_test_fixed_angles(measured.theta1_motor_rad);
+    arm_joint_angles_t fixed = arm_test_park_angles();
     arm_pose_t fixed_pose;
     arm_kinematics_forward(&ARM_KINEMATICS_DEFAULT_PARAMS, &fixed, &fixed_pose);
 
@@ -2931,6 +3521,7 @@ static void test_task_arm_startup_requests_fixed_pose_immediately(void) {
     TEST_ASSERT(status.target_type == ARM_CONTROL_TARGET_INTERNAL_HOLD);
     TEST_ASSERT(status.safe_move_stage == 0U);
     TEST_ASSERT(status.target_seq == 1U);
+    TEST_ASSERT(debug_arm_fixed_profile == 0U);
     TEST_ASSERT_NEAR(status.target_x_m, fixed_pose.x_m, 1e-4f);
     TEST_ASSERT_NEAR(status.target_y_m, fixed_pose.y_m, 1e-4f);
     TEST_ASSERT_NEAR(status.target_z_m, fixed_pose.z_m, 1e-4f);
@@ -3015,11 +3606,17 @@ static void test_task_arm_rejects_forbidden_grasp_without_leaving_fixed_pose(voi
     task_arm_step_for_test(0.010f, 20U);
 
     inject_proto_frame(PROTO_FUNC_MODE_CMD, &arm_mode, (uint8_t)sizeof(arm_mode));
+    set_arm_stub_feedback_from_angles(&measured, 40U);
+    task_arm_step_for_test(0.010f, 40U);
+    TEST_ASSERT(debug_arm_fixed_state == ARM_FIXED_MOVING);
+
+    /* This integration test begins once the startup waiting pose is held. */
+    debug_arm_fixed_state = ARM_FIXED_HOLDING;
     inject_proto_frame(PROTO_FUNC_ARM_TARGET,
                        &forbidden_grasp,
                        (uint8_t)sizeof(forbidden_grasp));
-    set_arm_stub_feedback_from_angles(&measured, 40U);
-    task_arm_step_for_test(0.010f, 40U);
+    set_arm_stub_feedback_from_angles(&measured, 60U);
+    task_arm_step_for_test(0.010f, 60U);
     arm_control_get_status(&status);
 
     TEST_ASSERT(debug_arm_grasp_j1_reject_count == 1U);
@@ -3037,7 +3634,7 @@ static void test_task_arm_nav_mode_keeps_fixed_pose(void) {
     measured.theta1_motor_rad = -0.20f;
     measured.theta1_geo_rad =
         measured.theta1_motor_rad + ARM_KINEMATICS_DEFAULT_OFFSET.theta1_offset_rad;
-    arm_joint_angles_t fixed = arm_test_fixed_angles(measured.theta1_motor_rad);
+    arm_joint_angles_t fixed = arm_test_park_angles();
     arm_pose_t fixed_pose;
     arm_kinematics_forward(&ARM_KINEMATICS_DEFAULT_PARAMS, &fixed, &fixed_pose);
 
@@ -3059,6 +3656,7 @@ static void test_task_arm_nav_mode_keeps_fixed_pose(void) {
     TEST_ASSERT(status.target_valid == 1U);
     TEST_ASSERT(status.target_type == ARM_CONTROL_TARGET_INTERNAL_HOLD);
     TEST_ASSERT(status.safe_move_stage == 0U);
+    TEST_ASSERT(debug_arm_fixed_profile == 0U);
     TEST_ASSERT_NEAR(status.target_x_m, fixed_pose.x_m, 1e-4f);
     TEST_ASSERT_NEAR(status.target_y_m, fixed_pose.y_m, 1e-4f);
     TEST_ASSERT_NEAR(status.target_z_m, fixed_pose.z_m, 1e-4f);
@@ -3108,6 +3706,7 @@ static void test_task_arm_live_expression_forces_gravity_only(void) {
     arm_joint_angles_t measured = arm_test_home_angles();
 
     task_safety_estop_set(false);
+    bsp_time_init();
     log_init();
     bsp_gpio_test_reset();
     TEST_ASSERT(bsp_usb_cdc_init() == APP_OK);
@@ -3117,9 +3716,15 @@ static void test_task_arm_live_expression_forces_gravity_only(void) {
     task_arm_init();
 
     inject_proto_frame(PROTO_FUNC_MODE_CMD, &arm_mode, (uint8_t)sizeof(arm_mode));
+    task_arm_step_for_test(0.010f, 20U);
+    TEST_ASSERT(debug_arm_fixed_state == ARM_FIXED_MOVING);
+
+    /* Exercise command handling from the normal held waiting pose. */
+    debug_arm_fixed_state = ARM_FIXED_HOLDING;
     inject_proto_frame(PROTO_FUNC_ARM_TARGET, &grasp, (uint8_t)sizeof(grasp));
     inject_proto_frame(PROTO_FUNC_ARM_PUMP, &pump, (uint8_t)sizeof(pump));
-    task_arm_step_for_test(0.010f, 20U);
+    set_arm_stub_feedback_from_angles(&measured, 40U);
+    task_arm_step_for_test(0.010f, 40U);
     TEST_ASSERT(arm_pump_is_enabled() == 1U);
 
     Pump_Control_SetPC8(1U);
@@ -3127,8 +3732,8 @@ static void test_task_arm_live_expression_forces_gravity_only(void) {
     Pump_Control_SetPA8(1U);
     Pump_Control_SetPA9(1U);
     debug_arm_force_gravity_only = 1U;
-    set_arm_stub_feedback_from_angles(&measured, 40U);
-    task_arm_step_for_test(0.010f, 40U);
+    set_arm_stub_feedback_from_angles(&measured, 60U);
+    task_arm_step_for_test(0.010f, 60U);
     arm_control_get_status(&status);
 
     TEST_ASSERT(Arm_Control_IsGravityOnlyMode() == 1U);
@@ -3142,8 +3747,8 @@ static void test_task_arm_live_expression_forces_gravity_only(void) {
     TEST_ASSERT(arm_pump_aux_is_enabled(ARM_PUMP_AUX_PA9) == 0U);
 
     debug_arm_force_gravity_only = 0U;
-    set_arm_stub_feedback_from_angles(&measured, 60U);
-    task_arm_step_for_test(0.010f, 60U);
+    set_arm_stub_feedback_from_angles(&measured, 80U);
+    task_arm_step_for_test(0.010f, 80U);
     arm_control_get_status(&status);
     TEST_ASSERT(Arm_Control_IsGravityOnlyMode() == 0U);
     TEST_ASSERT(debug_arm_fixed_state == ARM_FIXED_MOVING);
@@ -3161,6 +3766,7 @@ static void test_task_chassis_nav_mode_allows_motion(void) {
         .wz = 1.0f,
     };
 
+    bsp_time_init();
     log_init();
     bind_stub_motors();
     TEST_ASSERT(bsp_usb_cdc_init() == APP_OK);
@@ -3169,10 +3775,15 @@ static void test_task_chassis_nav_mode_allows_motion(void) {
     task_chassis_set_mode(CHASSIS_MODE_ONLINE);
 
     inject_proto_frame(PROTO_FUNC_MODE_CMD, &mode, (uint8_t)sizeof(mode));
-    inject_proto_frame(PROTO_FUNC_CHASSIS_CMD, &cmd, (uint8_t)sizeof(cmd));
 
     for (uint32_t tick = 0U; tick < 1800U; tick++) {
-        task_chassis_step_for_test(0.002f, tick * 2U);
+        if ((tick % 100U) == 0U) {
+            inject_proto_frame(PROTO_FUNC_CHASSIS_CMD,
+                               &cmd,
+                               (uint8_t)sizeof(cmd));
+        }
+        task_chassis_step_for_test(0.002f, (uint32_t)bsp_time_now_ms());
+        bsp_time_test_advance_ms(2U);
     }
 
     TEST_ASSERT(task_chassis_get_gait_active() == CHASSIS_GAIT_WALK);
@@ -3207,7 +3818,8 @@ static void test_task_chassis_arm_mode_gates_chassis_motion(void) {
     }
 
     chassis_control_get_status(&status);
-    TEST_ASSERT(status.online == 1U);
+    TEST_ASSERT(status.mode == CHASSIS_MODE_STANDALONE);
+    TEST_ASSERT(status.online == 0U);
     TEST_ASSERT(status.moving == 0U);
     TEST_ASSERT(status.active_gait == CHASSIS_GAIT_STAND);
     for (int i = 0; i < GAIT_LEG_NUM; i++) {
@@ -3231,8 +3843,9 @@ static void test_task_arm_consumes_protocol_in_arm_mode(void) {
     };
     arm_control_status_t status;
     arm_joint_angles_t reached = arm_test_ik_target(target.x_m, target.y_m, target.z_m);
-    uint8_t tx[64];
+    payload_arm_feedback_t feedback;
 
+    bsp_time_init();
     log_init();
     bsp_gpio_test_reset();
     TEST_ASSERT(bsp_usb_cdc_init() == APP_OK);
@@ -3245,10 +3858,17 @@ static void test_task_arm_consumes_protocol_in_arm_mode(void) {
     bsp_usb_cdc_test_reset();
 
     inject_proto_frame(PROTO_FUNC_MODE_CMD, &mode, (uint8_t)sizeof(mode));
+    bsp_time_test_advance_ms(20U);
+    task_arm_step_for_test(0.010f, 20U);
+    TEST_ASSERT(debug_arm_fixed_state != ARM_FIXED_RELEASED_TO_HOST);
+    debug_arm_fixed_state = ARM_FIXED_HOLDING;
+    bsp_usb_cdc_test_reset();
+
     inject_proto_frame(PROTO_FUNC_ARM_TARGET, &target, (uint8_t)sizeof(target));
     inject_proto_frame(PROTO_FUNC_ARM_PUMP, &pump, (uint8_t)sizeof(pump));
-
-    task_arm_step_for_test(0.010f, 20U);
+    bsp_time_test_advance_ms(20U);
+    set_arm_stub_feedback_from_angles(&reached, 40U);
+    task_arm_step_for_test(0.010f, 40U);
     arm_control_get_status(&status);
 
     TEST_ASSERT(status.enabled == 1U);
@@ -3261,17 +3881,18 @@ static void test_task_arm_consumes_protocol_in_arm_mode(void) {
     TEST_ASSERT(status.pump_on == 1U);
     TEST_ASSERT(arm_pump_is_enabled() == 1U);
     TEST_ASSERT(bsp_gpio_read_latch(BSP_GPIO_ARM_PUMP_MAIN) == 1U);
-    TEST_ASSERT(status.target_seq == 1U);
-    TEST_ASSERT(status.pump_seq == 1U);
-    TEST_ASSERT(bsp_usb_cdc_test_tx_size() == 5U + sizeof(payload_arm_feedback_t));
-    TEST_ASSERT(bsp_usb_cdc_test_read_tx(tx, sizeof(tx)) ==
-                5U + sizeof(payload_arm_feedback_t));
-    TEST_ASSERT(tx[2] == PROTO_FUNC_ARM_FEEDBACK);
-    TEST_ASSERT(tx[4] == PROTO_ARM_STATE_MOVING);
+    TEST_ASSERT(status.target_seq >= 1U);
+    TEST_ASSERT(status.pump_seq >= 1U);
+    TEST_ASSERT(find_last_tx_payload(PROTO_FUNC_ARM_FEEDBACK,
+                                     &feedback,
+                                     (uint8_t)sizeof(feedback)) == 1U);
+    TEST_ASSERT(feedback.arm_state == PROTO_ARM_STATE_MOVING);
 
     /* Let the GRASP target finish and settle, then issue PLACE + pump off. */
+    bsp_time_test_advance_ms(260U);
     set_arm_stub_feedback_from_angles(&reached, 300U);
     task_arm_step_for_test(0.010f, 300U);
+    bsp_time_test_advance_ms(220U);
     set_arm_stub_feedback_from_angles(&reached, 520U);
     task_arm_step_for_test(0.010f, 520U);
 
@@ -3280,17 +3901,330 @@ static void test_task_arm_consumes_protocol_in_arm_mode(void) {
     payload_arm_pump_t pump_off = { .pump_on = 0U };
     inject_proto_frame(PROTO_FUNC_ARM_TARGET, &place, (uint8_t)sizeof(place));
     inject_proto_frame(PROTO_FUNC_ARM_PUMP, &pump_off, (uint8_t)sizeof(pump_off));
+    bsp_time_test_advance_ms(20U);
     set_arm_stub_feedback_from_angles(&reached, 540U);
     task_arm_step_for_test(0.010f, 540U);
+
+    bsp_time_test_advance_ms(260U);
+    set_arm_stub_feedback_from_angles(&reached, 800U);
+    task_arm_step_for_test(0.010f, 800U);
+    bsp_time_test_advance_ms(260U);
+    set_arm_stub_feedback_from_angles(&reached, 1060U);
+    task_arm_step_for_test(0.010f, 1060U);
 
     TEST_ASSERT(Arm_Serial_Protocol_PlaceCycleSequence() == 1U);
     TEST_ASSERT(debug_serial_waiting_next_grasp == 1U);
     TEST_ASSERT(arm_pump_is_enabled() == 0U);
-    TEST_ASSERT(debug_arm_fixed_state == ARM_FIXED_MOVING);
-    TEST_ASSERT(Arm_Control_GetMode() == ARM_CONTROL_POSITION_HOLD);
+    TEST_ASSERT(debug_arm_fixed_state == ARM_FIXED_WAIT_FEEDBACK);
+    TEST_ASSERT(Arm_Control_GetMode() == ARM_CONTROL_GRAVITY);
 
-    task_arm_step_for_test(0.010f, 560U);
+    bsp_time_test_advance_ms(20U);
+    task_arm_step_for_test(0.010f, 1080U);
     TEST_ASSERT(Arm_Serial_Protocol_PlaceCycleSequence() == 1U);
+
+    bsp_time_test_advance_ms(3020U);
+    set_arm_stub_feedback_from_angles(&reached, 4100U);
+    task_arm_step_for_test(0.010f, 4100U);
+    TEST_ASSERT(debug_arm_fixed_state == ARM_FIXED_WAIT_FEEDBACK);
+    bsp_time_test_advance_ms(20U);
+    set_arm_stub_feedback_from_angles(&reached, 4120U);
+    task_arm_step_for_test(0.010f, 4120U);
+    TEST_ASSERT(debug_arm_fixed_state == ARM_FIXED_MOVING);
+}
+
+static void test_v2_stow_uses_park_without_releasing_rear_slots(void) {
+    payload_mode_cmd_v2_t arm_mode = {
+        .mode = PROTO_ROBOT_MODE_ARM,
+        .command_seq = 500U,
+    };
+    payload_arm_target_v2_t stow = {
+        .target = {
+            .target_type = PROTO_ARM_TARGET_STOW,
+            .x_m = 0.0f,
+            .y_m = 0.0f,
+            .z_m = 0.0f,
+        },
+        .command_seq = 600U,
+    };
+    arm_joint_angles_t park = arm_test_park_angles();
+    payload_command_status_t status;
+
+    task_safety_estop_set(false);
+    bsp_time_init();
+    log_init();
+    bsp_gpio_test_reset();
+    TEST_ASSERT(bsp_usb_cdc_init() == APP_OK);
+    task_comm_init();
+    bind_stub_motors();
+    task_chassis_init();
+    set_arm_stub_feedback_from_angles(&park, 0U);
+    task_arm_init();
+    Pump_Control_Set(1U);
+    Pump_Control_SetPA8(1U);
+    Pump_Control_SetPC8(1U);
+    Pump_Control_SetPC9(1U);
+
+    inject_proto_frame(PROTO_FUNC_MODE_CMD, &arm_mode, (uint8_t)sizeof(arm_mode));
+    inject_proto_frame(PROTO_FUNC_ARM_TARGET, &stow, (uint8_t)sizeof(stow));
+    bsp_time_test_advance_ms(20U);
+    set_arm_stub_feedback_from_angles(&park, 20U);
+    task_arm_step_for_test(0.010f, 20U);
+
+    TEST_ASSERT(debug_arm_fixed_profile == 0U);
+    TEST_ASSERT(debug_arm_fixed_state == ARM_FIXED_MOVING);
+    TEST_ASSERT(arm_pump_is_enabled() == 0U);
+    TEST_ASSERT(arm_pump_aux_is_enabled(ARM_PUMP_AUX_PA8) == 1U);
+    TEST_ASSERT(arm_pump_aux_is_enabled(ARM_PUMP_AUX_PC8) == 1U);
+    TEST_ASSERT(arm_pump_aux_is_enabled(ARM_PUMP_AUX_PC9) == 1U);
+    TEST_ASSERT(Arm_Serial_Protocol_PlaceCycleSequence() == 0U);
+
+    bsp_time_test_advance_ms(280U);
+    set_arm_stub_feedback_from_angles(&park, 300U);
+    task_arm_step_for_test(0.010f, 300U);
+    bsp_time_test_advance_ms(260U);
+    set_arm_stub_feedback_from_angles(&park, 560U);
+    task_arm_step_for_test(0.010f, 560U);
+    bsp_time_test_advance_ms(260U);
+    set_arm_stub_feedback_from_angles(&park, 820U);
+    task_arm_step_for_test(0.010f, 820U);
+    TEST_ASSERT(debug_arm_fixed_state == ARM_FIXED_HOLDING);
+
+    bsp_usb_cdc_test_reset();
+    inject_proto_frame(PROTO_FUNC_ARM_TARGET, &stow, (uint8_t)sizeof(stow));
+    TEST_ASSERT(find_last_tx_payload(PROTO_FUNC_COMMAND_STATUS,
+                                     &status,
+                                     (uint8_t)sizeof(status)) == 1U);
+    TEST_ASSERT(status.command_seq == stow.command_seq);
+    TEST_ASSERT(status.command_func == PROTO_FUNC_ARM_TARGET);
+    TEST_ASSERT(status.stage == PROTO_COMMAND_STAGE_COMPLETED);
+    TEST_ASSERT(status.result == PROTO_COMMAND_RESULT_OK);
+    TEST_ASSERT(arm_pump_aux_is_enabled(ARM_PUMP_AUX_PA8) == 1U);
+    TEST_ASSERT(arm_pump_aux_is_enabled(ARM_PUMP_AUX_PC8) == 1U);
+    TEST_ASSERT(arm_pump_aux_is_enabled(ARM_PUMP_AUX_PC9) == 1U);
+}
+
+static void test_task_arm_work_mode_switch_stops_old_motion_and_keeps_rear_slots(void) {
+    const uint8_t source_modes[2] = {
+        PROTO_ROBOT_MODE_ARM,
+        PROTO_ROBOT_MODE_REAR_PLACE,
+    };
+    const uint8_t destination_modes[2] = {
+        PROTO_ROBOT_MODE_REAR_PLACE,
+        PROTO_ROBOT_MODE_ARM,
+    };
+    const arm_joint_angles_t measured = arm_test_home_angles();
+
+    for (uint32_t direction = 0U; direction < 2U; direction++) {
+        payload_mode_cmd_v2_t source_mode = {
+            .mode = source_modes[direction],
+            .command_seq = 100U + direction * 10U,
+        };
+        payload_mode_cmd_v2_t destination_mode = {
+            .mode = destination_modes[direction],
+            .command_seq = 101U + direction * 10U,
+        };
+        payload_arm_target_v2_t target = {
+            .target = {
+                .target_type = PROTO_ARM_TARGET_GRASP,
+                .x_m = 0.0f,
+                .y_m = 0.237065f,
+                .z_m = 0.34f,
+            },
+            .command_seq = 200U + direction,
+        };
+        arm_control_status_t status;
+        payload_command_status_t terminal;
+
+        task_safety_estop_set(false);
+        bsp_time_init();
+        log_init();
+        bsp_gpio_test_reset();
+        TEST_ASSERT(bsp_usb_cdc_init() == APP_OK);
+        task_comm_init();
+        bind_stub_motors();
+        task_chassis_init();
+        set_arm_stub_feedback_from_angles(&measured, 0U);
+        task_arm_init();
+
+        inject_proto_frame(PROTO_FUNC_MODE_CMD,
+                           &source_mode,
+                           (uint8_t)sizeof(source_mode));
+        bsp_time_test_advance_ms(20U);
+        set_arm_stub_feedback_from_angles(&measured, 20U);
+        task_arm_step_for_test(0.010f, 20U);
+        debug_arm_fixed_state = ARM_FIXED_HOLDING;
+
+        inject_proto_frame(PROTO_FUNC_ARM_TARGET,
+                           &target,
+                           (uint8_t)sizeof(target));
+        bsp_time_test_advance_ms(20U);
+        set_arm_stub_feedback_from_angles(&measured, 40U);
+        task_arm_step_for_test(0.010f, 40U);
+        arm_control_get_status(&status);
+        TEST_ASSERT(debug_arm_fixed_state == ARM_FIXED_RELEASED_TO_HOST);
+        TEST_ASSERT(status.target_valid == 1U);
+        TEST_ASSERT(status.target_type == PROTO_ARM_TARGET_GRASP);
+        TEST_ASSERT(Arm_Control_GetMoveStatus() == ARM_MOVE_MOVING ||
+                    Arm_Control_GetMoveStatus() == ARM_MOVE_SETTLING);
+
+        Pump_Control_SetPA8(1U);
+        Pump_Control_SetPC8(1U);
+        Pump_Control_SetPC9(1U);
+
+        bsp_usb_cdc_test_reset();
+        inject_proto_frame(PROTO_FUNC_MODE_CMD,
+                           &destination_mode,
+                           (uint8_t)sizeof(destination_mode));
+        bsp_time_test_advance_ms(20U);
+        set_arm_stub_feedback_from_angles(&measured, 60U);
+        task_arm_step_for_test(0.010f, 60U);
+        arm_control_get_status(&status);
+
+        TEST_ASSERT(debug_arm_fixed_profile == 1U);
+        TEST_ASSERT(debug_arm_fixed_state == ARM_FIXED_MOVING);
+        TEST_ASSERT(status.target_valid == 1U);
+        TEST_ASSERT(status.target_type == ARM_CONTROL_TARGET_INTERNAL_HOLD);
+        TEST_ASSERT(debug_arm_rear_place_avoidance_enabled ==
+                    (destination_modes[direction] ==
+                     PROTO_ROBOT_MODE_REAR_PLACE ? 1U : 0U));
+        TEST_ASSERT(arm_pump_is_enabled() == 0U);
+        TEST_ASSERT(arm_pump_aux_is_enabled(ARM_PUMP_AUX_PA8) == 1U);
+        TEST_ASSERT(arm_pump_aux_is_enabled(ARM_PUMP_AUX_PC8) == 1U);
+        TEST_ASSERT(arm_pump_aux_is_enabled(ARM_PUMP_AUX_PC9) == 1U);
+        TEST_ASSERT(Arm_Serial_Protocol_PlaceCycleSequence() == 0U);
+        TEST_ASSERT(find_last_tx_payload(PROTO_FUNC_COMMAND_STATUS,
+                                         &terminal,
+                                         (uint8_t)sizeof(terminal)) == 1U);
+        TEST_ASSERT(terminal.command_func == PROTO_FUNC_ARM_TARGET);
+        TEST_ASSERT(terminal.command_seq == target.command_seq);
+        TEST_ASSERT(terminal.stage == PROTO_COMMAND_STAGE_ERROR);
+        TEST_ASSERT(terminal.result == PROTO_COMMAND_RESULT_WRONG_MODE);
+    }
+}
+
+static void test_v2_watchdog_terminates_active_target(void) {
+    payload_mode_cmd_v2_t arm_mode = {
+        .mode = PROTO_ROBOT_MODE_ARM,
+        .command_seq = 900U,
+    };
+    payload_arm_target_v2_t target = {
+        .target = {
+            .target_type = PROTO_ARM_TARGET_GRASP,
+            .x_m = 0.0f,
+            .y_m = 0.237065f,
+            .z_m = 0.34f,
+        },
+        .command_seq = 901U,
+    };
+    const arm_joint_angles_t measured = arm_test_home_angles();
+    payload_command_status_t terminal;
+
+    task_safety_estop_set(false);
+    bsp_time_init();
+    log_init();
+    bsp_gpio_test_reset();
+    TEST_ASSERT(bsp_usb_cdc_init() == APP_OK);
+    task_comm_init();
+    bind_stub_motors();
+    task_chassis_init();
+    set_arm_stub_feedback_from_angles(&measured, 0U);
+    task_arm_init();
+
+    inject_proto_frame(PROTO_FUNC_MODE_CMD,
+                       &arm_mode,
+                       (uint8_t)sizeof(arm_mode));
+    bsp_time_test_advance_ms(20U);
+    set_arm_stub_feedback_from_angles(&measured, 20U);
+    task_arm_step_for_test(0.010f, 20U);
+    debug_arm_fixed_state = ARM_FIXED_HOLDING;
+
+    inject_proto_frame(PROTO_FUNC_ARM_TARGET,
+                       &target,
+                       (uint8_t)sizeof(target));
+    bsp_time_test_advance_ms(20U);
+    set_arm_stub_feedback_from_angles(&measured, 40U);
+    task_arm_step_for_test(0.010f, 40U);
+
+    bsp_usb_cdc_test_reset();
+    bsp_time_test_advance_ms(APP_COMM_WATCHDOG_TIMEOUT_MS + 1U);
+    task_comm_watchdog_step((uint32_t)bsp_time_now_ms());
+    task_arm_step_for_test(0.010f, (uint32_t)bsp_time_now_ms());
+
+    TEST_ASSERT(find_last_tx_payload(PROTO_FUNC_COMMAND_STATUS,
+                                     &terminal,
+                                     (uint8_t)sizeof(terminal)) == 1U);
+    TEST_ASSERT(terminal.command_func == PROTO_FUNC_ARM_TARGET);
+    TEST_ASSERT(terminal.command_seq == target.command_seq);
+    TEST_ASSERT(terminal.stage == PROTO_COMMAND_STAGE_ERROR);
+    TEST_ASSERT(terminal.result == PROTO_COMMAND_RESULT_WATCHDOG);
+}
+
+static void settle_direct_arm_at_target(const arm_joint_angles_t* reached) {
+    TEST_ASSERT(reached != NULL);
+    Arm_Control_Process();
+    bsp_time_test_advance_ms(300U);
+    set_arm_stub_feedback_from_angles(reached, (uint32_t)bsp_time_now_ms());
+    Arm_Control_Process();
+    bsp_time_test_advance_ms(260U);
+    set_arm_stub_feedback_from_angles(reached, (uint32_t)bsp_time_now_ms());
+    Arm_Control_Process();
+    bsp_time_test_advance_ms(260U);
+    set_arm_stub_feedback_from_angles(reached, (uint32_t)bsp_time_now_ms());
+    Arm_Control_Process();
+    TEST_ASSERT(Arm_Control_GetMoveStatus() == ARM_MOVE_REACHED);
+}
+
+static void test_rear_unload_releases_only_matching_slot_after_main_pump_grasps(void) {
+    const float target_x = -0.2170f;
+    const float target_z = 0.3635f;
+
+    for (uint8_t slot = 0U; slot < 2U; slot++) {
+        const float target_y = (slot == 0U) ? 0.2200f : -0.2200f;
+        arm_joint_angles_t reached = arm_test_ik_target(target_x, target_y, target_z);
+
+        bsp_time_init();
+        log_init();
+        bsp_gpio_test_reset();
+        TEST_ASSERT(bsp_usb_cdc_init() == APP_OK);
+        bind_stub_motors();
+        set_arm_stub_feedback_from_angles(&reached, 0U);
+        arm_gravity_comp_init();
+        Pump_Control_Init();
+        Arm_Control_Init(NULL);
+        (void)arm_control_set_rear_place_avoidance(1U);
+        Arm_Serial_Protocol_Init();
+        Arm_Serial_Protocol_SetRearPlaceMode(1U);
+        Pump_Control_SetPA8(1U);
+        Pump_Control_SetPC8(1U);
+        Pump_Control_SetPC9(1U);
+
+        Arm_Serial_Protocol_QueueTarget(PROTO_ARM_TARGET_GRASP,
+                                        target_x,
+                                        target_y,
+                                        target_z);
+        Arm_Serial_Protocol_Process();
+        TEST_ASSERT(arm_pump_aux_is_enabled(ARM_PUMP_AUX_PA8) == 1U);
+        TEST_ASSERT(arm_pump_aux_is_enabled(ARM_PUMP_AUX_PC8) == 1U);
+        TEST_ASSERT(arm_pump_aux_is_enabled(ARM_PUMP_AUX_PC9) == 1U);
+
+        settle_direct_arm_at_target(&reached);
+        TEST_ASSERT(arm_pump_aux_is_enabled(ARM_PUMP_AUX_PA8) == 1U);
+        TEST_ASSERT(arm_pump_aux_is_enabled(ARM_PUMP_AUX_PC8) == 1U);
+        TEST_ASSERT(arm_pump_aux_is_enabled(ARM_PUMP_AUX_PC9) == 1U);
+
+        Arm_Serial_Protocol_QueuePump(1U);
+        Arm_Serial_Protocol_Process();
+        TEST_ASSERT(arm_pump_is_enabled() == 1U);
+        if (slot == 0U) {
+            TEST_ASSERT(arm_pump_aux_is_enabled(ARM_PUMP_AUX_PA8) == 0U);
+            TEST_ASSERT(arm_pump_aux_is_enabled(ARM_PUMP_AUX_PC8) == 1U);
+            TEST_ASSERT(arm_pump_aux_is_enabled(ARM_PUMP_AUX_PC9) == 1U);
+        } else {
+            TEST_ASSERT(arm_pump_aux_is_enabled(ARM_PUMP_AUX_PA8) == 1U);
+            TEST_ASSERT(arm_pump_aux_is_enabled(ARM_PUMP_AUX_PC8) == 0U);
+            TEST_ASSERT(arm_pump_aux_is_enabled(ARM_PUMP_AUX_PC9) == 0U);
+        }
+    }
 }
 
 static void test_task_arm_holds_state_and_discards_usb_commands_outside_arm_mode(void) {
@@ -3319,41 +4253,60 @@ static void test_task_arm_holds_state_and_discards_usb_commands_outside_arm_mode
         .z_m = 0.31f,
     };
     arm_control_status_t status;
+    task_comm_arm_target_t cached_target;
+    task_comm_arm_pump_t cached_pump;
+    arm_joint_angles_t reached = arm_test_ik_target(target_a.x_m,
+                                                     target_a.y_m,
+                                                     target_a.z_m);
 
+    bsp_time_init();
     log_init();
     bsp_gpio_test_reset();
     TEST_ASSERT(bsp_usb_cdc_init() == APP_OK);
     task_comm_init();
+    bind_stub_motors();
+    set_arm_stub_feedback_from_angles(&reached, 0U);
     task_arm_init();
 
     inject_proto_frame(PROTO_FUNC_MODE_CMD, &arm_mode, (uint8_t)sizeof(arm_mode));
+    bsp_time_test_advance_ms(20U);
+    task_arm_step_for_test(0.010f, 20U);
+    debug_arm_fixed_state = ARM_FIXED_HOLDING;
     inject_proto_frame(PROTO_FUNC_ARM_TARGET, &target_a, (uint8_t)sizeof(target_a));
     inject_proto_frame(PROTO_FUNC_ARM_PUMP, &pump, (uint8_t)sizeof(pump));
-    task_arm_step_for_test(0.010f, 20U);
+    bsp_time_test_advance_ms(20U);
+    set_arm_stub_feedback_from_angles(&reached, 40U);
+    task_arm_step_for_test(0.010f, 40U);
     arm_control_get_status(&status);
     TEST_ASSERT(status.enabled == 1U);
-    TEST_ASSERT(status.target_seq == 1U);
-    TEST_ASSERT(status.pump_seq == 1U);
+    TEST_ASSERT(status.target_seq >= 1U);
+    TEST_ASSERT(status.pump_seq >= 1U);
     TEST_ASSERT(arm_pump_is_enabled() == 1U);
     TEST_ASSERT(bsp_gpio_read_latch(BSP_GPIO_ARM_PUMP_MAIN) == 1U);
 
     inject_proto_frame(PROTO_FUNC_MODE_CMD, &nav_mode, (uint8_t)sizeof(nav_mode));
     inject_proto_frame(PROTO_FUNC_ARM_TARGET, &target_b, (uint8_t)sizeof(target_b));
     inject_proto_frame(PROTO_FUNC_ARM_PUMP, &pump_off, (uint8_t)sizeof(pump_off));
-    task_arm_step_for_test(0.010f, 40U);
+    bsp_time_test_advance_ms(20U);
+    set_arm_stub_feedback_from_angles(&reached, 60U);
+    task_arm_step_for_test(0.010f, 60U);
     arm_control_get_status(&status);
+    task_comm_get_arm_target(&cached_target);
+    task_comm_get_arm_pump(&cached_pump);
     TEST_ASSERT(status.enabled == 1U);
-    TEST_ASSERT(status.target_seq == 1U);
-    TEST_ASSERT(status.pump_seq == 2U);
-    TEST_ASSERT_NEAR(status.target_x_m, target_a.x_m, 1e-6f);
-    TEST_ASSERT_NEAR(status.target_y_m, target_a.y_m, 1e-6f);
-    TEST_ASSERT_NEAR(status.target_z_m, target_a.z_m, 1e-6f);
-    TEST_ASSERT(status.pump_on == 0U);
+    TEST_ASSERT(status.target_type == ARM_CONTROL_TARGET_INTERNAL_HOLD);
+    TEST_ASSERT(debug_arm_fixed_profile == 0U);
+    TEST_ASSERT(cached_target.seq == 1U);
+    TEST_ASSERT_NEAR(cached_target.x_m, target_a.x_m, 1e-6f);
+    TEST_ASSERT_NEAR(cached_target.y_m, target_a.y_m, 1e-6f);
+    TEST_ASSERT_NEAR(cached_target.z_m, target_a.z_m, 1e-6f);
+    TEST_ASSERT(cached_pump.seq == 2U);
+    TEST_ASSERT(cached_pump.pump_on == 0U);
     TEST_ASSERT(arm_pump_is_enabled() == 0U);
     TEST_ASSERT(bsp_gpio_read_latch(BSP_GPIO_ARM_PUMP_MAIN) == 0U);
 }
 
-static void test_task_arm_estop_disables_motion_but_keeps_vacuum(void) {
+static void test_task_arm_estop_disables_motion_and_main_pump_but_keeps_rear_slot(void) {
     const payload_mode_cmd_t arm_mode = { .mode = PROTO_ROBOT_MODE_ARM };
     const payload_mode_cmd_t estop_mode = { .mode = PROTO_ROBOT_MODE_ESTOP };
     const payload_arm_target_t grasp = {
@@ -3367,6 +4320,7 @@ static void test_task_arm_estop_disables_motion_but_keeps_vacuum(void) {
     arm_joint_angles_t measured = arm_test_home_angles();
 
     task_safety_estop_set(false);
+    bsp_time_init();
     log_init();
     bsp_gpio_test_reset();
     TEST_ASSERT(bsp_usb_cdc_init() == APP_OK);
@@ -3374,22 +4328,30 @@ static void test_task_arm_estop_disables_motion_but_keeps_vacuum(void) {
     bind_stub_motors();
     set_arm_stub_feedback_from_angles(&measured, 0U);
     task_arm_init();
+    Pump_Control_SetPA8(1U);
 
     inject_proto_frame(PROTO_FUNC_MODE_CMD, &arm_mode, (uint8_t)sizeof(arm_mode));
+    bsp_time_test_advance_ms(20U);
+    task_arm_step_for_test(0.010f, 20U);
+    debug_arm_fixed_state = ARM_FIXED_HOLDING;
     inject_proto_frame(PROTO_FUNC_ARM_TARGET, &grasp, (uint8_t)sizeof(grasp));
     inject_proto_frame(PROTO_FUNC_ARM_PUMP, &pump, (uint8_t)sizeof(pump));
-    task_arm_step_for_test(0.010f, 20U);
+    bsp_time_test_advance_ms(20U);
+    set_arm_stub_feedback_from_angles(&measured, 40U);
+    task_arm_step_for_test(0.010f, 40U);
     TEST_ASSERT(arm_pump_is_enabled() == 1U);
 
     inject_proto_frame(PROTO_FUNC_MODE_CMD, &estop_mode, (uint8_t)sizeof(estop_mode));
-    task_arm_step_for_test(0.010f, 40U);
+    bsp_time_test_advance_ms(20U);
+    task_arm_step_for_test(0.010f, 60U);
     arm_control_get_status(&status);
 
     TEST_ASSERT(task_safety_estop_active());
     TEST_ASSERT(status.enabled == 0U);
     TEST_ASSERT(status.motor_output_enabled == 0U);
-    TEST_ASSERT(arm_pump_is_enabled() == 1U);
-    TEST_ASSERT(bsp_gpio_read_latch(BSP_GPIO_ARM_PUMP_MAIN) == 1U);
+    TEST_ASSERT(arm_pump_is_enabled() == 0U);
+    TEST_ASSERT(bsp_gpio_read_latch(BSP_GPIO_ARM_PUMP_MAIN) == 0U);
+    TEST_ASSERT(arm_pump_aux_is_enabled(ARM_PUMP_AUX_PA8) == 1U);
     for (uint32_t i = MOTOR_ID_ARM_J1; i <= MOTOR_ID_ARM_J4; i++) {
         TEST_ASSERT(s_stub_devs[i].state.online == 0U);
     }
@@ -3658,13 +4620,16 @@ int main(void) {
     test_chassis_deadband_does_not_roll_wheels();
     test_chassis_wheel_speed_ramps_with_gait_blend();
     test_chassis_motion_gait_switch_keeps_continuous_wheel_drive();
+    test_chassis_translation_rotation_transitions_are_strictly_exclusive();
     test_direct_wheel_test_bypasses_gait_and_times_out_to_hold();
     test_attitude_comp_applies_balance_torque_ff();
     test_chassis_arm_load_comp_updates_leg_payload_from_measured_arm();
     test_exact_vx_0p1_frame_decodes_without_yaw();
+    test_chassis_command_rejects_ambiguous_payload_length();
     test_usb_protocol_to_chassis_task_end_to_end();
     test_usb_gait_action_can_start_walk();
     test_protocol_function_ids_are_partitioned();
+    test_usb_tx_priority_classification();
     test_chassis_odometry_fuses_wheel_speed_and_yaw_rate();
     test_chassis_odometry_rejects_transition_wheel_measurement();
     test_arm_kinematics_inverse_forward_roundtrip();
@@ -3694,6 +4659,12 @@ int main(void) {
     test_arm_control_extend_stage_large_target_change_retracts();
     test_arm_control_fine_tracking_replans_small_updates();
     test_usb_arm_and_mode_protocol_cache();
+    test_v2_payload_sizes_and_command_status_fields();
+    test_v2_target_duplicate_and_stale_sequences_never_reexecute();
+    test_v2_mode_heartbeat_feeds_watchdog_and_idle_alone_recovers();
+    test_v2_pump_off_completes_in_watchdog_error_before_idle_reset();
+    test_v2_stale_idle_resets_host_session_but_stale_non_idle_rejects();
+    test_system_status_reports_mode_pump_and_rear_slots();
     test_usb_arm_feedback_frame_tx();
     test_usb_wheel_feedback_frame_tx();
     test_usb_chassis_diag_frame_tx();
@@ -3711,8 +4682,12 @@ int main(void) {
     test_task_chassis_nav_mode_allows_motion();
     test_task_chassis_arm_mode_gates_chassis_motion();
     test_task_arm_consumes_protocol_in_arm_mode();
+    test_v2_stow_uses_park_without_releasing_rear_slots();
+    test_task_arm_work_mode_switch_stops_old_motion_and_keeps_rear_slots();
+    test_v2_watchdog_terminates_active_target();
+    test_rear_unload_releases_only_matching_slot_after_main_pump_grasps();
     test_task_arm_holds_state_and_discards_usb_commands_outside_arm_mode();
-    test_task_arm_estop_disables_motion_but_keeps_vacuum();
+    test_task_arm_estop_disables_motion_and_main_pump_but_keeps_rear_slot();
     test_damiao_mit_pack_center_values();
     test_dm4310_legacy_mit_wrapper_uses_registry_motor();
     test_dm4310_legacy_parse_feedback_updates_debug_pose();

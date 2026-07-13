@@ -3,22 +3,23 @@
 ## 上电与安全检查
 
 1. 将机器人架空，保持机体静止至少 1 秒，等待 BMI088 零偏标定完成。
-2. 确认 `0x89.flags` 的 `bit0` 为 1；否则航向闭环会自动降级为原始 `wz` 直通。
-3. 架空发送低速直行，确认四轮方向一致，`0x88` 和 `0x89` 的 FL/FR/RL/RR 顺序正确。
+2. 确认 `0x8C.flags` 的 `bit0` 为 1；否则航向闭环会自动降级为原始 `wz` 直通。
+3. 架空发送低速直行，确认四轮方向一致，`0x8B` 和 `0x8C` 的 FL/FR/RL/RR 顺序正确。
 4. 手动让机体产生小角度偏航，确认 `effective_wz` 的方向会把 yaw 拉回锁存值。
 
 ## 下行命令
 
-- 旧 `0x10`、12 字节 payload：`vx, vy, wz` 三个 little-endian float，默认 `AUTO_HOLD`。
+- 旧 `0x10`、12 字节 payload：`vx, vy, wz` 三个 little-endian float，默认 `OFF`。
 - 扩展 `0x10`、17 字节 payload：前三个 float 后追加 `target_yaw` float 和 `steer_mode` byte。
 - `steer_mode=0`：OFF；`1`：ABSOLUTE；`2`：AUTO_HOLD。
 - AUTO_HOLD 在 `|vx| > 0.05 m/s` 且 `|wz| < 0.05 rad/s` 时锁存当前 yaw。手动转弯或停车会释放锁存，下次直行重新锁存。
+- AUTO_HOLD 只能通过 17 字节扩展帧显式启用；任务赛导航不启用该模式，并保持平移与原地旋转互斥。
 
 ## 上行诊断
 
-`0x88` 保持原格式，25 Hz 输出四轮实际速度 float，单位 rad/s。
+`0x8B` 以 25 Hz 输出四轮实际速度 float，单位 rad/s。
 
-`0x89` 为 48 字节 little-endian payload，25 Hz：
+`0x8C` 为 48 字节 little-endian payload，25 Hz：
 
 | 偏移 | 字段 | 类型 | 换算 |
 | ---: | --- | --- | --- |
@@ -38,7 +39,7 @@ flags：`bit0 IMU_READY`、`bit1 HEADING_HOLD`、`bit2 WHEEL_SATURATED`、`bit3 
 
 ## 分级路试
 
-每种地面按 `0.15 -> 0.30 -> 0.50 -> 0.70 m/s` 逐级测试，每级先走 2 m，确认无振荡后再走 5 m。记录完整的 `0x88/0x89` 数据，并测量终点航向和横向偏移。
+每种地面按 `0.15 -> 0.30 -> 0.50 -> 0.70 m/s` 逐级测试，每级先走 2 m，确认无振荡后再走 5 m。记录完整的 `0x8B/0x8C` 数据，并测量终点航向和横向偏移。
 
 优先按现象调参：
 
