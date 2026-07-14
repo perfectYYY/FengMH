@@ -84,6 +84,7 @@ flowchart TD
 - `0x80 STATE`：`task_comm_entry()` 10 Hz 发送。
 - `0x81 MOTOR_STATE`：`task_comm_entry()` 5 Hz 轮询发送单电机状态。
 - `0x86 ARM_FEEDBACK`：`task_arm` 50 Hz 发送机械臂末端反馈。
+- `0x87 ARM_MOTOR_ANGLES`：`task_arm` 50 Hz 发送 J1-J4 原始电机角度。
 - `0x88 WHEEL_STATE`：25 Hz 同步发送四轮实际转速。
 - `0x89 CHASSIS_DIAG`：25 Hz 发送轮速目标/滤波值、电流、yaw、gyro_z 和状态标志。
 - `0x8A TROT_TEST_DIAG`：仅模式 3 下 25 Hz 发送 TROT 相位、支撑掩码、足端目标高度和关节跟踪误差。
@@ -117,6 +118,7 @@ task_comm_get_chassis/mode
 
 - 轮速使用完整局部速度：`v_wheel_x = vx - wz * y_leg`，默认 `|y_leg| = 0.15 m`。
 - 普通行驶默认启用 `wheel_only_travel`：足端不使用 `vx`，直行时三个步长字段全部为 0；边行驶边转向时只保留 `-wz * y_leg` 的左右步差。
+- `0x10` 接收入口把有限 `vx` 限制在 `-0.50..+0.50 m/s`，非有限值按零速处理；`0x80` 回显该有效值。
 - `vy` 只参与 moving 判断，不进入 2DOF 足端横向轨迹。
 - `g_chassis_stride_cfg` 默认使用现场标定的固定 `0.2525 s` 周期（约 `3.96 Hz`），固定抬脚高度 `0.055 m`、duty `0.60`；`wheel_only_travel=1` 时前进步长为零，可用 `wheel_only_travel=0` 回退旧平移步长。
 - `g_chassis_turn_cfg` 默认让低速 `walk` 转向复用普通行进的 `0.2525 s` 周期；轮差速保持完整 `wz`，腿部 yaw 步长默认缩放为旧值的 `25%`。`match_travel_period` 和 `turn_leg_scale` 可用于现场回退或调参。

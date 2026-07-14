@@ -29,6 +29,8 @@
 
 static const char* TAG = "COMM";
 
+#define NAV_VALIDATED_MAX_VX_M_S 0.50f
+
 static proto_frame_parser_t  s_parser;
 static proto_dispatcher_t    s_disp;
 static task_comm_chassis_cmd_t s_chassis;
@@ -57,8 +59,8 @@ static const uint32_t MOTOR_TX_INTERVAL_MS  = 200;  /* 5Hz, motor states are rou
 static const uint32_t WHEEL_TX_INTERVAL_MS  = 40;   /* 25Hz, FL/FR/RL/RR synchronized */
 static const uint32_t DIAG_TX_INTERVAL_MS   = 40;   /* 25Hz */
 static const uint32_t TROT_TEST_TX_INTERVAL_MS = 40; /* 25Hz, only mode 3 */
-static const uint8_t TX_STATE_ENABLE        = 0U;   /* 0x80: disabled for pure wheel speed tests */
-static const uint8_t TX_MOTOR_ENABLE        = 0U;   /* 0x81: disabled for pure wheel speed tests */
+static const uint8_t TX_STATE_ENABLE        = 1U;   /* 0x80: complete host state feedback */
+static const uint8_t TX_MOTOR_ENABLE        = 1U;   /* 0x81: round-robin motor feedback */
 static const uint8_t TX_WHEEL_ENABLE        = 1U;   /* 0x88: keep four-wheel velocity telemetry */
 static const uint8_t TX_DIAG_ENABLE         = 1U;   /* 0x89: keep steer diagnostics when present */
 static const uint8_t TX_TROT_TEST_ENABLE    = 1U;
@@ -72,7 +74,15 @@ static void mark_valid_rx(void) {
 static void cache_chassis_base_command(const uint8_t* p) {
     payload_chassis_cmd_t cmd;
     memcpy(&cmd, p, sizeof(cmd));
-    s_chassis.vx = cmd.vx;
+    if (!isfinite(cmd.vx)) {
+        s_chassis.vx = 0.0f;
+    } else if (cmd.vx > NAV_VALIDATED_MAX_VX_M_S) {
+        s_chassis.vx = NAV_VALIDATED_MAX_VX_M_S;
+    } else if (cmd.vx < -NAV_VALIDATED_MAX_VX_M_S) {
+        s_chassis.vx = -NAV_VALIDATED_MAX_VX_M_S;
+    } else {
+        s_chassis.vx = cmd.vx;
+    }
     s_chassis.vy = cmd.vy;
     s_chassis.wz = cmd.wz;
 }

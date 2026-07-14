@@ -36,7 +36,7 @@ static uint32_t s_place_hold_start_ms;
 
 static const uint32_t ARM_FEEDBACK_TX_INTERVAL_MS = 20U;  /* 50 Hz */
 static const uint32_t ARM_FEEDBACK_RETRY_INTERVAL_MS = 5U;
-static const uint8_t ARM_FEEDBACK_TX_ENABLE = 0U; /* 0x86/0x87: disabled for pure wheel speed tests */
+static const uint8_t ARM_FEEDBACK_TX_ENABLE = 1U; /* 0x86/0x87: complete host feedback */
 static const uint32_t ARM_FIXED_ERROR_RETRY_MS = 500U;
 static const uint32_t ARM_DEBUG_SNAPSHOT_INTERVAL_MS = 100U;
 

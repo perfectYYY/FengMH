@@ -1563,6 +1563,34 @@ static void test_exact_vx_0p1_frame_decodes_without_yaw(void) {
     TEST_ASSERT(command.steer_mode == PROTO_STEER_MODE_AUTO_HOLD);
 }
 
+static void test_chassis_vx_is_limited_to_validated_speed(void) {
+    static const float inputs[] = {0.70f, -0.70f, 0.50f, -0.50f, NAN, INFINITY};
+    static const float expected[] = {0.50f, -0.50f, 0.50f, -0.50f, 0.0f, 0.0f};
+    uint8_t frame[32];
+    task_comm_chassis_cmd_t command;
+
+    TEST_ASSERT(bsp_usb_cdc_init() == APP_OK);
+    task_comm_init();
+
+    for (uint32_t i = 0U; i < (uint32_t)(sizeof(inputs) / sizeof(inputs[0])); i++) {
+        payload_chassis_cmd_t cmd = {
+            .vx = inputs[i],
+            .vy = 0.0f,
+            .wz = 0.0f,
+        };
+        int frame_len = proto_frame_build(PROTO_FUNC_CHASSIS_CMD,
+                                          (const uint8_t*)&cmd,
+                                          (uint8_t)sizeof(cmd),
+                                          frame,
+                                          sizeof(frame));
+        TEST_ASSERT(frame_len > 0);
+        bsp_usb_cdc_test_inject_rx(frame, (uint32_t)frame_len);
+        task_comm_get_chassis(&command);
+        TEST_ASSERT_NEAR(command.vx, expected[i], 1e-6f);
+        TEST_ASSERT(command.seq == i + 1U);
+    }
+}
+
 static void test_usb_protocol_to_chassis_task_end_to_end(void) {
     uint8_t frame[64];
     payload_chassis_cmd_t cmd = {
@@ -2643,6 +2671,35 @@ static void test_usb_arm_feedback_frame_tx(void) {
     TEST_ASSERT(tx[frame_len - 1] == checksum);
 }
 
+static void test_usb_arm_motor_angles_frame_tx(void) {
+    payload_arm_motor_angles_t angles = {
+        .online_mask = 0x0FU,
+        .j1_angle_rad = 0.10f,
+        .j2_angle_rad = -0.20f,
+        .j3_angle_rad = 0.30f,
+        .j4_angle_rad = -0.40f,
+    };
+    uint8_t tx[64];
+
+    TEST_ASSERT(bsp_usb_cdc_init() == APP_OK);
+    task_comm_init();
+    bsp_usb_cdc_test_reset();
+
+    int frame_len = task_comm_send_arm_motor_angles(&angles);
+    TEST_ASSERT(frame_len == 5 + (int)sizeof(angles));
+    TEST_ASSERT(bsp_usb_cdc_test_read_tx(tx, sizeof(tx)) == (uint32_t)frame_len);
+    TEST_ASSERT(tx[0] == PROTO_HEAD1);
+    TEST_ASSERT(tx[1] == PROTO_HEAD2);
+    TEST_ASSERT(tx[2] == PROTO_FUNC_ARM_MOTOR_ANGLES);
+    TEST_ASSERT(tx[3] == sizeof(angles));
+    TEST_ASSERT(tx[4] == 0x0FU);
+    uint8_t checksum = 0U;
+    for (int i = 0; i < frame_len - 1; i++) {
+        checksum = (uint8_t)(checksum + tx[i]);
+    }
+    TEST_ASSERT(tx[frame_len - 1] == checksum);
+}
+
 static void test_usb_wheel_feedback_frame_tx(void) {
     uint8_t tx[64];
     payload_wheel_state_t payload;
@@ -3666,6 +3723,7 @@ int main(void) {
     test_attitude_comp_applies_balance_torque_ff();
     test_chassis_arm_load_comp_updates_leg_payload_from_measured_arm();
     test_exact_vx_0p1_frame_decodes_without_yaw();
+    test_chassis_vx_is_limited_to_validated_speed();
     test_usb_protocol_to_chassis_task_end_to_end();
     test_usb_gait_action_can_start_walk();
     test_protocol_function_ids_are_partitioned();
@@ -3697,6 +3755,7 @@ int main(void) {
     test_arm_control_fine_tracking_replans_small_updates();
     test_usb_arm_and_mode_protocol_cache();
     test_usb_arm_feedback_frame_tx();
+    test_usb_arm_motor_angles_frame_tx();
     test_usb_wheel_feedback_frame_tx();
     test_usb_chassis_diag_frame_tx();
     test_usb_trot_test_diag_frame_tx();
