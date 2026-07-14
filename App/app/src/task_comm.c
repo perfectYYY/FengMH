@@ -46,9 +46,11 @@ volatile uint32_t debug_comm_arm_target_reject_count;
 /* 上行帧发送周期控制 */
 static uint32_t s_last_state_tx_ms  = 0;  /* 0x80 上次发送时间 */
 static uint32_t s_last_motor_tx_ms  = 0;  /* 0x81 上次发送时间 */
+static uint32_t s_last_mode_feedback_tx_ms = 0; /* 0x8B 上次发送时间 */
 #if APP_TARGET_MCU
 static const uint32_t STATE_TX_INTERVAL_MS  = 100;  /* 10Hz */
 static const uint32_t MOTOR_TX_INTERVAL_MS  = 200;  /* 5Hz, motor states are round-robin */
+static const uint32_t MODE_FEEDBACK_TX_INTERVAL_MS = 100; /* 10Hz */
 #endif
 
 static void mark_valid_rx(void) {
@@ -376,6 +378,7 @@ void task_comm_init(void) {
     s_last_rx_ms = 0;
     s_last_state_tx_ms = 0;
     s_last_motor_tx_ms = 0;
+    s_last_mode_feedback_tx_ms = 0;
     proto_dispatcher_init(&s_disp, s_tbl, sizeof(s_tbl)/sizeof(s_tbl[0]));
     proto_frame_init(&s_parser, proto_dispatch_on_frame, &s_disp);
     bsp_usb_cdc_attach_rx(on_usb_rx, NULL);
@@ -467,6 +470,21 @@ int task_comm_send_arm_feedback(const payload_arm_feedback_t* feedback) {
                               (uint8_t)sizeof(*feedback));
 }
 
+int task_comm_send_mode_feedback(const payload_mode_feedback_t* feedback) {
+    if (!feedback) return APP_ERR_INVALID_ARG;
+    return send_proto_payload(PROTO_FUNC_MODE_FEEDBACK,
+                              feedback,
+                              (uint8_t)sizeof(*feedback));
+}
+
+int task_comm_send_arm_execution_feedback(
+    const payload_arm_execution_feedback_t* feedback) {
+    if (!feedback) return APP_ERR_INVALID_ARG;
+    return send_proto_payload(PROTO_FUNC_ARM_EXECUTION_FEEDBACK,
+                              feedback,
+                              (uint8_t)sizeof(*feedback));
+}
+
 int task_comm_send_arm_motor_angles(const payload_arm_motor_angles_t* angles) {
     if (!angles) return APP_ERR_INVALID_ARG;
     return send_proto_payload(PROTO_FUNC_ARM_MOTOR_ANGLES,
@@ -478,6 +496,14 @@ int task_comm_send_arm_motor_angles(const payload_arm_motor_angles_t* angles) {
 static void send_state_frame(void) {
     payload_state_t p = build_state_payload();
     (void)send_proto_payload(PROTO_FUNC_STATE, &p, (uint8_t)sizeof(p));
+}
+
+static void send_mode_feedback_frame(void) {
+    payload_mode_feedback_t feedback;
+    feedback.mode = (s_mode_cmd.seq > 0U) ?
+        s_mode_cmd.mode : PROTO_ROBOT_MODE_IDLE;
+    feedback.safety_stop_active = task_safety_estop_active() ? 1U : 0U;
+    (void)task_comm_send_mode_feedback(&feedback);
 }
 
 static int build_motor_payload(uint8_t motor_idx, payload_motor_one_t* out) {
@@ -520,6 +546,12 @@ void task_comm_entry(void* arg) {
     /* 解析在 bsp_usb_cdc 的 rx 回调里同步完成；本任务做上行帧定时发送 */
     for (;;) {
         uint32_t now = (uint32_t)bsp_time_now_ms();
+
+        /* 先发模式回执；上位机只有收到 0x8B 才会放行 NAV/ARM。 */
+        if ((now - s_last_mode_feedback_tx_ms) >= MODE_FEEDBACK_TX_INTERVAL_MS) {
+            send_mode_feedback_frame();
+            s_last_mode_feedback_tx_ms = now;
+        }
 
         /* 低频发送整机状态，避免串口调试助手被上行帧刷满 */
         if ((now - s_last_state_tx_ms) >= STATE_TX_INTERVAL_MS) {

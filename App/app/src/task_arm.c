@@ -444,13 +444,24 @@ static void send_feedback_if_due(uint32_t now_ms) {
 
     payload_arm_feedback_t feedback;
     payload_arm_motor_angles_t motor_angles;
+    payload_arm_execution_feedback_t execution;
     build_integrated_feedback(&feedback);
     build_motor_angles_feedback(&motor_angles);
+    memset(&execution, 0, sizeof(execution));
+    execution.ready_for_grasp =
+        (arm_work_mode(current_robot_mode()) &&
+         debug_arm_fixed_state == ARM_FIXED_HOLDING &&
+         !s_place_hold_active &&
+         !s_gravity_only_override_active) ? 1U : 0U;
+    execution.pump_on = Pump_Control_IsEnabled() ? 1U : 0U;
+    execution.arm_state = feedback.arm_state;
+    execution.place_cycle_sequence = Arm_Serial_Protocol_PlaceCycleSequence();
     s_last_feedback_attempt_ms = now_ms;
     if (task_comm_send_arm_feedback(&feedback) > 0) {
         s_last_feedback_tx_ms = now_ms;
     }
     (void)task_comm_send_arm_motor_angles(&motor_angles);
+    (void)task_comm_send_arm_execution_feedback(&execution);
 }
 
 static uint32_t snapshot_motor_age_ms(const motor_dev_t* motor,

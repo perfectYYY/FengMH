@@ -66,6 +66,11 @@ void task_comm_get_mode_cmd(task_comm_mode_cmd_t* out);
 
 /* 机械臂 feedback 上行；后续 task_arm 以此发送 PROTO_FUNC_ARM_FEEDBACK */
 int task_comm_send_arm_feedback(const payload_arm_feedback_t* feedback);
+/* 当前整机模式回执；MVP 收到后才允许 NAV/ARM 状态继续。 */
+int task_comm_send_mode_feedback(const payload_mode_feedback_t* feedback);
+/* ARM readiness/pump/place-cycle acknowledgement; drives event-based MVP sequencing. */
+int task_comm_send_arm_execution_feedback(
+    const payload_arm_execution_feedback_t* feedback);
 /* 机械臂 J1..J4 原始电机角度上行；FuncID=PROTO_FUNC_ARM_MOTOR_ANGLES。 */
 int task_comm_send_arm_motor_angles(const payload_arm_motor_angles_t* angles);
 

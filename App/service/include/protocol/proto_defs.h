@@ -39,6 +39,8 @@ extern "C" {
 #define PROTO_FUNC_USB_CDC_PONG 0x85
 #define PROTO_FUNC_ARM_FEEDBACK 0x86
 #define PROTO_FUNC_ARM_MOTOR_ANGLES 0x87
+#define PROTO_FUNC_MODE_FEEDBACK 0x8B
+#define PROTO_FUNC_ARM_EXECUTION_FEEDBACK 0x8C
 #define PROTO_FUNC_EVENT        0x8F
 
 #define PROTO_ROBOT_MODE_IDLE   0u
@@ -138,6 +140,19 @@ typedef struct __attribute__((packed)) {
     float   end_z_m;      /* current end-effector z in arm_base, m */
     float   theta1_rad;   /* base joint angle, rad */
 } payload_arm_feedback_t; /* FuncID 0x86, len=17 */
+
+typedef struct __attribute__((packed)) {
+    uint8_t mode;                /* applied PROTO_ROBOT_MODE_* */
+    uint8_t safety_stop_active;  /* task_safety_estop_active() */
+} payload_mode_feedback_t; /* FuncID 0x8B, len=2 */
+
+typedef struct __attribute__((packed)) {
+    uint8_t ready_for_grasp;     /* fixed waiting pose reached in ARM mode */
+    uint8_t pump_on;             /* actual main vacuum output */
+    uint8_t arm_state;           /* PROTO_ARM_STATE_* */
+    uint8_t reserved;
+    uint32_t place_cycle_sequence; /* increments after PLACE reached + pump off */
+} payload_arm_execution_feedback_t; /* FuncID 0x8C, len=8 */
 
 /* J1..J4 原始电机反馈角度；online_mask bit0..3 对应 J1..J4，角度单位 rad。 */
 typedef struct __attribute__((packed)) {
