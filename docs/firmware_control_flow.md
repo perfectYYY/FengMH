@@ -149,9 +149,9 @@ gait_output
 3. 非 ARM 模式默认进入 `PARK` 固定姿态；ARM 模式进入第一箱等待姿态。
 4. 等待姿态到位后，只有新的合法 `GRASP` 目标会释放给 host 抓放流程。
 5. `task_comm` 中缓存的 `0x11/0x14` 只有在 `ROBOT_MODE_ARM` 且固定姿态已释放后才排进 `Arm_Serial_Protocol_QueueTarget/QueuePump()`。
-6. `Arm_Serial_Protocol_Process()` 保留旧 target/pump/place-cycle 语义：PLACE 到位后延迟关泵、切重力模式、等待下一次 GRASP。
+6. `Arm_Serial_Protocol_Process()` 保留旧 target/pump/place-cycle 语义：若关泵命令先到，则缓存到 PLACE 到位事件再执行；随后切重力模式并等待下一次 GRASP，不按固定时长判定完成。
 7. `Arm_Control_Process()` 包装到 `arm_control_tick()`，执行 IK、三段式安全运动、fine tracking、五次轨迹、重力补偿、达妙 MIT 输出。
-8. PLACE cycle 完成后，`task_arm` 等待 `APP_ARM_PLACE_HOLD_AFTER_PUMP_OFF_MS=3000 ms`，再进入第二箱等待姿态序列。
+8. PLACE 到位且主泵实际关闭后，`place_cycle_sequence` 递增，并立即由该确认事件启动第二箱等待姿态序列；不使用固定等待时间推进。
 
 机械臂 target 校验：
 

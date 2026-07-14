@@ -32,7 +32,6 @@ static uint32_t s_last_pump_seq;
 static uint32_t s_last_feedback_tx_ms;
 static uint32_t s_last_feedback_attempt_ms;
 static uint32_t s_last_place_cycle_sequence;
-static uint32_t s_place_hold_start_ms;
 
 static const uint32_t ARM_FEEDBACK_TX_INTERVAL_MS = 20U;  /* 50 Hz */
 static const uint32_t ARM_FEEDBACK_RETRY_INTERVAL_MS = 5U;
@@ -42,7 +41,6 @@ static const uint32_t ARM_DEBUG_SNAPSHOT_INTERVAL_MS = 100U;
 static uint8_t s_estop_was_active;
 static uint8_t s_gravity_only_override_active;
 static uint8_t s_last_robot_mode;
-static uint8_t s_place_hold_active;
 static uint8_t s_last_box_position_select;
 
 static uint32_t s_fixed_error_ms;
@@ -451,10 +449,11 @@ static void send_feedback_if_due(uint32_t now_ms) {
     execution.ready_for_grasp =
         (arm_work_mode(current_robot_mode()) &&
          debug_arm_fixed_state == ARM_FIXED_HOLDING &&
-         !s_place_hold_active &&
          !s_gravity_only_override_active) ? 1U : 0U;
     execution.pump_on = Pump_Control_IsEnabled() ? 1U : 0U;
     execution.arm_state = feedback.arm_state;
+    execution.target_command_sequence = s_last_target_seq;
+    execution.pump_command_sequence = s_last_pump_seq;
     execution.place_cycle_sequence = Arm_Serial_Protocol_PlaceCycleSequence();
     s_last_feedback_attempt_ms = now_ms;
     if (task_comm_send_arm_feedback(&feedback) > 0) {
@@ -520,7 +519,6 @@ static void reset_host_arm_protocol_state(void) {
     Arm_Serial_Protocol_Init();
     s_last_place_cycle_sequence = Arm_Serial_Protocol_PlaceCycleSequence();
     force_all_pump_outputs_off();
-    s_place_hold_active = 0U;
 }
 
 static void enter_gravity_only_override(void) {
@@ -532,7 +530,6 @@ static void enter_gravity_only_override(void) {
     force_all_pump_outputs_off();
     debug_arm_fixed_state = ARM_FIXED_GRAVITY_ONLY;
     debug_arm_fixed_last_result = APP_OK;
-    s_place_hold_active = 0U;
     s_gravity_only_override_active = 1U;
 }
 
@@ -571,11 +568,9 @@ void task_arm_init(void) {
     s_last_feedback_tx_ms = 0U;
     s_last_feedback_attempt_ms = 0U;
     s_last_place_cycle_sequence = 0U;
-    s_place_hold_start_ms = 0U;
     s_estop_was_active = 0U;
     s_gravity_only_override_active = 0U;
     s_last_robot_mode = PROTO_ROBOT_MODE_IDLE;
-    s_place_hold_active = 0U;
     s_last_box_position_select = 1U;
     s_fixed_error_ms = 0U;
     s_last_debug_snapshot_ms = 0U;
@@ -693,12 +688,10 @@ void task_arm_step_for_test(float dt_s, uint32_t now_ms) {
 #else
     if (arm_work_mode(robot_mode) &&
         (entered_arm_mode || s_fixed_profile == ARM_FIXED_PROFILE_PARK)) {
-        s_place_hold_active = 0U;
         reset_fixed_hold(ARM_FIXED_PROFILE_FIRST_LIFT);
     } else if (!APP_ARM_POWER_ON_HOST_READY_ENABLE &&
                !arm_work_mode(robot_mode) &&
                s_fixed_profile != ARM_FIXED_PROFILE_PARK) {
-        s_place_hold_active = 0U;
         reset_fixed_hold(ARM_FIXED_PROFILE_PARK);
     }
 #endif
@@ -742,45 +735,31 @@ void task_arm_step_for_test(float dt_s, uint32_t now_ms) {
     Pump_Control_Process();
     /* 保留运动完成后 PLACE/关泵的同拍处理语义。 */
     Arm_Serial_Protocol_Process();
-    /*
-     * A completed PLACE cycle has already switched the payload model to
-     * no-box gravity compensation and turned the pump off. Start the same
-     * fixed waiting sequence used at power-up: move J2/J3 immediately after
-     * feedback is ready while J1 remains freely movable.
-     */
+    /* PLACE reached + pump-off is the event that starts the next wait pose. */
     uint32_t place_cycle_sequence =
         Arm_Serial_Protocol_PlaceCycleSequence();
     if (place_cycle_sequence != s_last_place_cycle_sequence) {
         s_last_place_cycle_sequence = place_cycle_sequence;
-        s_place_hold_active = 1U;
-        s_place_hold_start_ms = now_ms;
-        debug_arm_fixed_state = ARM_FIXED_WAIT_FEEDBACK;
-        (void)arm_control_set_j1_free_mode(0U);
-    }
-    if (s_place_hold_active) {
-        if ((now_ms - s_place_hold_start_ms) >=
-            APP_ARM_PLACE_HOLD_AFTER_PUMP_OFF_MS) {
-            s_place_hold_active = 0U;
 #if APP_ARM_POWER_ON_FIXED_GRASP_TEST
-            reset_fixed_hold(ARM_FIXED_PROFILE_FIRST_LIFT);
+        reset_fixed_hold(ARM_FIXED_PROFILE_FIRST_LIFT);
 #else
-            reset_fixed_hold(ARM_FIXED_PROFILE_SECOND_SAFE_LIFT);
+        reset_fixed_hold(ARM_FIXED_PROFILE_SECOND_SAFE_LIFT);
 #endif
-        }
+    }
 #if APP_ARM_POWER_ON_FIXED_GRASP_TEST
-    } else if (debug_arm_fixed_state == ARM_FIXED_MOVING ||
-               debug_arm_fixed_state == ARM_FIXED_HOLDING ||
-               debug_arm_fixed_state == ARM_FIXED_WAIT_FEEDBACK ||
-               debug_arm_fixed_state == ARM_FIXED_ERROR) {
+    if (debug_arm_fixed_state == ARM_FIXED_MOVING ||
+        debug_arm_fixed_state == ARM_FIXED_HOLDING ||
+        debug_arm_fixed_state == ARM_FIXED_WAIT_FEEDBACK ||
+        debug_arm_fixed_state == ARM_FIXED_ERROR) {
         process_fixed_hold(now_ms);
 #else
-    } else if (APP_ARM_POWER_ON_HOST_READY_ENABLE ||
-               arm_work_mode(robot_mode) ||
-               s_fixed_profile == ARM_FIXED_PROFILE_PARK ||
-               debug_arm_fixed_state == ARM_FIXED_MOVING ||
-               debug_arm_fixed_state == ARM_FIXED_HOLDING ||
-               debug_arm_fixed_state == ARM_FIXED_WAIT_FEEDBACK ||
-               debug_arm_fixed_state == ARM_FIXED_ERROR) {
+    if (APP_ARM_POWER_ON_HOST_READY_ENABLE ||
+        arm_work_mode(robot_mode) ||
+        s_fixed_profile == ARM_FIXED_PROFILE_PARK ||
+        debug_arm_fixed_state == ARM_FIXED_MOVING ||
+        debug_arm_fixed_state == ARM_FIXED_HOLDING ||
+        debug_arm_fixed_state == ARM_FIXED_WAIT_FEEDBACK ||
+        debug_arm_fixed_state == ARM_FIXED_ERROR) {
         process_fixed_hold(now_ms);
 #endif
     }

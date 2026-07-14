@@ -151,8 +151,10 @@ typedef struct __attribute__((packed)) {
     uint8_t pump_on;             /* actual main vacuum output */
     uint8_t arm_state;           /* PROTO_ARM_STATE_* */
     uint8_t reserved;
+    uint32_t target_command_sequence; /* last host target consumed by task_arm */
+    uint32_t pump_command_sequence;   /* last host pump command consumed by task_arm */
     uint32_t place_cycle_sequence; /* increments after PLACE reached + pump off */
-} payload_arm_execution_feedback_t; /* FuncID 0x8C, len=8 */
+} payload_arm_execution_feedback_t; /* FuncID 0x8C, len=16 */
 
 /* J1..J4 原始电机反馈角度；online_mask bit0..3 对应 J1..J4，角度单位 rad。 */
 typedef struct __attribute__((packed)) {

@@ -1635,7 +1635,7 @@ static void test_protocol_function_ids_are_partitioned(void) {
     TEST_ASSERT(sizeof(payload_arm_aux_gpio_t) == 2U);
     TEST_ASSERT(sizeof(payload_arm_feedback_t) == 17U);
     TEST_ASSERT(sizeof(payload_mode_feedback_t) == 2U);
-    TEST_ASSERT(sizeof(payload_arm_execution_feedback_t) == 8U);
+    TEST_ASSERT(sizeof(payload_arm_execution_feedback_t) == 16U);
 }
 
 static void test_arm_kinematics_inverse_forward_roundtrip(void) {
@@ -2632,12 +2632,17 @@ static void test_usb_arm_execution_feedback_matches_mvp_golden_frame(void) {
         .pump_on = 0U,
         .arm_state = PROTO_ARM_STATE_REACHED,
         .reserved = 0U,
+        .target_command_sequence = 5U,
+        .pump_command_sequence = 6U,
         .place_cycle_sequence = 7U,
     };
     static const uint8_t expected[] = {
-        0x55U, 0xAAU, 0x8CU, 0x08U,
-        0x01U, 0x00U, 0x02U, 0x00U, 0x07U, 0x00U, 0x00U, 0x00U,
-        0x9DU,
+        0x55U, 0xAAU, 0x8CU, 0x10U,
+        0x01U, 0x00U, 0x02U, 0x00U,
+        0x05U, 0x00U, 0x00U, 0x00U,
+        0x06U, 0x00U, 0x00U, 0x00U,
+        0x07U, 0x00U, 0x00U, 0x00U,
+        0xB0U,
     };
     uint8_t tx[sizeof(expected)];
 
@@ -3136,7 +3141,7 @@ static void test_task_arm_consumes_protocol_in_arm_mode(void) {
     arm_control_status_t status;
     arm_joint_angles_t reached = arm_test_ik_target(target.x_m, target.y_m, target.z_m);
     uint32_t now_ms;
-    uint8_t tx[64];
+    uint8_t tx[80];
 
     bsp_time_init();
     log_init();
@@ -3188,6 +3193,12 @@ static void test_task_arm_consumes_protocol_in_arm_mode(void) {
     TEST_ASSERT(tx[arm_feedback_frame_len + 2U] == PROTO_FUNC_ARM_MOTOR_ANGLES);
     TEST_ASSERT(tx[arm_feedback_frame_len + motor_angles_frame_len + 2U] ==
                 PROTO_FUNC_ARM_EXECUTION_FEEDBACK);
+    payload_arm_execution_feedback_t execution_feedback;
+    memcpy(&execution_feedback,
+           &tx[arm_feedback_frame_len + motor_angles_frame_len + 4U],
+           sizeof(execution_feedback));
+    TEST_ASSERT(execution_feedback.target_command_sequence >= 1U);
+    TEST_ASSERT(execution_feedback.pump_command_sequence >= 1U);
 
     /* Let the GRASP target finish and settle, then issue PLACE + pump off. */
     now_ms = task_arm_test_run_until_move_status(
@@ -3206,7 +3217,8 @@ static void test_task_arm_consumes_protocol_in_arm_mode(void) {
     TEST_ASSERT(Arm_Serial_Protocol_PlaceCycleSequence() == 1U);
     TEST_ASSERT(debug_serial_waiting_next_grasp == 1U);
     TEST_ASSERT(arm_pump_is_enabled() == 0U);
-    TEST_ASSERT(debug_arm_fixed_state == ARM_FIXED_WAIT_FEEDBACK);
+    /* The confirmed pump-off event starts the next wait-pose move immediately. */
+    TEST_ASSERT(debug_arm_fixed_state == ARM_FIXED_MOVING);
 
     now_ms = task_arm_test_run_until_fixed_state(
         ARM_FIXED_HOLDING, now_ms, 30000U);

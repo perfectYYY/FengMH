@@ -132,15 +132,14 @@
 /*
  * 正式机械臂 ARM 等待策略：
  * - 进入 ARM 后，先把 J2/J3 收到固定等待角，再把 J1 转到第一箱等待角；
- * - 第一箱 PLACE 完成且气泵关闭后，原地保持 APP_ARM_PLACE_HOLD_AFTER_PUMP_OFF_MS；
- * - 然后先抬高 J2/J3 到安全中间角，再把 J1 转到第二箱等待角，
+ * - 第一箱 PLACE 到位且实际气泵关闭后，立即以该确认事件启动下一等待位；
+ * - 先抬高 J2/J3 到安全中间角，再把 J1 转到第二箱等待角，
  *   最后把 J2/J3 回到固定等待角。
  * J1 目标角会按当前位置选择等效圈数（target +/- n*360deg）。
  * ARM模式收到新的GRASP目标后，task_arm立即把控制权交给现有抓放流程。
  */
 #define APP_ARM_FIRST_WAIT_J1_MOTOR_DEG 270.0f
 #define APP_ARM_SECOND_WAIT_J1_MOTOR_DEG 450.0f
-#define APP_ARM_PLACE_HOLD_AFTER_PUMP_OFF_MS 3000U
 #define APP_ARM_PARK_J1_MOTOR_DEG (-179.639435f)
 #define APP_ARM_PARK_J2_MOTOR_DEG 53.679821f
 #define APP_ARM_PARK_J3_MOTOR_DEG (-18.8185368f)
