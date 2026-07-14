@@ -43,6 +43,7 @@ extern "C" {
 #define PROTO_FUNC_WHEEL_STATE  0x88
 #define PROTO_FUNC_CHASSIS_DIAG 0x89
 #define PROTO_FUNC_TROT_TEST_DIAG 0x8A
+#define PROTO_FUNC_MODE_FEEDBACK 0x8B
 #define PROTO_FUNC_EVENT        0x8F
 
 #define PROTO_STEER_MODE_OFF       0u
@@ -157,6 +158,11 @@ typedef struct __attribute__((packed)) {
     float   end_z_m;      /* current end-effector z in arm_base, m */
     float   theta1_rad;   /* base joint angle, rad */
 } payload_arm_feedback_t; /* FuncID 0x86, len=17 */
+
+typedef struct __attribute__((packed)) {
+    uint8_t mode;                /* applied PROTO_ROBOT_MODE_* */
+    uint8_t safety_stop_active;  /* task_safety_estop_active() */
+} payload_mode_feedback_t; /* FuncID 0x8B, len=2 */
 
 /* J1..J4 原始电机反馈角度；online_mask bit0..3 对应 J1..J4，角度单位 rad。 */
 typedef struct __attribute__((packed)) {

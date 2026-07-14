@@ -250,7 +250,12 @@ static void process_pending_target(void) {
     /* The upper bridge retries an unacknowledged target after feedback loss. */
     if (s_active_target_valid &&
         target_matches(&s_pending_target, &s_active_target)) {
-        return;
+        Arm_Move_Status_t status = Arm_Control_GetMoveStatus();
+        if (status < ARM_MOVE_ERROR_INVALID_TARGET) {
+            return;
+        }
+        /* A same-target retry after a controller error is a new motion. */
+        s_active_target_valid = 0U;
     }
 
     Arm_Pose_t pose = {

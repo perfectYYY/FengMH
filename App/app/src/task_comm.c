@@ -37,6 +37,7 @@ static task_comm_chassis_cmd_t s_chassis;
 static task_comm_arm_target_t s_arm_target;
 static task_comm_arm_pump_t   s_arm_pump;
 static task_comm_mode_cmd_t   s_mode_cmd;
+static uint8_t                 s_estop_latched;
 static volatile uint32_t     s_last_rx_ms = 0;
 
 volatile uint8_t  debug_comm_arm_target_raw[sizeof(payload_arm_target_t)];
@@ -377,11 +378,31 @@ static int handle_mode_cmd(const uint8_t* p, uint8_t len) {
         return APP_ERR_INVALID_ARG;
     }
 
+    if (s_estop_latched && cmd.mode != PROTO_ROBOT_MODE_ESTOP) {
+        return APP_ERR_UNSUPPORTED;
+    }
+    if (task_safety_estop_active() &&
+        cmd.mode != PROTO_ROBOT_MODE_ESTOP &&
+        cmd.mode != PROTO_ROBOT_MODE_ERROR &&
+        cmd.mode != PROTO_ROBOT_MODE_IDLE) {
+        return APP_ERR_UNSUPPORTED;
+    }
+    if (s_mode_cmd.seq > 0U && s_mode_cmd.mode == cmd.mode) {
+        mark_valid_rx();
+        return 0;
+    }
+
     s_mode_cmd.mode = cmd.mode;
     s_mode_cmd.seq++;
-
-    /* Host ESTOP/ERROR are soft safe-stand requests in this field workflow. */
-    task_safety_estop_set(false);
+    if (cmd.mode == PROTO_ROBOT_MODE_ESTOP) {
+        s_estop_latched = 1U;
+        task_safety_estop_set(true);
+    } else if (cmd.mode == PROTO_ROBOT_MODE_ERROR) {
+        task_safety_estop_set(true);
+    } else if (cmd.mode == PROTO_ROBOT_MODE_IDLE) {
+        /* ERROR recovery is explicit: only a clean IDLE request may release it. */
+        task_safety_estop_set(false);
+    }
 #if APP_CHASSIS_ENABLE
     if (cmd.mode == PROTO_ROBOT_MODE_ESTOP ||
         cmd.mode == PROTO_ROBOT_MODE_ERROR) {
@@ -414,6 +435,7 @@ void task_comm_init(void) {
     memset(&s_arm_target, 0, sizeof(s_arm_target));
     memset(&s_arm_pump, 0, sizeof(s_arm_pump));
     memset(&s_mode_cmd, 0, sizeof(s_mode_cmd));
+    s_estop_latched = 0U;
     memset((void*)debug_comm_arm_target_raw, 0, sizeof(debug_comm_arm_target_raw));
     debug_comm_arm_target_type = 0U;
     debug_comm_arm_target_x_m = 0.0f;
@@ -514,6 +536,13 @@ static int send_proto_payload(uint8_t func_id, const void* payload, uint8_t len)
 int task_comm_send_arm_feedback(const payload_arm_feedback_t* feedback) {
     if (!feedback) return APP_ERR_INVALID_ARG;
     return send_proto_payload(PROTO_FUNC_ARM_FEEDBACK,
+                              feedback,
+                              (uint8_t)sizeof(*feedback));
+}
+
+int task_comm_send_mode_feedback(const payload_mode_feedback_t* feedback) {
+    if (!feedback) return APP_ERR_INVALID_ARG;
+    return send_proto_payload(PROTO_FUNC_MODE_FEEDBACK,
                               feedback,
                               (uint8_t)sizeof(*feedback));
 }

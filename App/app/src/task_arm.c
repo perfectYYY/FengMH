@@ -448,13 +448,17 @@ static void send_feedback_if_due(uint32_t now_ms) {
 
     payload_arm_feedback_t feedback;
     payload_arm_motor_angles_t motor_angles;
+    payload_mode_feedback_t mode_feedback;
     build_integrated_feedback(&feedback);
     build_motor_angles_feedback(&motor_angles);
+    mode_feedback.mode = current_robot_mode();
+    mode_feedback.safety_stop_active = task_safety_estop_active() ? 1U : 0U;
     s_last_feedback_attempt_ms = now_ms;
     if (task_comm_send_arm_feedback(&feedback) > 0) {
         s_last_feedback_tx_ms = now_ms;
     }
     (void)task_comm_send_arm_motor_angles(&motor_angles);
+    (void)task_comm_send_mode_feedback(&mode_feedback);
 }
 
 static uint32_t snapshot_motor_age_ms(const motor_dev_t* motor,
@@ -511,6 +515,7 @@ static void force_all_pump_outputs_off(void) {
 
 static void reset_host_arm_protocol_state(void) {
     Arm_Serial_Protocol_Init();
+    Arm_Control_SetGravityMode();
     s_last_place_cycle_sequence = Arm_Serial_Protocol_PlaceCycleSequence();
     force_all_pump_outputs_off();
     s_place_hold_active = 0U;
@@ -637,10 +642,12 @@ void task_arm_step_for_test(float dt_s, uint32_t now_ms) {
     if (task_safety_estop_active()) {
         consume_new_commands(0U);
         if (!s_estop_was_active) {
+            reset_host_arm_protocol_state();
             (void)arm_control_set_motor_output_enabled(0U);
             (void)arm_control_set_enabled(0U);
             s_estop_was_active = 1U;
         }
+        force_all_pump_outputs_off();
         /* 急停时不进入 Arm_Control_Process，避免自动重新使能达妙。 */
         Pump_Control_Process();
         update_debug_snapshot_if_due(now_ms);
