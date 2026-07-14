@@ -57,8 +57,10 @@ volatile uint32_t debug_serial_rejected_command_count;
 static uint8_t s_rx_stream[RX_STREAM_CAPACITY];
 static uint32_t s_rx_length;
 static Arm_Target_Command_t s_pending_target;
+static Arm_Target_Command_t s_active_target;
 static volatile uint32_t s_pending_target_sequence;
 static uint32_t s_handled_target_sequence;
+static uint8_t s_active_target_valid;
 static uint8_t s_pending_pump_on;
 static volatile uint32_t s_pending_pump_sequence;
 static uint32_t s_handled_pump_sequence;
@@ -95,6 +97,15 @@ static void write_f32_le(uint8_t* data, float value) {
     data[1] = (uint8_t)(bits >> 8U);
     data[2] = (uint8_t)(bits >> 16U);
     data[3] = (uint8_t)(bits >> 24U);
+}
+
+static uint8_t target_matches(const Arm_Target_Command_t* first,
+                              const Arm_Target_Command_t* second) {
+    return first && second &&
+           first->type == second->type &&
+           first->x_m == second->x_m &&
+           first->y_m == second->y_m &&
+           first->z_m == second->z_m;
 }
 
 static void discard_stream_prefix(uint32_t count) {
@@ -236,6 +247,12 @@ static void process_pending_target(void) {
         return;
     }
 
+    /* The upper bridge retries an unacknowledged target after feedback loss. */
+    if (s_active_target_valid &&
+        target_matches(&s_pending_target, &s_active_target)) {
+        return;
+    }
+
     Arm_Pose_t pose = {
         .x = s_pending_target.x_m * METERS_TO_MILLIMETERS,
         .y = s_pending_target.y_m * METERS_TO_MILLIMETERS,
@@ -260,7 +277,11 @@ static void process_pending_target(void) {
     } else {
         s_active_place_slot = PLACE_SLOT_NONE;
     }
-    (void)Arm_Control_MoveToTypedPose(&pose, s_pending_target.type);
+    s_active_target_valid = 0U;
+    if (Arm_Control_MoveToTypedPose(&pose, s_pending_target.type) == 0) {
+        s_active_target = s_pending_target;
+        s_active_target_valid = 1U;
+    }
 }
 
 static void finish_place_cycle(void) {
@@ -275,6 +296,8 @@ static void finish_place_cycle(void) {
         Pump_Control_SetPA8(1U);
     }
     s_active_place_slot = PLACE_SLOT_NONE;
+    s_active_target = (Arm_Target_Command_t){0};
+    s_active_target_valid = 0U;
     if (!s_rear_place_mode) {
         Arm_Control_SetGravityMode();
     }
@@ -375,8 +398,10 @@ static void send_feedback(uint32_t now) {
 void Arm_Serial_Protocol_Init(void) {
     s_rx_length = 0U;
     s_pending_target = (Arm_Target_Command_t){0};
+    s_active_target = (Arm_Target_Command_t){0};
     s_pending_target_sequence = 0U;
     s_handled_target_sequence = 0U;
+    s_active_target_valid = 0U;
     s_pending_pump_on = 0U;
     s_pending_pump_sequence = 0U;
     s_handled_pump_sequence = 0U;

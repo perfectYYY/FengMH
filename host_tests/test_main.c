@@ -3356,6 +3356,46 @@ static void test_task_arm_consumes_protocol_in_arm_mode(void) {
     TEST_ASSERT(Arm_Serial_Protocol_PlaceCycleSequence() == 1U);
 }
 
+static void test_task_arm_rear_place_duplicate_target_is_idempotent(void) {
+    const payload_mode_cmd_t mode = {
+        .mode = PROTO_ROBOT_MODE_REAR_PLACE,
+    };
+    const payload_arm_target_t target = {
+        .target_type = PROTO_ARM_TARGET_GRASP,
+        .x_m = 0.0f,
+        .y_m = 0.237065f,
+        .z_m = 0.34f,
+    };
+    arm_control_status_t status;
+    arm_joint_angles_t measured = arm_test_home_angles();
+
+    log_init();
+    bsp_gpio_test_reset();
+    TEST_ASSERT(bsp_usb_cdc_init() == APP_OK);
+    task_comm_init();
+    bind_stub_motors();
+    set_arm_stub_feedback_from_angles(&measured, 0U);
+    task_arm_init();
+
+    inject_proto_frame(PROTO_FUNC_MODE_CMD, &mode, (uint8_t)sizeof(mode));
+    inject_proto_frame(PROTO_FUNC_ARM_TARGET, &target, (uint8_t)sizeof(target));
+    task_arm_step_for_test(0.010f, 20U);
+    arm_control_get_status(&status);
+    TEST_ASSERT(status.target_valid == 1U);
+    TEST_ASSERT(status.target_type == PROTO_ARM_TARGET_GRASP);
+    TEST_ASSERT(status.target_seq == 1U);
+
+    /* Simulate the upper bridge retrying before it sees 0x86 feedback. */
+    inject_proto_frame(PROTO_FUNC_ARM_TARGET, &target, (uint8_t)sizeof(target));
+    task_arm_step_for_test(0.010f, 40U);
+    arm_control_get_status(&status);
+    TEST_ASSERT(status.target_seq == 1U);
+    TEST_ASSERT(status.target_type == PROTO_ARM_TARGET_GRASP);
+    TEST_ASSERT_NEAR(status.target_x_m, target.x_m, 1e-6f);
+    TEST_ASSERT_NEAR(status.target_y_m, target.y_m, 1e-6f);
+    TEST_ASSERT_NEAR(status.target_z_m, target.z_m, 1e-6f);
+}
+
 static void test_task_arm_holds_state_and_discards_usb_commands_outside_arm_mode(void) {
     payload_mode_cmd_t arm_mode = {
         .mode = PROTO_ROBOT_MODE_ARM,
@@ -3773,6 +3813,7 @@ int main(void) {
     test_task_chassis_nav_mode_allows_motion();
     test_task_chassis_arm_mode_gates_chassis_motion();
     test_task_arm_consumes_protocol_in_arm_mode();
+    test_task_arm_rear_place_duplicate_target_is_idempotent();
     test_task_arm_holds_state_and_discards_usb_commands_outside_arm_mode();
     test_task_arm_estop_disables_motion_but_keeps_vacuum();
     test_damiao_mit_pack_center_values();

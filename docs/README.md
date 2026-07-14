@@ -40,7 +40,7 @@ mode=NAV:
   task_chassis -> chassis_control -> planner -> gait -> leg IK
     -> GO hip/knee + M3508 wheel velocity/MIT hold -> UART/FDCAN BSP
 
-mode=ARM:
+mode=ARM or REAR_PLACE:
   task_arm -> fixed wait pose -> Arm_Serial_Protocol queue
     -> arm_control -> arm_motion/IK/gravity -> Damiao MIT + pump GPIO
     -> task_comm 0x86 ARM_FEEDBACK
@@ -53,7 +53,7 @@ mode=ARM:
 - `task_comm` 是唯一 USB CDC 下行解析入口，旧机械臂串口协议不自动接管 USB。
 - `ROBOT_MODE_NAV` 才允许底盘速度进入 `chassis_control`；没有 mode 帧时保留旧调试兼容。
 - 正式 NAV 将上位机 `vx` 限制在 `-0.50..+0.50 m/s`，`0x80` 回显限幅后的有效指令；非有限 `vx` 按零速处理。
-- `ROBOT_MODE_ARM` 只允许机械臂消费新的 USB 目标/泵命令；机械臂 task 本身常驻保持姿态。
+- `ROBOT_MODE_ARM` 和 `ROBOT_MODE_REAR_PLACE` 都允许机械臂消费新的 USB 目标/泵命令；后者启用专用后放置避障，机械臂 task 本身常驻保持姿态。
 - 底盘普通移动使用现场标定的固定 `0.2525 s` 周期（约 `3.96 Hz`）、`0.055 m` 抬腿和 `0.60` 占空比的零平移步长 `trot`，由四轮连续推进；低速/原地 yaw 转向继续使用原有 `walk`。
 - `vy` 参与 moving 判断，但当前 2DOF 腿不生成真实横向足端轨迹。
 - 轮毂统一走 M3508 MIT：DRIVE 使用有界速度误差积分生成位置偏差，跨支撑/摆动相连续驱动；stand 锁存实际轮角并保持零速。
@@ -77,3 +77,10 @@ cmake --build build_host_tests
 ctest --test-dir build_host_tests --output-on-failure
 git diff --check
 ```
+
+## 后放置联调
+
+后放置上下位机协议的唯一正式文档为
+[`rear_place_upper_lower_integration.md`](rear_place_upper_lower_integration.md)。该规范定义独立的
+`REAR_PLACE=5`、blue/gray 两个方块的时序、USB CDC 帧和台架验收要求；旧的
+`rear_place_stm32_protocol*.md` 文件仅保留为废弃跳转页。

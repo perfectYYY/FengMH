@@ -13,6 +13,7 @@
 #include "motor_go.h"
 #include "motor_if.h"
 #include "motor_m3508.h"
+#include "motor_registry.h"
 
 #include <string.h>
 #include <time.h>
@@ -234,6 +235,33 @@ app_err_t motor_m3508_set_mit_limits(motor_dev_t* dev,
     (void)dev;
     (void)tau_limit_nm;
     (void)pos_err_limit_rad;
+    return APP_OK;
+}
+
+app_err_t motor_m3508_get_wheel_diag(motor_logical_id_t id,
+                                     m3508_wheel_diag_t* out) {
+    if (!out) return APP_ERR_INVALID_ARG;
+
+    switch (id) {
+        case MOTOR_ID_FL_WHEEL:
+        case MOTOR_ID_FR_WHEEL:
+        case MOTOR_ID_RL_WHEEL:
+        case MOTOR_ID_RR_WHEEL:
+            break;
+        default:
+            memset(out, 0, sizeof(*out));
+            return APP_ERR_NOT_FOUND;
+    }
+
+    motor_dev_t* dev = motor_get(id);
+    if (!dev) {
+        memset(out, 0, sizeof(*out));
+        return APP_ERR_NOT_FOUND;
+    }
+
+    memset(out, 0, sizeof(*out));
+    out->filtered_velocity_rads = dev->state.velocity_rads;
+    out->online = dev->state.online;
     return APP_OK;
 }
 
