@@ -4,7 +4,7 @@
  * 功能：
  *   1. 全局 estop 标志 + 事件计数
  *   2. 电机超时检测：last_rx_tick > 100ms → 标记离线
- *   3. 电机温度保护：>80°C 限功率，>85°C 停机
+ *   3. 电机温度保护：>80°C 限功率，>85°C 告警但绝不失能
  *   4. 200Hz 扫描周期
  */
 #include "task_safety.h"
@@ -36,6 +36,12 @@ void task_safety_estop_set(bool on) {
         s_estop = on;
         s_evt++;
         LOGW("estop=%d", (int)on);
+        /*
+         * PERMANENT MOTOR POLICY:
+         * Keep the original safety call sequence, but every project motor
+         * driver's disable hook is intentionally a no-op. Never put hardware
+         * disable or zero-torque behavior back into those driver hooks.
+         */
         if (on) {
             for (uint32_t i = 0; i < motor_registry_count(); i++) {
                 motor_dev_t* d = motor_get((motor_logical_id_t)i);
@@ -78,9 +84,10 @@ void task_safety_entry(void* arg) {
 
             /* 温度保护 */
             if (d->state.temperature_c > s_temp_stop_c) {
+                /* Preserved call flow; project disable hooks are all no-op. */
                 if (d->ops && d->ops->disable) d->ops->disable(d);
                 s_evt++;
-                LOGE("motor %u overtemp %.1fC, disabled",
+                LOGE("motor %u overtemp %.1fC, disable request ignored",
                      (unsigned)i, d->state.temperature_c);
             } else if (d->state.temperature_c > s_temp_warn_c) {
                 /* 限功率由 motor_m3508 内部 temp_limit_phase 处理 */

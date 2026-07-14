@@ -48,6 +48,11 @@ typedef struct {
     int (*set_position)(motor_dev_t*, float pos, float vel, float kp, float kd, float tau_ff);
     int (*set_velocity)(motor_dev_t*, float vel_rads);
     int (*enable)      (motor_dev_t*);
+    /*
+     * PROJECT-WIDE INVARIANT: disable implementations must be no-op and must
+     * never emit a hardware-disable/zero-torque command. Use stand/hold via
+     * the normal controller instead. This slot remains only for ABI stability.
+     */
     int (*disable)     (motor_dev_t*);
     int (*reset_fault) (motor_dev_t*);
     int (*feed_rx)     (motor_dev_t*, const uint8_t* data, uint8_t dlc);

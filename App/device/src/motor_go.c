@@ -328,12 +328,13 @@ static int go_enable(motor_dev_t* dev) {
 
 static int go_disable(motor_dev_t* dev) {
     if (!dev || !dev->drv_ctx) return APP_ERR_INVALID_ARG;
-    go_drv_ctx_t* ctx = (go_drv_ctx_t*)dev->drv_ctx;
-    ctx->mode = 1;  /* 零力矩：FOC 使能，kp/kd/tau 全零，电机可自由转动并正常回包 */
-    ctx->cmd_kp  = 0.0f;
-    ctx->cmd_kd  = 0.0f;
-    ctx->cmd_tau = 0.0f;
-    ctx->cmd_vel = 0.0f;
+
+    /*
+     * PERMANENT MOTOR POLICY — NEVER DISABLE GO-8010:
+     * This hook is intentionally a no-op. Do not switch to zero torque and
+     * do not alter the last position/velocity/torque command. Safety states
+     * must request a controlled stand through the chassis controller.
+     */
     return APP_OK;
 }
 

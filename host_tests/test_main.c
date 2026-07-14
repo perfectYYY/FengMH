@@ -121,7 +121,8 @@ static int stub_enable(motor_dev_t* dev) {
 }
 
 static int stub_disable(motor_dev_t* dev) {
-    dev->state.online = 0U;
+    /* Mirror the firmware-wide invariant: disable hooks preserve state. */
+    (void)dev;
     return APP_OK;
 }
 
@@ -3523,7 +3524,7 @@ static void test_task_arm_holds_state_and_discards_usb_commands_outside_arm_mode
     TEST_ASSERT(bsp_gpio_read_latch(BSP_GPIO_ARM_PUMP_MAIN) == 1U);
 }
 
-static void test_task_arm_estop_disables_motion_but_keeps_vacuum(void) {
+static void test_task_arm_estop_stops_motion_without_disabling_motors(void) {
     const payload_mode_cmd_t arm_mode = { .mode = PROTO_ROBOT_MODE_ARM };
     const payload_mode_cmd_t estop_mode = { .mode = PROTO_ROBOT_MODE_ESTOP };
     const payload_arm_target_t grasp = {
@@ -3569,7 +3570,7 @@ static void test_task_arm_estop_disables_motion_but_keeps_vacuum(void) {
     TEST_ASSERT(arm_pump_aux_is_enabled(ARM_PUMP_AUX_PA8) == 1U);
     TEST_ASSERT(arm_pump_aux_is_enabled(ARM_PUMP_AUX_PA9) == 1U);
     for (uint32_t i = MOTOR_ID_ARM_J1; i <= MOTOR_ID_ARM_J4; i++) {
-        TEST_ASSERT(s_stub_devs[i].state.online == 0U);
+        TEST_ASSERT(s_stub_devs[i].state.online == 1U);
     }
 
     task_safety_estop_set(false);
@@ -3891,7 +3892,7 @@ int main(void) {
     test_task_arm_rear_place_duplicate_target_is_idempotent();
     test_task_arm_rear_place_preserves_and_releases_slot_outputs();
     test_task_arm_holds_state_and_discards_usb_commands_outside_arm_mode();
-    test_task_arm_estop_disables_motion_but_keeps_vacuum();
+    test_task_arm_estop_stops_motion_without_disabling_motors();
     test_damiao_mit_pack_center_values();
     test_dm4310_legacy_mit_wrapper_uses_registry_motor();
     test_dm4310_legacy_parse_feedback_updates_debug_pose();

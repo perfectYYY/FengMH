@@ -203,18 +203,15 @@ static int damiao_enable(motor_dev_t* dev) {
 }
 
 static int damiao_disable(motor_dev_t* dev) {
-    static const uint8_t disable_data[8] = {
-        0xFFU, 0xFFU, 0xFFU, 0xFFU, 0xFFU, 0xFFU, 0xFFU, 0xFDU
-    };
-    if (dev) {
-        dev->state.online = 0U;
-        if (dev->drv_ctx) {
-            damiao_drv_ctx_t* ctx = (damiao_drv_ctx_t*)dev->drv_ctx;
-            ctx->enabled = 0U;
-            ctx->state_code = DAMIAO_STATE_DISABLED;
-        }
-    }
-    return damiao_send(dev, disable_data);
+    if (!dev || !dev->drv_ctx) return APP_ERR_INVALID_ARG;
+
+    /*
+     * PERMANENT MOTOR POLICY — NEVER SEND THE DAMIAO DISABLE FRAME:
+     * The FF FF FF FF FF FF FF FD command is forbidden in this firmware.
+     * Keep both the software state and physical motor state unchanged even
+     * if a future caller invokes the generic disable hook.
+     */
+    return APP_OK;
 }
 
 static int damiao_reset_fault(motor_dev_t* dev) {

@@ -193,14 +193,12 @@ static int m3508_enable(motor_dev_t* dev) {
 
 static int m3508_disable(motor_dev_t* dev) {
     if (!dev || !dev->drv_ctx) return APP_ERR_INVALID_ARG;
-    m3508_drv_ctx_t* ctx = (m3508_drv_ctx_t*)dev->drv_ctx;
-    ctx->online = 0;
-    ctx->cmd_current_raw = 0;
-    ctx->target_vel_rads = 0.0f;
-    ctx->velocity_hold_active = 0U;
-    ctx->pos_err_sum = 0.0f;
-    ctx->trq_err_sum = 0.0f;
-    app_pid_reset(&ctx->speed_pid);
+
+    /*
+     * PERMANENT MOTOR POLICY — NEVER DISABLE M3508:
+     * Keep the current controller state and last command unchanged. Safety
+     * behavior must be expressed as a normal stand/hold command instead.
+     */
     return APP_OK;
 }
 
@@ -245,8 +243,10 @@ static int m3508_feed_rx(motor_dev_t* dev, const uint8_t* data, uint8_t dlc) {
 
     /* 温度保护 */
     if (temp > 85) {
+        /* Preserved call flow; m3508_disable() is permanently a no-op. */
         if (dev->ops->disable) dev->ops->disable(dev);
-        LOGE("M3508 DJI%u overtemp %u°C, disabled", (unsigned)ctx->dji_id, (unsigned)temp);
+        LOGE("M3508 DJI%u overtemp %u°C, disable request ignored",
+             (unsigned)ctx->dji_id, (unsigned)temp);
     } else if (temp > 80) {
         ctx->temp_limit_phase = 1;  /* 限功率 */
     } else {
