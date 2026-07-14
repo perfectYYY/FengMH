@@ -5,6 +5,10 @@
 #include "config.h"
 #include "log.h"
 
+#if APP_TARGET_MCU
+#include "stm32h7xx_hal.h"
+#endif
+
 #include <string.h>
 
 static const char* TAG = "USBCDC";
@@ -17,7 +21,34 @@ static void*           s_rx_user;
 #if APP_TARGET_MCU
 /* 由 usbd_cdc_if.c 提供，避免本 BSP 反向依赖 USB 中间层头文件 */
 extern uint8_t CDC_Transmit_HS(uint8_t* buf, uint16_t len);
+
+#define BSP_USB_TXQ_LEN       32U
+#define BSP_USB_TX_FRAME_MAX  72U
+#define BSP_USB_TX_STUCK_TIMEOUT_MS 100U
+typedef struct {
+    uint8_t data[BSP_USB_TX_FRAME_MAX];
+    uint16_t len;
+} usb_tx_item_t;
+static usb_tx_item_t s_txq[BSP_USB_TXQ_LEN];
+static volatile uint8_t s_tx_head;
+static volatile uint8_t s_tx_tail;
+static volatile uint8_t s_tx_busy;
+static volatile uint32_t s_tx_started_ms;
+
+static uint32_t usb_enter_critical(void) {
+    uint32_t primask = __get_PRIMASK();
+    __disable_irq();
+    return primask;
+}
+
+static void usb_exit_critical(uint32_t primask) {
+    if (!primask) __enable_irq();
+}
 #endif
+
+volatile uint32_t debug_usb_tx_timeout_recover_count;
+volatile uint32_t debug_usb_tx_queue_overflow_count;
+volatile uint32_t debug_usb_tx_driver_busy_count;
 
 #if APP_TARGET_HOST
 static uint8_t  s_tx_buf[BSP_USB_TX_MAX];
@@ -29,7 +60,15 @@ app_err_t bsp_usb_cdc_init(void) {
     s_rx_user = 0;
 #if APP_TARGET_HOST
     s_tx_len = 0;
+#else
+    s_tx_head = 0U;
+    s_tx_tail = 0U;
+    s_tx_busy = 0U;
+    s_tx_started_ms = 0U;
 #endif
+    debug_usb_tx_timeout_recover_count = 0U;
+    debug_usb_tx_queue_overflow_count = 0U;
+    debug_usb_tx_driver_busy_count = 0U;
     LOGI("init ok (host=%d)", (int)APP_TARGET_HOST);
     return APP_OK;
 }
@@ -47,9 +86,70 @@ app_err_t bsp_usb_cdc_send(const uint8_t* data, uint32_t len) {
     s_tx_len += len;
     return APP_OK;
 #else
-    /* CDC_Transmit_HS 在 USB 未连接或忙时会返回 USBD_BUSY；这里直接透传 */
-    if (CDC_Transmit_HS((uint8_t*)data, (uint16_t)len) != 0) return APP_ERR_BUSY;
+    if (len > BSP_USB_TX_FRAME_MAX) return APP_ERR_OVERFLOW;
+    /*
+     * Frames can fill the queue before USB enumeration completes.  Always
+     * retry the oldest frame before testing for space so a full boot-time
+     * queue starts draining as soon as the host configures CDC.
+     */
+    bsp_usb_cdc_process();
+    uint32_t primask = usb_enter_critical();
+    uint8_t next = (uint8_t)((s_tx_head + 1U) % BSP_USB_TXQ_LEN);
+    if (next == s_tx_tail) {
+        debug_usb_tx_queue_overflow_count++;
+        usb_exit_critical(primask);
+        return APP_ERR_OVERFLOW;
+    }
+    memcpy(s_txq[s_tx_head].data, data, len);
+    s_txq[s_tx_head].len = (uint16_t)len;
+    s_tx_head = next;
+    usb_exit_critical(primask);
+    bsp_usb_cdc_process();
     return APP_OK;
+#endif
+}
+
+void bsp_usb_cdc_process(void) {
+#if APP_TARGET_MCU
+    uint32_t now_ms = HAL_GetTick();
+    uint32_t primask = usb_enter_critical();
+    if (s_tx_busy) {
+        if ((now_ms - s_tx_started_ms) <= BSP_USB_TX_STUCK_TIMEOUT_MS) {
+            usb_exit_critical(primask);
+            return;
+        }
+
+        /* A disconnected host has no TX-complete callback; retry the head. */
+        s_tx_busy = 0U;
+        debug_usb_tx_timeout_recover_count++;
+    }
+    if (s_tx_tail == s_tx_head) {
+        usb_exit_critical(primask);
+        return;
+    }
+    uint8_t tail = s_tx_tail;
+    s_tx_busy = 1U;
+    s_tx_started_ms = now_ms;
+    usb_exit_critical(primask);
+
+    if (CDC_Transmit_HS(s_txq[tail].data, s_txq[tail].len) != 0U) {
+        primask = usb_enter_critical();
+        s_tx_busy = 0U;
+        debug_usb_tx_driver_busy_count++;
+        usb_exit_critical(primask);
+    }
+#endif
+}
+
+void bsp_usb_cdc_on_tx_complete(void) {
+#if APP_TARGET_MCU
+    uint32_t primask = usb_enter_critical();
+    if (s_tx_busy && s_tx_tail != s_tx_head) {
+        s_tx_tail = (uint8_t)((s_tx_tail + 1U) % BSP_USB_TXQ_LEN);
+    }
+    s_tx_busy = 0U;
+    usb_exit_critical(primask);
+    bsp_usb_cdc_process();
 #endif
 }
 
