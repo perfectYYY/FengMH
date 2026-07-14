@@ -21,8 +21,8 @@
 #define PLANNER_DEFAULT_TURN_PERIOD_S   0.80f
 #define PLANNER_DEFAULT_TURN_DUTY       0.75f
 #define PLANNER_DEFAULT_TURN_LEG_SCALE  0.25f
-#define PLANNER_DEFAULT_SLOW_PERIOD_S   0.25f
-#define PLANNER_DEFAULT_FAST_PERIOD_S   0.20f
+#define PLANNER_DEFAULT_SLOW_PERIOD_S   0.2525f
+#define PLANNER_DEFAULT_FAST_PERIOD_S   0.2525f
 #define PLANNER_DEFAULT_FAST_SPEED_M_S  0.35f
 #define PLANNER_DEFAULT_TRAVEL_STEP_HEIGHT_M 0.055f
 #define PLANNER_DEFAULT_TRAVEL_DUTY     0.60f
@@ -217,8 +217,8 @@ static void planner_apply_stride_schedule(gait_params_t* params, float motion_sp
     if (motion_speed <= PLANNER_MOTION_EPSILON_M_S) return;
 
     /*
-     * Wheel-only travel: wheels track ground speed while the legs keep a
-     * high-frequency in-place cadence at the configured lift height.
+     * Wheel-only travel: wheels track ground speed while the legs keep the
+     * field-validated in-place cadence at the configured lift height.
      */
     params->period_s = planner_period_from_speed(motion_speed);
     params->step_height_m = planner_configured_travel_step_height();

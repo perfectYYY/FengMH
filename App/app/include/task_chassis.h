@@ -58,6 +58,11 @@ int task_chassis_set_wheel_test(uint8_t enable,
                                 uint8_t wheel_mask,
                                 const float wheel_rads[GAIT_LEG_NUM],
                                 uint32_t now_ms);
+int task_chassis_set_trot_test_config(float step_height_m,
+                                      float period_s,
+                                      float duty,
+                                      const float foot_z_trim_m[GAIT_LEG_NUM]);
+void task_chassis_get_trot_test_debug(chassis_trot_test_debug_t* out);
 
 /* host / 板上诊断接口：手动喂时间，让逻辑可单测 */
 void  task_chassis_step_for_test(float dt_s, uint32_t now_ms);

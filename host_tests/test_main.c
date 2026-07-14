@@ -285,8 +285,8 @@ static void reset_wheel_only_travel_cfg(void) {
     g_chassis_turn_cfg.turn_leg_scale = 0.25f;
     g_chassis_stride_cfg.enable = 1U;
     g_chassis_stride_cfg.wheel_only_travel = 1U;
-    g_chassis_stride_cfg.slow_period_s = 0.25f;
-    g_chassis_stride_cfg.fast_period_s = 0.20f;
+    g_chassis_stride_cfg.slow_period_s = 0.2525f;
+    g_chassis_stride_cfg.fast_period_s = 0.2525f;
     g_chassis_stride_cfg.fast_speed_m_s = 0.35f;
     g_chassis_stride_cfg.step_height_m = 0.055f;
     g_chassis_stride_cfg.duty = 0.60f;
@@ -306,8 +306,7 @@ static void test_planner_forward_and_turn(void) {
     TEST_ASSERT(plan.moving == 1U);
     TEST_ASSERT_NEAR(plan.gait_params.step_length_m, 0.0f, 1e-6f);
     TEST_ASSERT_NEAR(plan.gait_params.turn_step_m, 0.0f, 1e-6f);
-    TEST_ASSERT(plan.gait_params.period_s >= 0.20f);
-    TEST_ASSERT(plan.gait_params.period_s <= 0.25f);
+    TEST_ASSERT_NEAR(plan.gait_params.period_s, 0.2525f, 1e-6f);
     TEST_ASSERT_NEAR(plan.gait_params.step_height_m, 0.055f, 1e-6f);
     TEST_ASSERT_NEAR(plan.gait_params.duty, 0.60f, 1e-6f);
     for (int i = 0; i < GAIT_LEG_NUM; i++) {
@@ -321,11 +320,11 @@ static void test_planner_forward_and_turn(void) {
     TEST_ASSERT(plan.moving == 1U);
     TEST_ASSERT_NEAR(plan.gait_params.step_length_m, 0.0f, 1e-6f);
     TEST_ASSERT_NEAR(plan.gait_params.step_height_m, 0.035f, 1e-6f);
-    TEST_ASSERT_NEAR(plan.gait_params.period_s, 0.228571f, 1e-5f);
+    TEST_ASSERT_NEAR(plan.gait_params.period_s, 0.2525f, 1e-6f);
     TEST_ASSERT_NEAR(plan.gait_params.duty, 0.75f, 1e-6f);
     TEST_ASSERT(plan.gait_params.turn_step_m > 0.0f);
-    TEST_ASSERT_NEAR(plan.gait_params.leg_step_length_m[GAIT_LEG_FL], -0.006429f, 1e-5f);
-    TEST_ASSERT_NEAR(plan.gait_params.leg_step_length_m[GAIT_LEG_FR], 0.006429f, 1e-5f);
+    TEST_ASSERT_NEAR(plan.gait_params.leg_step_length_m[GAIT_LEG_FL], -0.007102f, 1e-5f);
+    TEST_ASSERT_NEAR(plan.gait_params.leg_step_length_m[GAIT_LEG_FR], 0.007102f, 1e-5f);
     TEST_ASSERT(plan.wheel_rads[GAIT_LEG_FL] < 0.0f);
     TEST_ASSERT(plan.wheel_rads[GAIT_LEG_FR] > 0.0f);
     TEST_ASSERT_NEAR(plan.wheel_rads[GAIT_LEG_FL], plan.wheel_rads[GAIT_LEG_RL], 1e-6f);
@@ -458,7 +457,7 @@ static void test_planner_deadband_zeroes_wheels(void) {
     }
 }
 
-static void test_planner_schedules_high_frequency_wheel_only_travel(void) {
+static void test_planner_keeps_validated_wheel_only_period(void) {
     chassis_plan_t slow;
     chassis_plan_t fast;
     chassis_cmd_plan_t cmd = {
@@ -471,7 +470,7 @@ static void test_planner_schedules_high_frequency_wheel_only_travel(void) {
 
     TEST_ASSERT(chassis_planner_update(&cmd, &GAIT_PARAMS_WALK_DEFAULT, &slow) == APP_OK);
     TEST_ASSERT(slow.moving == 1U);
-    TEST_ASSERT_NEAR(slow.gait_params.period_s, 0.244286f, 1e-5f);
+    TEST_ASSERT_NEAR(slow.gait_params.period_s, 0.2525f, 1e-6f);
     TEST_ASSERT_NEAR(slow.gait_params.step_length_m, 0.0f, 1e-6f);
     TEST_ASSERT_NEAR(slow.gait_params.turn_step_m, 0.0f, 1e-6f);
     TEST_ASSERT_NEAR(slow.gait_params.step_height_m, 0.055f, 1e-6f);
@@ -479,10 +478,10 @@ static void test_planner_schedules_high_frequency_wheel_only_travel(void) {
 
     cmd.vx_m_s = 0.35f;
     TEST_ASSERT(chassis_planner_update(&cmd, &GAIT_PARAMS_WALK_DEFAULT, &fast) == APP_OK);
-    TEST_ASSERT_NEAR(fast.gait_params.period_s, 0.20f, 1e-6f);
+    TEST_ASSERT_NEAR(fast.gait_params.period_s, 0.2525f, 1e-6f);
     TEST_ASSERT_NEAR(fast.gait_params.step_height_m, 0.055f, 1e-6f);
     TEST_ASSERT_NEAR(fast.gait_params.duty, 0.60f, 1e-6f);
-    TEST_ASSERT(fast.gait_params.period_s <= slow.gait_params.period_s);
+    TEST_ASSERT_NEAR(fast.gait_params.period_s, slow.gait_params.period_s, 1e-6f);
     TEST_ASSERT_NEAR(fast.gait_params.step_length_m, 0.0f, 1e-6f);
     TEST_ASSERT_NEAR(fast.gait_params.turn_step_m, 0.0f, 1e-6f);
     for (int i = 0; i < GAIT_LEG_NUM; i++) {
@@ -595,12 +594,12 @@ static void test_trot_wheel_only_travel_lifts_in_place(void) {
 
     reset_wheel_only_travel_cfg();
     TEST_ASSERT(chassis_planner_update(&cmd, &GAIT_PARAMS_TROT_DEFAULT, &plan) == APP_OK);
-    TEST_ASSERT_NEAR(plan.gait_params.period_s, 0.20f, 1e-6f);
+    TEST_ASSERT_NEAR(plan.gait_params.period_s, 0.2525f, 1e-6f);
     TEST_ASSERT_NEAR(plan.gait_params.step_height_m, 0.055f, 1e-6f);
     TEST_ASSERT(trot != NULL);
     TEST_ASSERT(trot->ops->set_param(trot, &plan.gait_params) == APP_OK);
     TEST_ASSERT(trot->ops->init(trot) == APP_OK);
-    TEST_ASSERT(trot->ops->update(trot, 0.16f, &out) == APP_OK);
+    TEST_ASSERT(trot->ops->update(trot, 0.202f, &out) == APP_OK);
 
     float max_foot_z_m = 0.0f;
     for (int i = 0; i < GAIT_LEG_NUM; i++) {
@@ -1381,15 +1380,56 @@ static void test_wheel_test_coast_and_vertical_drive_modes(void) {
                                                0x0FU,
                                                wheel_rads,
                                                4200U) == APP_OK);
+    {
+        const float trims[GAIT_LEG_NUM] = {0.001f, -0.002f, 0.003f, -0.004f};
+        TEST_ASSERT(chassis_control_set_trot_test_config(0.015f, 0.20f, 0.70f,
+                                                         trims) == APP_OK);
+    }
     float fr_hip_start = s_stub_ctxs[MOTOR_ID_FR_HIP].last_pos;
-    for (uint32_t tick = 0U; tick < 25U; tick++) {
+    for (uint32_t tick = 0U; tick < 35U; tick++) {
         chassis_control_tick(&input, 0.002f, 4200U + tick * 2U);
     }
     TEST_ASSERT(g_chassis_wheel_test.active == PROTO_WHEEL_TEST_VERTICAL_DRIVE);
     TEST_ASSERT(fabsf(s_stub_ctxs[MOTOR_ID_FR_HIP].last_pos - fr_hip_start) > 0.01f);
+    TEST_ASSERT(g_chassis_trot_test.stance_mask == 0x09U);
+    TEST_ASSERT_NEAR(g_chassis_trot_test.target_foot_z_m[GAIT_LEG_FL], 0.001f, 0.0001f);
+    TEST_ASSERT_NEAR(g_chassis_trot_test.target_foot_z_m[GAIT_LEG_FR], 0.013f, 0.0002f);
     for (int i = 0; i < GAIT_LEG_NUM; i++) {
         TEST_ASSERT_NEAR(s_stub_ctxs[wheel_ids[i]].last_vel, wheel_rads[i], 1e-6f);
+        TEST_ASSERT(isfinite(g_chassis_trot_test.joint_error_rad[i * 2]));
+        TEST_ASSERT(isfinite(g_chassis_trot_test.joint_error_rad[i * 2 + 1]));
     }
+}
+
+static void test_trot_test_config_defaults_and_validation(void) {
+    chassis_trot_test_debug_t debug;
+    const float trims[GAIT_LEG_NUM] = {0.001f, -0.002f, 0.003f, -0.004f};
+    float invalid_trims[GAIT_LEG_NUM] = {0.001f, -0.002f, 0.011f, -0.004f};
+
+    bind_stub_motors();
+    chassis_control_init();
+    chassis_control_get_trot_test_debug(&debug);
+    TEST_ASSERT_NEAR(debug.step_height_m, 0.015f, 1e-6f);
+    TEST_ASSERT_NEAR(debug.period_s, 0.50f, 1e-6f);
+    TEST_ASSERT_NEAR(debug.duty, 0.70f, 1e-6f);
+
+    TEST_ASSERT(chassis_control_set_trot_test_config(0.020f, 0.40f, 0.75f,
+                                                     trims) == APP_OK);
+    chassis_control_get_trot_test_debug(&debug);
+    TEST_ASSERT_NEAR(debug.step_height_m, 0.020f, 1e-6f);
+    TEST_ASSERT_NEAR(debug.foot_z_trim_m[GAIT_LEG_RL], 0.003f, 1e-6f);
+
+    TEST_ASSERT(chassis_control_set_trot_test_config(0.061f, 0.40f, 0.75f,
+                                                     trims) == APP_ERR_INVALID_ARG);
+    TEST_ASSERT(chassis_control_set_trot_test_config(0.020f, 0.19f, 0.75f,
+                                                     trims) == APP_ERR_INVALID_ARG);
+    TEST_ASSERT(chassis_control_set_trot_test_config(0.020f, 0.40f, 0.86f,
+                                                     trims) == APP_ERR_INVALID_ARG);
+    TEST_ASSERT(chassis_control_set_trot_test_config(0.020f, 0.40f, 0.75f,
+                                                     invalid_trims) == APP_ERR_INVALID_ARG);
+    chassis_control_get_trot_test_debug(&debug);
+    TEST_ASSERT_NEAR(debug.step_height_m, 0.020f, 1e-6f);
+    TEST_ASSERT_NEAR(debug.foot_z_trim_m[GAIT_LEG_RL], 0.003f, 1e-6f);
 }
 
 static void test_attitude_comp_applies_balance_torque_ff(void) {
@@ -1614,10 +1654,12 @@ static void test_protocol_function_ids_are_partitioned(void) {
     TEST_ASSERT(PROTO_FUNC_MODE_CMD == 0x15U);
     TEST_ASSERT(PROTO_FUNC_WHEEL_TEST == 0x16U);
     TEST_ASSERT(PROTO_FUNC_ARM_AUX_GPIO == 0x17U);
+    TEST_ASSERT(PROTO_FUNC_TROT_TEST_CONFIG == 0x18U);
     TEST_ASSERT(PROTO_FUNC_USB_CDC_PING == 0x21U);
     TEST_ASSERT(PROTO_FUNC_ARM_FEEDBACK == 0x86U);
     TEST_ASSERT(PROTO_FUNC_WHEEL_STATE == 0x88U);
     TEST_ASSERT(PROTO_FUNC_CHASSIS_DIAG == 0x89U);
+    TEST_ASSERT(PROTO_FUNC_TROT_TEST_DIAG == 0x8AU);
     TEST_ASSERT(PROTO_ROBOT_MODE_REAR_PLACE == 5U);
     TEST_ASSERT(PROTO_ROBOT_MODE_MAX == PROTO_ROBOT_MODE_REAR_PLACE);
 
@@ -1626,9 +1668,11 @@ static void test_protocol_function_ids_are_partitioned(void) {
     TEST_ASSERT(sizeof(payload_mode_cmd_t) == 1U);
     TEST_ASSERT(sizeof(payload_wheel_test_t) == 20U);
     TEST_ASSERT(sizeof(payload_arm_aux_gpio_t) == 2U);
+    TEST_ASSERT(sizeof(payload_trot_test_config_t) == 28U);
     TEST_ASSERT(sizeof(payload_arm_feedback_t) == 17U);
     TEST_ASSERT(sizeof(payload_wheel_state_t) == 21U);
     TEST_ASSERT(sizeof(payload_chassis_diag_t) == 48U);
+    TEST_ASSERT(sizeof(payload_trot_test_diag_t) == 32U);
 }
 
 static void test_arm_kinematics_inverse_forward_roundtrip(void) {
@@ -2660,6 +2704,37 @@ static void test_usb_chassis_diag_frame_tx(void) {
     TEST_ASSERT(tx[frame_len - 1] == checksum);
 }
 
+static void test_usb_trot_test_diag_frame_tx(void) {
+    uint8_t tx[64];
+    payload_trot_test_diag_t payload;
+
+    bind_stub_motors();
+    chassis_control_init();
+    TEST_ASSERT(bsp_usb_cdc_init() == APP_OK);
+    task_comm_init();
+    bsp_usb_cdc_test_reset();
+
+    g_chassis_trot_test.phase = 0.625f;
+    g_chassis_trot_test.stance_mask = 0x06U;
+    g_chassis_trot_test.target_foot_z_m[GAIT_LEG_FL] = 0.001f;
+    g_chassis_trot_test.target_foot_z_m[GAIT_LEG_FR] = 0.015f;
+    g_chassis_trot_test.joint_error_rad[0] = 0.012f;
+    g_chassis_trot_test.joint_error_rad[1] = -0.023f;
+
+    int frame_len = task_comm_send_trot_test_diag();
+    TEST_ASSERT(frame_len == 5 + (int)sizeof(payload));
+    TEST_ASSERT(bsp_usb_cdc_test_read_tx(tx, sizeof(tx)) == (uint32_t)frame_len);
+    TEST_ASSERT(tx[2] == PROTO_FUNC_TROT_TEST_DIAG);
+    TEST_ASSERT(tx[3] == sizeof(payload));
+    memcpy(&payload, &tx[4], sizeof(payload));
+    TEST_ASSERT(payload.phase_permille == 625U);
+    TEST_ASSERT(payload.stance_mask == 0x06U);
+    TEST_ASSERT(payload.target_z_mm[GAIT_LEG_FL] == 1);
+    TEST_ASSERT(payload.target_z_mm[GAIT_LEG_FR] == 15);
+    TEST_ASSERT(payload.joint_error_mrad[0] == 12);
+    TEST_ASSERT(payload.joint_error_mrad[1] == -23);
+}
+
 static void test_arm_serial_protocol_legacy_parser_caches_target_and_pump(void) {
     uint8_t target_payload[ARM_PROTOCOL_TARGET_PAYLOAD_LEN];
     uint8_t pump_payload[ARM_PROTOCOL_PUMP_PAYLOAD_LEN] = {1U};
@@ -2751,6 +2826,28 @@ static void test_usb_wheel_test_protocol_controls_direct_mode(void) {
     cmd.wheel_mask = 0U;
     inject_proto_frame(PROTO_FUNC_WHEEL_TEST, &cmd, (uint8_t)sizeof(cmd));
     TEST_ASSERT(g_chassis_wheel_test.active == 0U);
+}
+
+static void test_usb_trot_test_config_protocol(void) {
+    payload_trot_test_config_t cmd = {
+        .step_height_m = 0.020f,
+        .period_s = 0.40f,
+        .duty = 0.75f,
+        .foot_z_trim_m = {0.001f, -0.002f, 0.003f, -0.004f},
+    };
+    chassis_trot_test_debug_t debug;
+
+    bind_stub_motors();
+    TEST_ASSERT(bsp_usb_cdc_init() == APP_OK);
+    task_comm_init();
+    task_chassis_init();
+    inject_proto_frame(PROTO_FUNC_TROT_TEST_CONFIG, &cmd, (uint8_t)sizeof(cmd));
+    task_chassis_get_trot_test_debug(&debug);
+    TEST_ASSERT_NEAR(debug.step_height_m, 0.020f, 1e-6f);
+    TEST_ASSERT_NEAR(debug.period_s, 0.40f, 1e-6f);
+    TEST_ASSERT_NEAR(debug.duty, 0.75f, 1e-6f);
+    TEST_ASSERT_NEAR(debug.foot_z_trim_m[GAIT_LEG_RR], -0.004f, 1e-6f);
+    TEST_ASSERT(g_chassis_wheel_test.active == PROTO_WHEEL_TEST_DISABLE);
 }
 
 static void test_usb_arm_aux_gpio_protocol_controls_outputs(void) {
@@ -3541,7 +3638,7 @@ int main(void) {
     test_low_speed_turn_keeps_full_wheels_and_scales_leg_assist();
     test_planner_keeps_vy_as_motion_only();
     test_planner_deadband_zeroes_wheels();
-    test_planner_schedules_high_frequency_wheel_only_travel();
+    test_planner_keeps_validated_wheel_only_period();
     test_planner_wheel_only_travel_can_fallback();
     test_trot_turn_step_drives_left_right_gait();
     test_trot_uses_per_leg_step_lengths();
@@ -3565,6 +3662,7 @@ int main(void) {
     test_chassis_motion_gait_switch_keeps_continuous_wheel_drive();
     test_direct_wheel_test_bypasses_gait_and_times_out_to_hold();
     test_wheel_test_coast_and_vertical_drive_modes();
+    test_trot_test_config_defaults_and_validation();
     test_attitude_comp_applies_balance_torque_ff();
     test_chassis_arm_load_comp_updates_leg_payload_from_measured_arm();
     test_exact_vx_0p1_frame_decodes_without_yaw();
@@ -3601,7 +3699,9 @@ int main(void) {
     test_usb_arm_feedback_frame_tx();
     test_usb_wheel_feedback_frame_tx();
     test_usb_chassis_diag_frame_tx();
+    test_usb_trot_test_diag_frame_tx();
     test_usb_wheel_test_protocol_controls_direct_mode();
+    test_usb_trot_test_config_protocol();
     test_usb_arm_aux_gpio_protocol_controls_outputs();
     test_usb_mit_rejects_arm_motor_bypass();
     test_arm_serial_protocol_legacy_parser_caches_target_and_pump();

@@ -147,7 +147,7 @@ task_chassis_step_for_test()
 - `moving=1`。
 - 基础 gait 使用 `s_trot_params`。
 - `online_decide()` 选择 `trot`。
-- 默认周期随速度在 `0.25 s` 到 `0.20 s` 之间调度，抬脚高度固定 `0.055 m`，duty 为 `0.60`。
+- 默认使用现场标定的固定 `0.2525 s` 周期（约 `3.96 Hz`），抬脚高度固定 `0.055 m`，duty 为 `0.60`。
 - `wheel_only_travel=1` 时，`vx` 不生成足端前后步长，直行足端只做高频原地抬落。
 
 低速/原地 yaw 转向：
@@ -155,7 +155,7 @@ task_chassis_step_for_test()
 - `chassis_planner_is_low_speed_turn()` 为 true。
 - 基础 gait 使用 `s_walk_params`。
 - `planner_apply_turn_gait()` 覆盖转向抬脚高度和 duty。
-- 默认复用普通行进周期调度，按等效转向速度在 `0.25 s` 到 `0.20 s` 之间变化。
+- 默认复用普通行进的固定 `0.2525 s` 周期。
 - 四轮仍使用完整 yaw 差速；腿部 yaw 步长默认乘 `turn_leg_scale=0.25`，作为辅助转向。
 - `online_decide()` 选择 `walk`。
 

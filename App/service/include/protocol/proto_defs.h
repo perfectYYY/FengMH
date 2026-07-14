@@ -27,6 +27,7 @@ extern "C" {
 #define PROTO_FUNC_MODE_CMD     0x15
 #define PROTO_FUNC_WHEEL_TEST   0x16   /* 绕过 gait/planner 的四轮 MIT 诊断 */
 #define PROTO_FUNC_ARM_AUX_GPIO 0x17   /* 调试用：直接控制机械臂辅助 GPIO */
+#define PROTO_FUNC_TROT_TEST_CONFIG 0x18 /* 模式3原地 TROT 测试参数 */
 #define PROTO_FUNC_STATUS_REQ   0x20
 #define PROTO_FUNC_USB_CDC_PING 0x21
 
@@ -41,6 +42,7 @@ extern "C" {
 #define PROTO_FUNC_ARM_MOTOR_ANGLES 0x87
 #define PROTO_FUNC_WHEEL_STATE  0x88
 #define PROTO_FUNC_CHASSIS_DIAG 0x89
+#define PROTO_FUNC_TROT_TEST_DIAG 0x8A
 #define PROTO_FUNC_EVENT        0x8F
 
 #define PROTO_STEER_MODE_OFF       0u
@@ -126,6 +128,13 @@ typedef struct __attribute__((packed)) {
     float wheel_rads[GAIT_LEG_NUM]; /* FL/FR/RL/RR 输出轴 rad/s */
 } payload_wheel_test_t;  /* FuncID 0x16, len=20；需持续刷新 */
 
+typedef struct __attribute__((packed)) {
+    float step_height_m;              /* 0..0.060 m */
+    float period_s;                   /* 0.20..1.00 s */
+    float duty;                       /* 0.50..0.85 */
+    float foot_z_trim_m[GAIT_LEG_NUM]; /* FL/FR/RL/RR, -0.010..0.010 m */
+} payload_trot_test_config_t; /* FuncID 0x18, len=28 */
+
 #define PROTO_ARM_AUX_GPIO_PC8 0u
 #define PROTO_ARM_AUX_GPIO_PC9 1u
 #define PROTO_ARM_AUX_GPIO_PA8 2u
@@ -181,6 +190,15 @@ typedef struct __attribute__((packed)) {
     uint16_t speed_scale_permille;
     uint16_t flags;
 } payload_chassis_diag_t; /* FuncID 0x89, len=48 */
+
+typedef struct __attribute__((packed)) {
+    uint32_t timestamp_ms;
+    uint16_t phase_permille;                 /* 0..999 */
+    uint8_t stance_mask;                     /* bit0..3 = FL/FR/RL/RR */
+    uint8_t reserved;
+    int16_t target_z_mm[GAIT_LEG_NUM];        /* FL/FR/RL/RR */
+    int16_t joint_error_mrad[GAIT_LEG_NUM * 2]; /* 每腿 hip,knee */
+} payload_trot_test_diag_t; /* FuncID 0x8A, len=32 */
 
 typedef struct __attribute__((packed)) {
     uint8_t req_kind;  /* 0=state, 1=motor, 2=stats */

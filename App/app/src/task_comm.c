@@ -3,7 +3,7 @@
  *
  * 下行：USB CDC RX → proto_frame 解析 → proto_dispatch 分发
  * 上行：定时构造 0x80(整机状态) / 0x81(电机状态) /
- *       0x88(四轮实际转速) / 0x89(底盘诊断) 帧 → USB CDC TX
+ *       0x88(四轮实际转速) / 0x89(底盘诊断) / 0x8A(TROT测试诊断) 帧 → USB CDC TX
  */
 #include "task_comm.h"
 #include "log.h"
@@ -50,15 +50,18 @@ static uint32_t s_last_state_tx_ms  = 0;  /* 0x80 上次发送时间 */
 static uint32_t s_last_motor_tx_ms  = 0;  /* 0x81 上次发送时间 */
 static uint32_t s_last_wheel_tx_ms  = 0;  /* 0x88 上次发送时间 */
 static uint32_t s_last_diag_tx_ms   = 0;  /* 0x89 上次发送时间 */
+static uint32_t s_last_trot_test_tx_ms = 0; /* 0x8A 上次发送时间 */
 #if APP_TARGET_MCU
 static const uint32_t STATE_TX_INTERVAL_MS  = 100;  /* 10Hz */
 static const uint32_t MOTOR_TX_INTERVAL_MS  = 200;  /* 5Hz, motor states are round-robin */
 static const uint32_t WHEEL_TX_INTERVAL_MS  = 40;   /* 25Hz, FL/FR/RL/RR synchronized */
 static const uint32_t DIAG_TX_INTERVAL_MS   = 40;   /* 25Hz */
+static const uint32_t TROT_TEST_TX_INTERVAL_MS = 40; /* 25Hz, only mode 3 */
 static const uint8_t TX_STATE_ENABLE        = 0U;   /* 0x80: disabled for pure wheel speed tests */
 static const uint8_t TX_MOTOR_ENABLE        = 0U;   /* 0x81: disabled for pure wheel speed tests */
 static const uint8_t TX_WHEEL_ENABLE        = 1U;   /* 0x88: keep four-wheel velocity telemetry */
 static const uint8_t TX_DIAG_ENABLE         = 1U;   /* 0x89: keep steer diagnostics when present */
+static const uint8_t TX_TROT_TEST_ENABLE    = 1U;
 #endif
 
 static void mark_valid_rx(void) {
@@ -134,6 +137,28 @@ static int handle_wheel_test(const uint8_t* p, uint8_t len) {
     s_chassis.target_yaw = 0.0f;
     s_chassis.steer_mode = 0U;
     s_chassis.seq++;
+    return APP_OK;
+#endif
+}
+
+static int handle_trot_test_config(const uint8_t* p, uint8_t len) {
+#if !APP_CHASSIS_ENABLE
+    (void)p;
+    (void)len;
+    return APP_ERR_UNSUPPORTED;
+#else
+    if (len != sizeof(payload_trot_test_config_t)) return APP_ERR_INVALID_ARG;
+
+    payload_trot_test_config_t cmd;
+    float trims[GAIT_LEG_NUM];
+    memcpy(&cmd, p, sizeof(cmd));
+    memcpy(trims, cmd.foot_z_trim_m, sizeof(trims));
+    int ret = task_chassis_set_trot_test_config(cmd.step_height_m,
+                                                cmd.period_s,
+                                                cmd.duty,
+                                                trims);
+    if (ret != APP_OK) return ret;
+    mark_valid_rx();
     return APP_OK;
 #endif
 }
@@ -366,6 +391,7 @@ static const proto_entry_t s_tbl[] = {
     { PROTO_FUNC_MODE_CMD, sizeof(payload_mode_cmd_t), handle_mode_cmd, "mode" },
     { PROTO_FUNC_WHEEL_TEST, sizeof(payload_wheel_test_t), handle_wheel_test, "wheel_test" },
     { PROTO_FUNC_ARM_AUX_GPIO, sizeof(payload_arm_aux_gpio_t), handle_arm_aux_gpio, "arm_aux_gpio" },
+    { PROTO_FUNC_TROT_TEST_CONFIG, sizeof(payload_trot_test_config_t), handle_trot_test_config, "trot_test_config" },
 };
 
 static void on_usb_rx(const uint8_t* d, uint32_t n, void* user) {
@@ -390,6 +416,7 @@ void task_comm_init(void) {
     s_last_motor_tx_ms = 0;
     s_last_wheel_tx_ms = 0;
     s_last_diag_tx_ms = 0;
+    s_last_trot_test_tx_ms = 0;
     proto_dispatcher_init(&s_disp, s_tbl, sizeof(s_tbl)/sizeof(s_tbl[0]));
     proto_frame_init(&s_parser, proto_dispatch_on_frame, &s_disp);
     bsp_usb_cdc_attach_rx(on_usb_rx, NULL);
@@ -560,6 +587,28 @@ int task_comm_send_chassis_diag(void) {
     return send_proto_payload(PROTO_FUNC_CHASSIS_DIAG, &p, (uint8_t)sizeof(p));
 }
 
+int task_comm_send_trot_test_diag(void) {
+    payload_trot_test_diag_t p;
+    chassis_trot_test_debug_t debug;
+    memset(&p, 0, sizeof(p));
+    memset(&debug, 0, sizeof(debug));
+    task_chassis_get_trot_test_debug(&debug);
+
+    p.timestamp_ms = (uint32_t)bsp_time_now_ms();
+    float phase_permille = debug.phase * 1000.0f;
+    if (!isfinite(phase_permille) || phase_permille < 0.0f) phase_permille = 0.0f;
+    if (phase_permille > 999.0f) phase_permille = 999.0f;
+    p.phase_permille = (uint16_t)phase_permille;
+    p.stance_mask = (uint8_t)(debug.stance_mask & 0x0FU);
+    for (int i = 0; i < GAIT_LEG_NUM; i++) {
+        p.target_z_mm[i] = diag_float_to_i16(debug.target_foot_z_m[i], 1000.0f);
+        p.joint_error_mrad[i * 2] = diag_float_to_i16(debug.joint_error_rad[i * 2], 1000.0f);
+        p.joint_error_mrad[i * 2 + 1] =
+            diag_float_to_i16(debug.joint_error_rad[i * 2 + 1], 1000.0f);
+    }
+    return send_proto_payload(PROTO_FUNC_TROT_TEST_DIAG, &p, (uint8_t)sizeof(p));
+}
+
 /* 发送上行帧 */
 static void send_state_frame(void) {
     payload_state_t p = build_state_payload();
@@ -629,6 +678,15 @@ void task_comm_entry(void* arg) {
         if (TX_DIAG_ENABLE && (now - s_last_diag_tx_ms) >= DIAG_TX_INTERVAL_MS) {
             if (task_comm_send_chassis_diag() > 0) {
                 s_last_diag_tx_ms = now;
+            }
+        }
+
+
+        if (TX_TROT_TEST_ENABLE &&
+            g_chassis_wheel_test.active == PROTO_WHEEL_TEST_VERTICAL_DRIVE &&
+            (now - s_last_trot_test_tx_ms) >= TROT_TEST_TX_INTERVAL_MS) {
+            if (task_comm_send_trot_test_diag() > 0) {
+                s_last_trot_test_tx_ms = now;
             }
         }
 

@@ -20,6 +20,11 @@ app_err_t bsp_usb_cdc_send(const uint8_t* data, uint32_t len);
 void      bsp_usb_cdc_process(void);
 void      bsp_usb_cdc_on_tx_complete(void);
 
+/* MCU 现场诊断：USB 断连恢复、队列满和底层 BUSY 计数。 */
+extern volatile uint32_t debug_usb_tx_timeout_recover_count;
+extern volatile uint32_t debug_usb_tx_queue_overflow_count;
+extern volatile uint32_t debug_usb_tx_driver_busy_count;
+
 /* 板上 usbd_cdc_if.c 在收到字节时调用此 hook（host 也可调用以模拟） */
 void      bsp_usb_cdc_on_rx(const uint8_t* data, uint32_t len);
 

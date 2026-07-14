@@ -134,14 +134,20 @@ flowchart TD
 flowchart TD
     COMM_TASK["task_comm_entry"] --> STATE["send_state_frame 0x80 10 Hz"]
     COMM_TASK --> MOTOR["send_motor_frame 0x81 5 Hz round-robin"]
+    COMM_TASK --> WHEEL["0x88 wheel state 25 Hz"]
+    COMM_TASK --> DIAG["0x89 chassis diag 25 Hz"]
+    COMM_TASK --> TROT_DIAG["0x8A TROT test diag 25 Hz, mode 3 only"]
     ARM_TASK["task_arm.send_feedback_if_due"] --> BUILD["build_integrated_feedback"]
     BUILD --> FB["task_comm_send_arm_feedback 0x86 50 Hz"]
     STATE --> USB["bsp_usb_cdc_send"]
     MOTOR --> USB
+    WHEEL --> USB
+    DIAG --> USB
+    TROT_DIAG --> USB
     FB --> USB
 ```
 
-`0x86 ARM_FEEDBACK` payload 为 `arm_state,end_x,end_y,end_z,theta1_rad`。`build_integrated_feedback()` 使用兼容层 `Arm_Control_GetCurrentAngles()` + `Arm_Forward_Kinematics()` 生成米制末端坐标。
+`0x86 ARM_FEEDBACK` payload 为 `arm_state,end_x,end_y,end_z,theta1_rad`。`build_integrated_feedback()` 使用兼容层 `Arm_Control_GetCurrentAngles()` + `Arm_Forward_Kinematics()` 生成米制末端坐标。模式 3 的 `0x8A` 输出相位、支撑掩码、四腿目标高度和八关节跟踪误差，可按时间戳与 `0x89` 的 `gyro_z` 对齐。
 
 ## 设备输出边界
 
@@ -156,9 +162,9 @@ flowchart TD
 
 重点 host 测试覆盖：
 
-- planner：轮驱零平移步长、前进/转向、`vy` 行为、死区、4-5 Hz 调度和旧模式回退。
+- planner：轮驱零平移步长、前进/转向、`vy` 行为、死区、现场标定的固定 `0.2525 s` 周期和旧模式回退。
 - gait：trot `0.055 m` 原地抬腿峰值、yaw 每腿步长、walk 三支撑、脚端字段。
 - chassis：端到端、`vx=0.1 m/s` 有界积分 MIT 连续轮驱、stand height/MIT 锁轮、独立轮驱/超时、motion gait 切换、轮速 blend、mode gate、姿态补偿、机械臂载荷补偿。
-- protocol：FuncID 分区、USB 到 task 缓存、ARM feedback TX、拒绝 ARM MIT 旁路。
+- protocol：FuncID/长度分区、USB 到 task 缓存、`0x18` TROT 参数、`0x8A` TROT 诊断、ARM feedback TX、拒绝 ARM MIT 旁路。
 - arm：IK/FK、五次轨迹、重补、J1 禁区、安全三段式、fine tracking、固定等待姿态、纯重补、ESTOP。
 - device：气泵 GPIO、达妙 MIT 打包/反馈/FDCAN3 路由/自动 enable。

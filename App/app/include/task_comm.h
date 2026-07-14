@@ -72,6 +72,7 @@ int task_comm_send_arm_motor_angles(const payload_arm_motor_angles_t* angles);
 /* 四轮实际转速上行；顺序固定为 FL/FR/RL/RR，单位 rad/s。 */
 int task_comm_send_wheel_feedback(void);
 int task_comm_send_chassis_diag(void);
+int task_comm_send_trot_test_diag(void);
 
 /* 最近一次"任何有效帧"的 ms 时戳；用于心跳超时判定 */
 uint32_t task_comm_last_rx_ms(void);

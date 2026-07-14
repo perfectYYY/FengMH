@@ -103,6 +103,20 @@ int task_chassis_set_wheel_test(uint8_t enable,
     return chassis_control_set_wheel_test(enable, wheel_mask, wheel_rads, now_ms);
 }
 
+int task_chassis_set_trot_test_config(float step_height_m,
+                                      float period_s,
+                                      float duty,
+                                      const float foot_z_trim_m[GAIT_LEG_NUM]) {
+    return chassis_control_set_trot_test_config(step_height_m,
+                                                period_s,
+                                                duty,
+                                                foot_z_trim_m);
+}
+
+void task_chassis_get_trot_test_debug(chassis_trot_test_debug_t* out) {
+    chassis_control_get_trot_test_debug(out);
+}
+
 int task_chassis_play_script(const script_t* script, float blend_dur_s) {
     return chassis_control_play_script(script, blend_dur_s);
 }

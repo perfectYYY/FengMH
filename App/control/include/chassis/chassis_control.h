@@ -132,6 +132,20 @@ typedef struct {
 
 extern volatile chassis_wheel_test_debug_t g_chassis_wheel_test;
 
+typedef struct {
+    float step_height_m;
+    float period_s;
+    float duty;
+    float foot_z_trim_m[GAIT_LEG_NUM];
+    float phase;
+    uint8_t stance_mask;
+    uint8_t reserved[3];
+    float target_foot_z_m[GAIT_LEG_NUM];
+    float joint_error_rad[GAIT_LEG_NUM * 2];
+} chassis_trot_test_debug_t;
+
+extern volatile chassis_trot_test_debug_t g_chassis_trot_test;
+
 void chassis_control_init(void);
 void chassis_control_tick(const chassis_control_input_t* input,
                           float dt_s,
@@ -158,6 +172,11 @@ int chassis_control_set_wheel_test(uint8_t enable,
                                    uint8_t wheel_mask,
                                    const float wheel_rads[GAIT_LEG_NUM],
                                    uint32_t now_ms);
+int chassis_control_set_trot_test_config(float step_height_m,
+                                         float period_s,
+                                         float duty,
+                                         const float foot_z_trim_m[GAIT_LEG_NUM]);
+void chassis_control_get_trot_test_debug(chassis_trot_test_debug_t* out);
 
 const char* chassis_control_active_gait_name(void);
 

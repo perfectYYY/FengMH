@@ -22,6 +22,7 @@ flowchart TD
     DISP --> H14["0x14 pump"]
     DISP --> H15["0x15 mode"]
     DISP --> H16["0x16 direct wheel test"]
+    DISP --> H18["0x18 TROT test config"]
 
     H10 --> CH_CACHE["s_chassis"]
     H11 --> ARM_CACHE["s_arm_target"]
@@ -75,13 +76,17 @@ flowchart TD
 | `0x13 MIT_CMD` | 单电机 MIT 调试；拒绝 ARM_J1-J6 旁路，防止抢机械臂 task。 |
 | `0x14 ARM_PUMP` | 校验 `pump_on` 后写 `s_arm_pump`。 |
 | `0x15 MODE_CMD` | 写 `s_mode_cmd`；`ESTOP/ERROR` 同步置位 `task_safety` 急停。 |
-| `0x16 WHEEL_TEST` | 测试专用：模式 1 固定腿轮驱，模式 2 轮毂零电流自由推动，模式 3 按 NAV 参数原地踏步并独立轮驱；500 ms 超时锁轮。 |
+| `0x16 WHEEL_TEST` | 测试专用：模式 1 固定腿轮驱，模式 2 轮毂零电流自由推动，模式 3 独立参数原地 TROT 并独立轮驱；500 ms 超时锁轮。 |
+| `0x18 TROT_TEST_CONFIG` | 只更新模式 3 的步高、周期、占空比和 FL/FR/RL/RR 足端高度微调，不切换模式。 |
 
 上行：
 
 - `0x80 STATE`：`task_comm_entry()` 10 Hz 发送。
 - `0x81 MOTOR_STATE`：`task_comm_entry()` 5 Hz 轮询发送单电机状态。
 - `0x86 ARM_FEEDBACK`：`task_arm` 50 Hz 发送机械臂末端反馈。
+- `0x88 WHEEL_STATE`：25 Hz 同步发送四轮实际转速。
+- `0x89 CHASSIS_DIAG`：25 Hz 发送轮速目标/滤波值、电流、yaw、gyro_z 和状态标志。
+- `0x8A TROT_TEST_DIAG`：仅模式 3 下 25 Hz 发送 TROT 相位、支撑掩码、足端目标高度和关节跟踪误差。
 
 ## 底盘控制周期
 
@@ -113,8 +118,8 @@ task_comm_get_chassis/mode
 - 轮速使用完整局部速度：`v_wheel_x = vx - wz * y_leg`，默认 `|y_leg| = 0.15 m`。
 - 普通行驶默认启用 `wheel_only_travel`：足端不使用 `vx`，直行时三个步长字段全部为 0；边行驶边转向时只保留 `-wz * y_leg` 的左右步差。
 - `vy` 只参与 moving 判断，不进入 2DOF 足端横向轨迹。
-- `g_chassis_stride_cfg` 默认把普通行驶周期从 `0.25 s` 调到 `0.20 s`，固定抬脚高度 `0.055 m`、duty `0.60`；可用 `wheel_only_travel=0` 回退旧平移步长。
-- `g_chassis_turn_cfg` 默认让低速 `walk` 转向复用普通行进的 `0.25 s -> 0.20 s` 周期调度；轮差速保持完整 `wz`，腿部 yaw 步长默认缩放为旧值的 `25%`。`match_travel_period` 和 `turn_leg_scale` 可用于现场回退或调参。
+- `g_chassis_stride_cfg` 默认使用现场标定的固定 `0.2525 s` 周期（约 `3.96 Hz`），固定抬脚高度 `0.055 m`、duty `0.60`；`wheel_only_travel=1` 时前进步长为零，可用 `wheel_only_travel=0` 回退旧平移步长。
+- `g_chassis_turn_cfg` 默认让低速 `walk` 转向复用普通行进的 `0.2525 s` 周期；轮差速保持完整 `wz`，腿部 yaw 步长默认缩放为旧值的 `25%`。`match_travel_period` 和 `turn_leg_scale` 可用于现场回退或调参。
 
 ## 腿和轮输出
 
@@ -136,7 +141,13 @@ gait_output
 - `GAIT_WHEEL_HOLD`：进入 stand/保守保持时清 DRIVE 积分、一次锁存实际轮角，随后发送固定位置和零速度。
 - `g_leg_wheel_mit` 提供 drive/hold mask、速度积分、增益、力矩限幅、位置误差限幅和 debug reset。
 
-`0x16 WHEEL_TEST` payload 为 `mode:u8, wheel_mask:u8, reserved[2], wheel_rads[4]:f32`，轮序固定 `FL/FR/RL/RR`。`mode=0` 退出并锁轮，`1` 为固定腿纯轮驱，`2` 为轮毂零电流自由推动，`3` 为四腿按 NAV 行走参数仅上下踏步（步长 0）并使用四个独立轮速。模式 3 默认步高 `0.055 m`、周期 `0.20 s`（`5 Hz`）、占空比 `0.60`，并读取当前 `g_chassis_stride_cfg` 对应值。测试状态绕过正式 planner/gait，但仍由 500 Hz chassis task 下发；命令必须在 500 ms 内持续刷新，模式 2 退出时会在当前位置重新锁轮。
+`0x16 WHEEL_TEST` payload 为 `mode:u8, wheel_mask:u8, reserved[2], wheel_rads[4]:f32`，轮序固定 `FL/FR/RL/RR`。`mode=0` 退出并锁轮，`1` 为固定腿纯轮驱，`2` 为轮毂零电流自由推动，`3` 为四腿仅上下 TROT（步长 0）并使用四个独立轮速。模式 3 保持标准对角相位 `FL=0, FR=0.5, RL=0.5, RR=0`，轮速为零时仍使用 MIT 零速锁定。测试状态绕过正式 planner/gait 和 IMU 航向修正，但仍由 500 Hz chassis task 下发；`0x16` 必须在 500 ms 内持续刷新，模式 2 退出时会在当前位置重新锁轮。
+
+模式 3 默认步高 `0.015 m`、周期 `0.50 s`、占空比 `0.70`、四腿高度微调全零。摆动段使用 `64*t^3*(1-t)^3` 垂向曲线，离地和落地端点的速度、加速度均为零。逐腿 `foot_z_trim_m` 在 IK 前叠加：正值缩短该腿的有效支撑长度，负值加长；现场每次只改 `0.001 m`。
+
+`0x18 TROT_TEST_CONFIG` payload 共 28 字节，依次为 7 个 little-endian `float32`：`step_height_m, period_s, duty, FL_trim_m, FR_trim_m, RL_trim_m, RR_trim_m`。范围分别为 `0..0.060 m`、`0.20..1.00 s`、`0.50..0.85` 和每腿 `-0.010..0.010 m`。该命令只需在参数变化时发送一次；非法帧整包拒绝，旧参数保持不变。
+
+`0x8A TROT_TEST_DIAG` payload 共 32 字节：`timestamp_ms:u32, phase_permille:u16, stance_mask:u8, reserved:u8, target_z_mm[4]:i16, joint_error_mrad[8]:i16`。轮/腿顺序固定为 `FL/FR/RL/RR`，每腿关节误差顺序为 `hip,knee`。用时间戳与 `0x89` 的 `gyro_z` 对齐，可定位哪组对角腿落地时产生偏航尖峰。USB 忙时不会阻塞 500 Hz 控制任务，而是在下一通信周期重试。
 
 `0x89` 的 `flags` 位 12..13 同步输出当前测试模式，因此 payload 最后两个字节在无其他标志时分别为：普通状态 `00 00`、模式 1 `00 10`、模式 2 `00 20`、模式 3 `00 30`。
 
@@ -146,6 +157,12 @@ gait_output
 
 原地踏步轮驱，FL/FR/RL=4.00 rad/s，RR=4.16 rad/s：
 55 AA 16 14 03 0F 00 00 00 00 80 40 00 00 80 40 00 00 80 40 B8 1E 85 40 16
+
+原地踏步、四轮零速 MIT 锁定（每 50 ms 循环）：
+55 AA 16 14 03 0F 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 3B
+
+写入模式 3 默认参数（15 mm / 0.50 s / 0.70 / 四腿零微调，只发一次）：
+55 AA 18 1C 8F C2 75 3C 00 00 00 3F 33 33 33 3F 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 4C
 
 退出测试并锁轮：
 55 AA 16 14 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 29

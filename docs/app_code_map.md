@@ -27,11 +27,11 @@ USB CDC 协议入口和遥测发送。
 主要职责：
 
 - `proto_frame` 增量解析 `55 AA | func | len | payload | checksum`。
-- `proto_dispatch` 分发 `0x10/0x11/0x12/0x13/0x14/0x15/0x16`。
+- `proto_dispatch` 分发 `0x10/0x11/0x12/0x13/0x14/0x15/0x16/0x17/0x18`。
 - 缓存底盘速度、机械臂目标、气泵命令、整机 mode 和最近有效接收时间。
 - 拒绝机械臂 J1-J6 的 `0x13 MIT_CMD` 旁路写入。
 - 在通信入口过滤机械臂 target 类型、有限值和明显单位/字节序错误。
-- MCU 上发送 `0x80 STATE`、`0x81 MOTOR_STATE`；被 `task_arm` 调用时发送 `0x86 ARM_FEEDBACK`。
+- MCU 上发送 `0x88 WHEEL_STATE`、`0x89 CHASSIS_DIAG`，并仅在模式 3 发送 `0x8A TROT_TEST_DIAG`；被 `task_arm` 调用时发送 `0x86 ARM_FEEDBACK`。
 
 ### `App/app/src/task_chassis.c`
 
@@ -89,7 +89,7 @@ USB CDC 协议入口和遥测发送。
 - `moving` 标志。
 - `low_speed_turn` 标志。
 - walk/trot 通用 gait 参数。
-- 普通行驶和低速 `walk` 转向共用 4-5 Hz 周期调度；普通行驶使用 `0.055 m` 抬脚高度。
+- 普通行驶和低速 `walk` 转向共用现场标定的固定 `0.2525 s` 周期；普通行驶使用 `0.055 m` 抬脚高度和 `0.60` 占空比。
 - `leg_step_length_m[4]` 每腿转向步长；低速/原地转向默认使用 `25%` yaw 腿部辅助，轮差速仍使用完整 `wz`。
 - `wheel_rads[4]` 每轮局部滚动速度。
 

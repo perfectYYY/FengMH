@@ -24,6 +24,7 @@
 #include "gait_walk.h"
 #include "imu_bmi088.h"
 #include "leg_controller.h"
+#include "leg_ik.h"
 #include "leg_params.h"
 #include "log.h"
 #include "motor_go.h"
@@ -58,9 +59,15 @@ static const char* TAG = "CHASSIS";
 #define CHASSIS_CMD_SLEW_WZ_RADPS2             1.50f
 #define CHASSIS_WHEEL_TEST_TIMEOUT_MS           500U
 #define CHASSIS_WHEEL_TEST_MAX_RADS             18.0f
-#define CHASSIS_WHEEL_TEST_DEFAULT_PERIOD_S     0.20f
-#define CHASSIS_WHEEL_TEST_DEFAULT_HEIGHT_M     0.055f
-#define CHASSIS_WHEEL_TEST_DEFAULT_DUTY         0.60f
+#define CHASSIS_WHEEL_TEST_DEFAULT_PERIOD_S     0.50f
+#define CHASSIS_WHEEL_TEST_DEFAULT_HEIGHT_M     0.015f
+#define CHASSIS_WHEEL_TEST_DEFAULT_DUTY         0.70f
+#define CHASSIS_TROT_TEST_MIN_PERIOD_S           0.20f
+#define CHASSIS_TROT_TEST_MAX_PERIOD_S           1.00f
+#define CHASSIS_TROT_TEST_MAX_HEIGHT_M           0.060f
+#define CHASSIS_TROT_TEST_MIN_DUTY               0.50f
+#define CHASSIS_TROT_TEST_MAX_DUTY               0.85f
+#define CHASSIS_TROT_TEST_MAX_TRIM_M             0.010f
 #define CHASSIS_WHEEL_TEST_MODE_COAST            2U
 #define CHASSIS_WHEEL_TEST_MODE_VERTICAL_DRIVE   3U
 #define HEADING_HOLD_MIN_VX_M_S                  0.05f
@@ -110,6 +117,7 @@ static uint8_t s_last_online = 0U;
 volatile chassis_attitude_comp_debug_t g_chassis_attitude_comp;
 volatile chassis_arm_load_comp_debug_t g_chassis_arm_load_comp;
 volatile chassis_wheel_test_debug_t g_chassis_wheel_test;
+volatile chassis_trot_test_debug_t g_chassis_trot_test;
 static uint8_t s_wheel_test_was_active = 0U;
 static uint8_t s_wheel_test_last_mode = 0U;
 static float s_wheel_test_vertical_phase = 0.0f;
@@ -1097,9 +1105,9 @@ static uint8_t wheel_test_active_at(uint32_t now_ms) {
 
 static void wheel_test_build_vertical_output(gait_output_t* output, float dt_s) {
     static const float phase_offset[GAIT_LEG_NUM] = {0.0f, 0.5f, 0.5f, 0.0f};
-    float period_s = g_chassis_stride_cfg.fast_period_s;
-    float step_height_m = g_chassis_stride_cfg.step_height_m;
-    float duty = g_chassis_stride_cfg.duty;
+    float period_s = g_chassis_trot_test.period_s;
+    float step_height_m = g_chassis_trot_test.step_height_m;
+    float duty = g_chassis_trot_test.duty;
 
     if (!isfinite(period_s) || period_s <= 1e-6f) {
         period_s = CHASSIS_WHEEL_TEST_DEFAULT_PERIOD_S;
@@ -1116,22 +1124,51 @@ static void wheel_test_build_vertical_output(gait_output_t* output, float dt_s) 
     output->phase = s_wheel_test_vertical_phase;
 
     for (int i = 0; i < GAIT_LEG_NUM; i++) {
-        float dx_m = 0.0f;
         float dz_m = 0.0f;
         uint8_t in_stance = 1U;
         float leg_phase = gait_wrap01(s_wheel_test_vertical_phase + phase_offset[i]);
-        gait_trot_foot_traj(leg_phase,
-                            duty,
-                            0.0f,
-                            step_height_m,
-                            &dx_m,
-                            &dz_m,
-                            &in_stance);
+        if (leg_phase >= duty) {
+            float t = (leg_phase - duty) / (1.0f - duty);
+            float one_minus_t = 1.0f - t;
+            /* 64*t^3*(1-t)^3: both endpoint velocity and acceleration are zero. */
+            dz_m = step_height_m * 64.0f * t * t * t *
+                   one_minus_t * one_minus_t * one_minus_t;
+            in_stance = 0U;
+        }
+        dz_m += g_chassis_trot_test.foot_z_trim_m[i];
         output->leg[i].in_stance = in_stance;
         output->leg[i].foot_x_m = 0.0f;
         output->leg[i].foot_z_m = dz_m;
         output->leg[i].hip_rad = 0.0f;
         output->leg[i].knee_rad = dz_m;
+        g_chassis_trot_test.target_foot_z_m[i] = dz_m;
+    }
+    g_chassis_trot_test.phase = s_wheel_test_vertical_phase;
+    g_chassis_trot_test.stance_mask = 0U;
+    for (int i = 0; i < GAIT_LEG_NUM; i++) {
+        if (output->leg[i].in_stance) {
+            g_chassis_trot_test.stance_mask |= (uint8_t)(1U << i);
+        }
+    }
+}
+
+static void wheel_test_update_joint_errors(const gait_output_t* output) {
+    static const motor_logical_id_t hip_ids[GAIT_LEG_NUM] = {
+        MOTOR_ID_FL_HIP, MOTOR_ID_FR_HIP, MOTOR_ID_RL_HIP, MOTOR_ID_RR_HIP
+    };
+    static const motor_logical_id_t knee_ids[GAIT_LEG_NUM] = {
+        MOTOR_ID_FL_KNEE, MOTOR_ID_FR_KNEE, MOTOR_ID_RL_KNEE, MOTOR_ID_RR_KNEE
+    };
+    gait_output_t ik_output;
+    memset(&ik_output, 0, sizeof(ik_output));
+    leg_ik_solve_all(output, &LEG_DIM_DEFAULT, s_current_stand_height_m, &ik_output);
+    for (int i = 0; i < GAIT_LEG_NUM; i++) {
+        motor_dev_t* hip = motor_get(hip_ids[i]);
+        motor_dev_t* knee = motor_get(knee_ids[i]);
+        g_chassis_trot_test.joint_error_rad[i * 2] =
+            ik_output.leg[i].hip_rad - (hip ? hip->state.angle_rad : 0.0f);
+        g_chassis_trot_test.joint_error_rad[i * 2 + 1] =
+            ik_output.leg[i].knee_rad - (knee ? knee->state.angle_rad : 0.0f);
     }
 }
 
@@ -1159,6 +1196,9 @@ static void apply_direct_wheel_test(float dt_s) {
     }
 
     leg_controller_apply_dt(&s_leg_controller, &output, dt_s);
+    if (vertical_drive) {
+        wheel_test_update_joint_errors(&output);
+    }
 
     if (coast) {
         for (int i = 0; i < GAIT_LEG_NUM; i++) {
@@ -1213,6 +1253,10 @@ void chassis_control_init(void) {
     memset((void*)&g_chassis_attitude_comp, 0, sizeof(g_chassis_attitude_comp));
     memset((void*)&g_chassis_arm_load_comp, 0, sizeof(g_chassis_arm_load_comp));
     memset((void*)&g_chassis_wheel_test, 0, sizeof(g_chassis_wheel_test));
+    memset((void*)&g_chassis_trot_test, 0, sizeof(g_chassis_trot_test));
+    g_chassis_trot_test.step_height_m = CHASSIS_WHEEL_TEST_DEFAULT_HEIGHT_M;
+    g_chassis_trot_test.period_s = CHASSIS_WHEEL_TEST_DEFAULT_PERIOD_S;
+    g_chassis_trot_test.duty = CHASSIS_WHEEL_TEST_DEFAULT_DUTY;
     g_chassis_attitude_comp.stance_only = 1U;
     g_chassis_attitude_comp.scale = 1.0f;
     g_chassis_attitude_comp.half_length_m = ATTITUDE_COMP_DEFAULT_HALF_LENGTH_M;
@@ -1427,6 +1471,39 @@ int chassis_control_set_wheel_test(uint8_t enable,
     }
     g_chassis_wheel_test.active = enable;
     return APP_OK;
+}
+
+int chassis_control_set_trot_test_config(float step_height_m,
+                                         float period_s,
+                                         float duty,
+                                         const float foot_z_trim_m[GAIT_LEG_NUM]) {
+    if (!isfinite(step_height_m) || step_height_m < 0.0f ||
+        step_height_m > CHASSIS_TROT_TEST_MAX_HEIGHT_M ||
+        !isfinite(period_s) || period_s < CHASSIS_TROT_TEST_MIN_PERIOD_S ||
+        period_s > CHASSIS_TROT_TEST_MAX_PERIOD_S ||
+        !isfinite(duty) || duty < CHASSIS_TROT_TEST_MIN_DUTY ||
+        duty > CHASSIS_TROT_TEST_MAX_DUTY || !foot_z_trim_m) {
+        return APP_ERR_INVALID_ARG;
+    }
+    for (int i = 0; i < GAIT_LEG_NUM; i++) {
+        if (!isfinite(foot_z_trim_m[i]) ||
+            fabsf(foot_z_trim_m[i]) > CHASSIS_TROT_TEST_MAX_TRIM_M) {
+            return APP_ERR_INVALID_ARG;
+        }
+    }
+
+    g_chassis_trot_test.step_height_m = step_height_m;
+    g_chassis_trot_test.period_s = period_s;
+    g_chassis_trot_test.duty = duty;
+    for (int i = 0; i < GAIT_LEG_NUM; i++) {
+        g_chassis_trot_test.foot_z_trim_m[i] = foot_z_trim_m[i];
+    }
+    return APP_OK;
+}
+
+void chassis_control_get_trot_test_debug(chassis_trot_test_debug_t* out) {
+    if (!out) return;
+    memcpy(out, (const void*)&g_chassis_trot_test, sizeof(*out));
 }
 
 int chassis_control_play_script(const script_t* script, float blend_dur_s) {

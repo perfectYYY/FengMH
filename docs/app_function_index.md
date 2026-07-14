@@ -34,6 +34,7 @@
 - `handle_arm_pump()`: 解码 `0x14 ARM_PUMP`。
 - `handle_mode_cmd()`: 解码 `0x15 MODE_CMD`，同步 ESTOP/ERROR 到 safety。
 - `handle_wheel_test()`: 解码 `0x16 WHEEL_TEST`，清普通底盘速度并更新独立轮驱测试。
+- `handle_trot_test_config()`: 解码 `0x18 TROT_TEST_CONFIG`，更新模式 3 独立步态参数。
 - `on_usb_rx()`: USB RX 回调，喂给 `proto_frame_feed()`。
 - `task_comm_init()`: 重置缓存、安装分发表、注册 USB RX 回调。
 - `task_comm_good_cnt()` / `task_comm_bad_cnt()`: 返回协议 parser 统计。
@@ -44,6 +45,7 @@
 - `task_comm_get_arm_pump()`: 复制气泵命令缓存。
 - `task_comm_get_mode_cmd()`: 复制 mode 缓存。
 - `task_comm_send_arm_feedback()`: 封装并发送 `0x86 ARM_FEEDBACK`。
+- `task_comm_send_trot_test_diag()`: 封装模式 3 的 `0x8A TROT_TEST_DIAG`。
 - `build_state_payload()`: 构造 `0x80 STATE` payload。
 - `send_proto_payload()`: 封装协议帧并通过 USB CDC 发送。
 - `send_state_frame()`: 发送整机状态。
@@ -203,9 +205,13 @@
 - `apply_gait_output_to_motors()`: gait、轮速、补偿、腿控制器整体派发。
 - `wheel_test_active_at()`: 检查独立轮驱测试心跳并在 500 ms 超时后退出。
 - `apply_direct_wheel_test()`: 固定 stand 足端目标并绕过 planner/gait 应用四轮测试速度。
+- `wheel_test_build_vertical_output()`: 生成模式 3 对角 TROT 平滑垂向轨迹并叠加逐腿高度微调。
+- `wheel_test_update_joint_errors()`: 计算模式 3 八个腿关节的目标减实际跟踪误差。
 - `update_boot_stand()`: 上电站起阶段。
 - `chassis_control_init()`: 初始化 gait、leg、planner、姿态和补偿默认值。
 - `chassis_control_set_wheel_test()`: 校验/缓存 `0x16` 测试目标并控制 M3508 trace。
+- `chassis_control_set_trot_test_config()`: 校验并更新模式 3 步高、周期、占空比和逐腿高度微调。
+- `chassis_control_get_trot_test_debug()`: 复制模式 3 配置与诊断快照。
 - `chassis_control_tick()`: 底盘 500 Hz 完整周期。
 - `chassis_control_set_mode()` / `chassis_control_get_mode()`: 读写底盘模式。
 - `chassis_control_get_gait_active()`: 当前 gait 枚举。
@@ -222,7 +228,7 @@
 - `planner_apply_turn_gait()`: 低速转向 gait 参数覆盖。
 - `planner_period_from_speed()`: 根据速度插值周期。
 - `planner_configured_travel_step_height()` / `planner_configured_travel_duty()`: 读取普通行驶原地踏步高度和 duty。
-- `planner_apply_stride_schedule()`: 调度 4-5 Hz 普通行驶周期并固定 `0.055 m` 抬脚高度。
+- `planner_apply_stride_schedule()`: 应用现场标定的固定 `0.2525 s` 普通行驶周期、`0.055 m` 抬脚高度和 `0.60` 占空比。
 - `planner_fill_leg_steps()`: 按轮驱模式或旧模式填充每腿步长和摘要字段。
 - `chassis_planner_update()`: 输出 moving、low_speed_turn、每腿步长和轮速。
 

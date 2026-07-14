@@ -5,7 +5,7 @@
  * 单腿相位 leg_phase = wrap(phase + offset_i)。
  * 在每条腿的 leg_phase 内：
  *   leg_phase < duty   → 支撑相：足端 x 从 +step/2 线性扫到 -step/2，z 维持 0
- *   leg_phase >= duty  → 摆动相：足端按摆线从 -step/2 抬到 +step/2
+ *   leg_phase >= duty  → 摆动相：x 按摆线前移，z 使用端点二阶平滑抬腿曲线
  * yaw 转向优先使用 planner 写入的每腿步长；未写入时回退到 step_length_m ± turn_step_m。
  *
  * 该层不做 IK。它输出 body-frame 足端位移 foot_x_m / foot_z_m；
@@ -43,13 +43,25 @@ static int trot_set_param(gait_if_t* self, const gait_params_t* p) {
 void gait_trot_foot_traj(float leg_phase, float duty,
                          float step_len_m, float step_height_m,
                          float* dx_m, float* dz_m, uint8_t* in_stance) {
+    float local_dz_m = 0.0f;
+    uint8_t local_stance = 0U;
+
     gait_cycloid_foot_traj(leg_phase,
                            duty,
                            step_len_m,
                            step_height_m,
                            dx_m,
-                           dz_m,
-                           in_stance);
+                           &local_dz_m,
+                           &local_stance);
+
+    /* Match the validated test gait: zero velocity and acceleration at touchdown. */
+    if (!local_stance && duty < 1.0f) {
+        float t = (gait_wrap01(leg_phase) - duty) / (1.0f - duty);
+        local_dz_m = step_height_m * 64.0f * t * t * t *
+                     (1.0f - t) * (1.0f - t) * (1.0f - t);
+    }
+    if (dz_m) *dz_m = local_dz_m;
+    if (in_stance) *in_stance = local_stance;
 }
 
 static int trot_update(gait_if_t* self, float dt_s, gait_output_t* out) {
