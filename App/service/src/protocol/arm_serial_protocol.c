@@ -265,20 +265,17 @@ static void process_pending_target(void) {
         .pitch = 0.0f,
     };
     if (s_rear_place_mode && s_pending_target.type == 0U) {
-        if (s_pending_target.y_m > 0.0f) {
+        /* Rear slot 1 is on negative Y and is held by PA8. */
+        if (s_pending_target.y_m < 0.0f) {
             Pump_Control_SetPA8(0U);
-        } else if (s_pending_target.y_m < 0.0f) {
-            Pump_Control_SetPC9(0U);
+        } else if (s_pending_target.y_m > 0.0f) {
+            Pump_Control_SetPC8(0U);
         }
         s_active_place_slot = PLACE_SLOT_NONE;
     } else if (s_pending_target.type == 1U) {
         s_active_place_slot = (s_pending_target.y_m < 0.0f) ?
                               PLACE_SLOT_1_NEGATIVE_Y :
                               PLACE_SLOT_2_POSITIVE_Y;
-        if (!s_rear_place_mode &&
-            s_active_place_slot == PLACE_SLOT_1_NEGATIVE_Y) {
-            Pump_Control_SetPC9(1U);
-        }
     } else {
         s_active_place_slot = PLACE_SLOT_NONE;
     }
@@ -295,10 +292,10 @@ static void finish_place_cycle(void) {
     Pump_Control_Set(0U);
     if (!s_rear_place_mode &&
         s_active_place_slot == PLACE_SLOT_1_NEGATIVE_Y) {
-        Pump_Control_SetPC8(1U);
+        Pump_Control_SetPA8(1U);
     } else if (!s_rear_place_mode &&
                s_active_place_slot == PLACE_SLOT_2_POSITIVE_Y) {
-        Pump_Control_SetPA8(1U);
+        Pump_Control_SetPC8(1U);
     }
     s_active_place_slot = PLACE_SLOT_NONE;
     s_active_target = (Arm_Target_Command_t){0};

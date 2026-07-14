@@ -517,7 +517,6 @@ static void reset_host_arm_protocol_state(void) {
     Arm_Serial_Protocol_Init();
     Arm_Control_SetGravityMode();
     s_last_place_cycle_sequence = Arm_Serial_Protocol_PlaceCycleSequence();
-    force_all_pump_outputs_off();
     s_place_hold_active = 0U;
 }
 
@@ -635,6 +634,7 @@ void task_arm_step_for_test(float dt_s, uint32_t now_ms) {
     (void)arm_control_set_rear_place_avoidance(
         rear_place_mode);
     if (entered_arm_mode || switched_arm_work_mode || exited_arm_work_mode) {
+        /* Mode changes reset motion state but never alter pump outputs. */
         reset_host_arm_protocol_state();
     }
     Arm_Serial_Protocol_SetRearPlaceMode(rear_place_mode);
@@ -642,12 +642,12 @@ void task_arm_step_for_test(float dt_s, uint32_t now_ms) {
     if (task_safety_estop_active()) {
         consume_new_commands(0U);
         if (!s_estop_was_active) {
+            /* Software ESTOP stops motion but preserves every pump output. */
             reset_host_arm_protocol_state();
             (void)arm_control_set_motor_output_enabled(0U);
             (void)arm_control_set_enabled(0U);
             s_estop_was_active = 1U;
         }
-        force_all_pump_outputs_off();
         /* 急停时不进入 Arm_Control_Process，避免自动重新使能达妙。 */
         Pump_Control_Process();
         update_debug_snapshot_if_due(now_ms);

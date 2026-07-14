@@ -347,6 +347,11 @@ static int handle_arm_aux_gpio(const uint8_t* p, uint8_t len) {
     if (cmd.on > 1U || cmd.channel > PROTO_ARM_AUX_GPIO_PA9) {
         return APP_ERR_INVALID_ARG;
     }
+    if (s_mode_cmd.seq == 0U ||
+        (s_mode_cmd.mode != PROTO_ROBOT_MODE_ARM &&
+         s_mode_cmd.mode != PROTO_ROBOT_MODE_REAR_PLACE)) {
+        return APP_ERR_UNSUPPORTED;
+    }
 
     switch (cmd.channel) {
         case PROTO_ARM_AUX_GPIO_PC8:
