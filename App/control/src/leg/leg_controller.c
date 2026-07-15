@@ -34,6 +34,9 @@ static float s_joint_kp = 1.5f;
 static float s_joint_kd = 0.1f;
 volatile leg_wheel_mit_debug_t g_leg_wheel_mit;
 volatile leg_gravity_comp_debug_t g_leg_gravity_comp;
+volatile uint8_t g_fl_fixed_tau_ff_enable;
+volatile float g_fl_hip_fixed_tau_ff_nm;
+volatile float g_fl_knee_fixed_tau_ff_nm;
 
 static float wheel_mit_default_stance_tau_ff_nm(void) {
     return LEG_WHEEL_MIT_DEFAULT_STANCE_FF_N * LEG_DIM_DEFAULT.wheel_diameter * 0.5f;
@@ -73,6 +76,9 @@ void leg_controller_init(leg_controller_t* lc) {
     g_leg_gravity_comp.balance_applied_mx_nm = 0.0f;
     g_leg_gravity_comp.balance_applied_my_nm = 0.0f;
     g_leg_gravity_comp.max_tau_nm = 3.0f;
+    g_fl_fixed_tau_ff_enable = 1U;
+    g_fl_hip_fixed_tau_ff_nm = 0.25f;
+    g_fl_knee_fixed_tau_ff_nm = 0.50f;
 }
 
 app_err_t leg_controller_bind_from_registry(leg_controller_t* lc) {
@@ -632,6 +638,15 @@ static void send_joint_targets(const leg_actuators_t* leg,
     float hip_tau = 0.0f;
     float knee_tau = 0.0f;
     gravity_comp_compute(leg_idx, target, &hip_tau, &knee_tau);
+
+    if (leg_idx == GAIT_LEG_FL && g_fl_fixed_tau_ff_enable) {
+        float hip_fixed = isfinite(g_fl_hip_fixed_tau_ff_nm)
+                        ? g_fl_hip_fixed_tau_ff_nm : 0.0f;
+        float knee_fixed = isfinite(g_fl_knee_fixed_tau_ff_nm)
+                         ? g_fl_knee_fixed_tau_ff_nm : 0.0f;
+        hip_tau = gravity_comp_limit(hip_tau + hip_fixed);
+        knee_tau = gravity_comp_limit(knee_tau + knee_fixed);
+    }
 
     try_set_pos(leg->hip, target->hip_rad, hip_tau);
     try_set_pos(leg->knee, target->knee_rad, knee_tau);

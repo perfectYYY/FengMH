@@ -47,14 +47,15 @@ volatile uint8_t debug_safe_move_stage = 0U;
 volatile uint32_t debug_safe_move_cycle_count = 0U;
 volatile uint8_t debug_fine_tracking = 0U;
 
-volatile float debug_motion_vmax_1 = 0.90f;
-volatile float debug_motion_vmax_2 = 0.80f;
-volatile float debug_motion_vmax_3 = 0.80f;
-volatile float debug_motion_vmax_4 = 1.00f;
-volatile float debug_motion_amax_1 = 1.80f;
-volatile float debug_motion_amax_2 = 1.60f;
-volatile float debug_motion_amax_3 = 1.60f;
-volatile float debug_motion_amax_4 = 2.00f;
+/* 1.5x trajectory speed: vmax x1.5 and amax x(1.5^2). */
+volatile float debug_motion_vmax_1 = 1.35f;
+volatile float debug_motion_vmax_2 = 1.20f;
+volatile float debug_motion_vmax_3 = 1.20f;
+volatile float debug_motion_vmax_4 = 1.50f;
+volatile float debug_motion_amax_1 = 4.05f;
+volatile float debug_motion_amax_2 = 3.60f;
+volatile float debug_motion_amax_3 = 3.60f;
+volatile float debug_motion_amax_4 = 4.50f;
 volatile float debug_move_kp_4340 = 100.0f;
 volatile float debug_move_kd_4340 = 1.5f;
 volatile float debug_move_kp_4310 = 100.0f;

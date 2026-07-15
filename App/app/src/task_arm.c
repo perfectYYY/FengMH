@@ -628,14 +628,25 @@ void task_arm_step_for_test(float dt_s, uint32_t now_ms) {
          robot_mode != s_last_robot_mode) ? 1U : 0U;
     uint8_t exited_arm_work_mode =
         (!arm_work_mode(robot_mode) && arm_work_mode(s_last_robot_mode)) ? 1U : 0U;
+    uint8_t entered_idle_mode =
+        (robot_mode == PROTO_ROBOT_MODE_IDLE &&
+         s_last_robot_mode != PROTO_ROBOT_MODE_IDLE) ? 1U : 0U;
     s_last_robot_mode = robot_mode;
     uint8_t rear_place_mode =
         (robot_mode == PROTO_ROBOT_MODE_REAR_PLACE) ? 1U : 0U;
     (void)arm_control_set_rear_place_avoidance(
         rear_place_mode);
-    if (entered_arm_mode || switched_arm_work_mode || exited_arm_work_mode) {
-        /* Mode changes reset motion state but never alter pump outputs. */
+    if (entered_arm_mode || switched_arm_work_mode || exited_arm_work_mode ||
+        entered_idle_mode) {
+        /* Entering IDLE is a soft return-to-power-on request. */
         reset_host_arm_protocol_state();
+    }
+    if (entered_idle_mode) {
+        /* Even when the previous profile was already PARK, the IDLE reset
+         * above has put the controller into gravity hold; explicitly restart
+         * the smooth PARK trajectory so the host can observe completion. */
+        reset_fixed_hold(ARM_FIXED_PROFILE_PARK);
+        force_all_pump_outputs_off();
     }
     Arm_Serial_Protocol_SetRearPlaceMode(rear_place_mode);
 

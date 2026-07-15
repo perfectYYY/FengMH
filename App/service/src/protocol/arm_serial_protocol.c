@@ -264,15 +264,7 @@ static void process_pending_target(void) {
         .z = s_pending_target.z_m * METERS_TO_MILLIMETERS,
         .pitch = 0.0f,
     };
-    if (s_rear_place_mode && s_pending_target.type == 0U) {
-        /* Rear slot 1 is on negative Y and is held by PA8. */
-        if (s_pending_target.y_m < 0.0f) {
-            Pump_Control_SetPA8(0U);
-        } else if (s_pending_target.y_m > 0.0f) {
-            Pump_Control_SetPC8(0U);
-        }
-        s_active_place_slot = PLACE_SLOT_NONE;
-    } else if (s_pending_target.type == 1U) {
+    if (s_pending_target.type == 1U) {
         s_active_place_slot = (s_pending_target.y_m < 0.0f) ?
                               PLACE_SLOT_1_NEGATIVE_Y :
                               PLACE_SLOT_2_POSITIVE_Y;

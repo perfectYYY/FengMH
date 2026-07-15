@@ -1,0 +1,15 @@
+{
+  "FirstNavDistanceM": 1.6,
+  "SecondNavDistanceM": 3.0,
+  "PlacePumpReleaseToleranceM": 0.08,
+
+  "ArmGrasp1": [0.0, -0.3, 0.01],
+  "ArmPlace1": [-0.2170, -0.2200, 0.3635],
+  "ArmGrasp2": [0.0, 0.3, 0.01],
+  "ArmPlace2": [-0.2170, 0.2200, 0.3635],
+
+  "PlaceGrasp1": [-0.2170, -0.2200, 0.3635],
+  "PlacePlace1": [0.0, -0.3, 0.01],
+  "PlaceGrasp2": [-0.2170, 0.2200, 0.3635],
+  "PlacePlace2": [0.0, 0.3, 0.01]
+}

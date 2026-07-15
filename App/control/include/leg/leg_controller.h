@@ -77,6 +77,11 @@ typedef struct {
 
 extern volatile leg_gravity_comp_debug_t g_leg_gravity_comp;
 
+/* 左前腿固定关节前馈，可在调试器中在线微调，单位为逻辑关节 N·m。 */
+extern volatile uint8_t g_fl_fixed_tau_ff_enable;
+extern volatile float g_fl_hip_fixed_tau_ff_nm;
+extern volatile float g_fl_knee_fixed_tau_ff_nm;
+
 void      leg_controller_init(leg_controller_t* lc);
 /* 从 motor_registry 中按约定 logical id 装配 */
 app_err_t leg_controller_bind_from_registry(leg_controller_t* lc);

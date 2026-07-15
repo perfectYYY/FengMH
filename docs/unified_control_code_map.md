@@ -10,7 +10,7 @@
 
 | Mode | 底盘任务 | 机械臂任务 | 安全动作 |
 |---:|---|---|---|
-| `IDLE=0` | 速度/目标 yaw/steer mode 清零；无 mode 帧前保留旧调试兼容 | 不消费新 USB target/pump；保持 `PARK` 姿态 | 正常 |
+| `IDLE=0` | 速度/目标 yaw/steer mode 清零；无 mode 帧前保留旧调试兼容 | 清空 host 抓放状态、关闭全部气泵并返回 `PARK` 姿态 | 软件回到上电初始状态，电机保持供电 |
 | `NAV=1` | 允许 `0x10` 速度进入 `chassis_control` | 不消费新 USB target/pump；保持当前/park 姿态 | 正常 |
 | `ARM=2` | 底盘输入清零，保持 stand/hold | 进入第一箱等待姿态；到位且收到合法 GRASP 后消费 target/pump | 正常 |
 | `ESTOP=3` | `task_chassis_entry()` 跳过 tick | 禁用达妙输出和控制器，不自动 enable | `task_safety_estop_set(true)` disable 全部电机 |

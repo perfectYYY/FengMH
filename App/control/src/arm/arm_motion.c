@@ -120,9 +120,9 @@ static uint8_t trajectory_within_limits(float duration_s) {
 
 void arm_motion_init(const arm_motion_limits_t* limits) {
     const arm_motion_limits_t defaults = {
-        .max_velocity = { 0.60f, 0.50f, 0.50f, 0.80f },
-        .max_acceleration = { 1.20f, 1.00f, 1.00f, 1.60f },
-        .min_duration_s = 0.30f,
+        .max_velocity = { 0.90f, 0.75f, 0.75f, 1.20f },
+        .max_acceleration = { 2.70f, 2.25f, 2.25f, 3.60f },
+        .min_duration_s = 0.20f,
         .max_duration_s = 15.0f,
     };
 

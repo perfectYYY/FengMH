@@ -813,7 +813,7 @@ static app_err_t start_pending_target(uint32_t now_ms) {
             debug_motion_amax_1, debug_motion_amax_2,
             debug_motion_amax_3, debug_motion_amax_4,
         },
-        .min_duration_s = 0.25f,
+        .min_duration_s = 0.167f,
         .max_duration_s = 15.0f,
     };
     arm_motion_set_limits(&live_limits);

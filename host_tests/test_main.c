@@ -3424,6 +3424,10 @@ static void test_task_arm_rear_place_preserves_and_releases_slot_outputs(void) {
         .y_m = -0.237065f,
         .z_m = 0.34f,
     };
+    payload_arm_aux_gpio_t aux_off = {
+        .channel = PROTO_ARM_AUX_GPIO_PA8,
+        .on = 0U,
+    };
     arm_joint_angles_t measured = arm_test_home_angles();
 
     task_safety_estop_set(false);
@@ -3450,17 +3454,26 @@ static void test_task_arm_rear_place_preserves_and_releases_slot_outputs(void) {
     TEST_ASSERT(arm_pump_aux_is_enabled(ARM_PUMP_AUX_PA8) == 1U);
     TEST_ASSERT(arm_pump_aux_is_enabled(ARM_PUMP_AUX_PC8) == 1U);
 
-    /* Negative-Y grasp releases slot 1 through PA8 only. */
+    /* Rear grasp targets preserve their slots until the host confirms REACHED. */
     inject_proto_frame(PROTO_FUNC_ARM_TARGET, &grasp, (uint8_t)sizeof(grasp));
     task_arm_step_for_test(0.010f, 60U);
-    TEST_ASSERT(arm_pump_aux_is_enabled(ARM_PUMP_AUX_PA8) == 0U);
+    TEST_ASSERT(arm_pump_aux_is_enabled(ARM_PUMP_AUX_PA8) == 1U);
     TEST_ASSERT(arm_pump_aux_is_enabled(ARM_PUMP_AUX_PC8) == 1U);
+    inject_proto_frame(PROTO_FUNC_ARM_AUX_GPIO,
+                       &aux_off,
+                       (uint8_t)sizeof(aux_off));
+    TEST_ASSERT(arm_pump_aux_is_enabled(ARM_PUMP_AUX_PA8) == 0U);
 
-    /* Positive-Y grasp releases slot 2 through PC8 only. */
+    /* The host releases slot 2 explicitly after its positive-Y grasp reaches. */
     grasp.y_m = 0.237065f;
     inject_proto_frame(PROTO_FUNC_ARM_TARGET, &grasp, (uint8_t)sizeof(grasp));
     task_arm_step_for_test(0.010f, 80U);
     TEST_ASSERT(arm_pump_aux_is_enabled(ARM_PUMP_AUX_PA8) == 0U);
+    TEST_ASSERT(arm_pump_aux_is_enabled(ARM_PUMP_AUX_PC8) == 1U);
+    aux_off.channel = PROTO_ARM_AUX_GPIO_PC8;
+    inject_proto_frame(PROTO_FUNC_ARM_AUX_GPIO,
+                       &aux_off,
+                       (uint8_t)sizeof(aux_off));
     TEST_ASSERT(arm_pump_aux_is_enabled(ARM_PUMP_AUX_PC8) == 0U);
 }
 
@@ -3574,6 +3587,56 @@ static void test_task_arm_estop_stops_motion_without_disabling_motors(void) {
     }
 
     task_safety_estop_set(false);
+}
+
+static void test_task_arm_idle_returns_to_power_on_outputs(void) {
+    const payload_mode_cmd_t arm_mode = { .mode = PROTO_ROBOT_MODE_ARM };
+    const payload_mode_cmd_t idle_mode = { .mode = PROTO_ROBOT_MODE_IDLE };
+    const payload_arm_target_t grasp = {
+        .target_type = PROTO_ARM_TARGET_GRASP,
+        .x_m = 0.0f,
+        .y_m = 0.237065f,
+        .z_m = 0.34f,
+    };
+    const payload_arm_pump_t pump = { .pump_on = 1U };
+    arm_control_status_t status;
+    arm_joint_angles_t measured = arm_test_home_angles();
+
+    task_safety_estop_set(false);
+    log_init();
+    bsp_gpio_test_reset();
+    TEST_ASSERT(bsp_usb_cdc_init() == APP_OK);
+    task_comm_init();
+    bind_stub_motors();
+    set_arm_stub_feedback_from_angles(&measured, 0U);
+    task_arm_init();
+
+    inject_proto_frame(PROTO_FUNC_MODE_CMD, &arm_mode, (uint8_t)sizeof(arm_mode));
+    inject_proto_frame(PROTO_FUNC_ARM_TARGET, &grasp, (uint8_t)sizeof(grasp));
+    inject_proto_frame(PROTO_FUNC_ARM_PUMP, &pump, (uint8_t)sizeof(pump));
+    task_arm_step_for_test(0.010f, 20U);
+    TEST_ASSERT(arm_pump_is_enabled() == 1U);
+    Pump_Control_SetPC8(1U);
+    Pump_Control_SetPC9(1U);
+    Pump_Control_SetPA8(1U);
+    Pump_Control_SetPA9(1U);
+
+    inject_proto_frame(PROTO_FUNC_MODE_CMD, &idle_mode, (uint8_t)sizeof(idle_mode));
+    set_arm_stub_feedback_from_angles(&measured, 40U);
+    task_arm_step_for_test(0.010f, 40U);
+    arm_control_get_status(&status);
+
+    TEST_ASSERT(arm_pump_is_enabled() == 0U);
+    TEST_ASSERT(arm_pump_aux_is_enabled(ARM_PUMP_AUX_PC8) == 0U);
+    TEST_ASSERT(arm_pump_aux_is_enabled(ARM_PUMP_AUX_PC9) == 0U);
+    TEST_ASSERT(arm_pump_aux_is_enabled(ARM_PUMP_AUX_PA8) == 0U);
+    TEST_ASSERT(arm_pump_aux_is_enabled(ARM_PUMP_AUX_PA9) == 0U);
+    TEST_ASSERT(status.enabled == 1U);
+    TEST_ASSERT(status.motor_output_enabled ==
+                (APP_ARM_MOTOR_OUTPUT_DEFAULT_ENABLE ? 1U : 0U));
+    TEST_ASSERT(status.target_valid == 1U);
+    TEST_ASSERT(status.target_type == ARM_CONTROL_TARGET_INTERNAL_HOLD);
+    TEST_ASSERT(debug_arm_fixed_profile == 0U); /* PARK */
 }
 
 static void test_damiao_mit_pack_center_values(void) {
@@ -3892,6 +3955,7 @@ int main(void) {
     test_task_arm_rear_place_duplicate_target_is_idempotent();
     test_task_arm_rear_place_preserves_and_releases_slot_outputs();
     test_task_arm_holds_state_and_discards_usb_commands_outside_arm_mode();
+    test_task_arm_idle_returns_to_power_on_outputs();
     test_task_arm_estop_stops_motion_without_disabling_motors();
     test_damiao_mit_pack_center_values();
     test_dm4310_legacy_mit_wrapper_uses_registry_motor();

@@ -178,7 +178,7 @@ gait_output
 
 1. `ESTOP/ERROR` 急停时禁用达妙输出和控制器，不进入 `Arm_Control_Process()`，但保留气泵处理和反馈发送。
 2. `APP_ARM_FORCE_GRAVITY_ONLY` 或 Live Expressions `debug_arm_force_gravity_only` 非零时，清空旧协议队列，关全部泵，只跑纯重力保持。
-3. 非 ARM 模式默认进入 `PARK` 固定姿态；ARM 模式进入第一箱等待姿态。
+3. 进入 `IDLE` 时清空 host 抓放状态、关闭全部气泵并返回 `PARK`；电机和 MCU 保持供电。其他非 ARM 模式默认进入 `PARK` 固定姿态；ARM 模式进入第一箱等待姿态。
 4. 等待姿态到位后，只有新的合法 `GRASP` 目标会释放给 host 抓放流程。
 5. `task_comm` 中缓存的 `0x11/0x14` 只有在 `ROBOT_MODE_ARM` 且固定姿态已释放后才排进 `Arm_Serial_Protocol_QueueTarget/QueuePump()`。
 6. `Arm_Serial_Protocol_Process()` 保留旧 target/pump/place-cycle 语义：PLACE 到位后延迟关泵、切重力模式、等待下一次 GRASP。
