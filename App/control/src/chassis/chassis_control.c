@@ -12,6 +12,7 @@
 #include "arm_gravity_comp.h"
 #include "attitude_estimator.h"
 #include "bsp_time.h"
+#include "bmi088_v2.h"
 #include "chassis_planner.h"
 #include "config.h"
 #include "err.h"
@@ -279,13 +280,25 @@ static int is_offline(const chassis_control_input_t* input, uint32_t now_ms) {
     return (now_ms - input->last_rx_ms) > s_online_timeout_ms;
 }
 
-/* Online policy: travel -> trot, low-speed/in-place turn -> walk, still -> stand. */
+/* Online policy: travel -> trot, low-speed/in-place turn -> stand + wheel differential. */
 static void online_decide(const chassis_plan_t* plan) {
     if (!plan) return;
 
     if (plan->moving) {
-        gait_if_t* target_gait = plan->low_speed_turn ? s_walk_gait : s_trot_gait;
-        active_gait_t target_active = plan->low_speed_turn ? ACTIVE_WALK : ACTIVE_TROT;
+        if (plan->low_speed_turn) {
+            if (s_active != ACTIVE_STAND) {
+                if (request_gait(s_stand_gait,
+                                 &GAIT_PARAMS_STAND_DEFAULT,
+                                 0.3f) == APP_OK) {
+                    s_active = ACTIVE_STAND;
+                    s_manual_gait_hold = 0U;
+                }
+            }
+            return;
+        }
+
+        gait_if_t* target_gait = s_trot_gait;
+        active_gait_t target_active = ACTIVE_TROT;
 
         if (s_active != target_active) {
             apply_controller_height(&plan->gait_params);
@@ -342,9 +355,11 @@ static float gait_motion_scale(void) {
 /* Motion gaits drive all wheels continuously; leg phase only controls contact feedforward. */
 static void apply_plan_wheel_speed(gait_output_t* output, const chassis_plan_t* plan) {
     if (!output || !plan) return;
-    float motion_scale = gait_motion_scale();
+    uint8_t pure_turn = (plan->moving && plan->low_speed_turn) ? 1U : 0U;
+    float motion_scale = pure_turn ? 1.0f : gait_motion_scale();
     float speed_scale = plan->moving ? motion_scale : 0.0f;
     output->wheel_mode = (motion_scale > 0.0f) ? GAIT_WHEEL_DRIVE : GAIT_WHEEL_HOLD;
+    leg_controller_set_pure_wheel_turn(pure_turn);
     for (int i = 0; i < GAIT_LEG_NUM; i++) {
         output->leg[i].wheel_rads = plan->wheel_rads[i] * speed_scale;
     }
@@ -738,6 +753,21 @@ static void apply_rl_single_leg_debug(uint8_t online, const chassis_plan_t* plan
 
 /* Read IMU yaw when requested and turn target_yaw into an effective yaw-rate command. */
 static void update_attitude(float dt_s) {
+    uint32_t now_ms = (uint32_t)bsp_time_now_ms();
+    bmi088_v2_sample_t processed;
+    if (bmi088_v2_get_latest(&processed, now_ms, BMI088_V2_TIMEOUT_MS)) {
+        float corrected_gyro[3] = {
+            processed.calibrated_gyro[0] - processed.gyro_bias[0],
+            processed.calibrated_gyro[1] - processed.gyro_bias[1],
+            processed.calibrated_gyro[2] - processed.gyro_bias[2],
+        };
+        (void)attitude_estimator_set_processed(processed.roll,
+                                               processed.pitch,
+                                               processed.yaw,
+                                               corrected_gyro);
+        return;
+    }
+
     imu_bmi088_data_t imu_data;
     if (imu_bmi088_read(&imu_data) == APP_OK) {
         (void)attitude_estimator_update(imu_data.gyro, imu_data.accel, dt_s);
@@ -758,7 +788,8 @@ static void update_steering(float dt_s,
 
     *wz_out = command->wz_rad_s;
 
-    uint8_t imu_ready = imu_bmi088_is_ready() && attitude_estimator_is_calibrated();
+    uint32_t now_ms = (uint32_t)bsp_time_now_ms();
+    uint8_t imu_ready = (uint8_t)bmi088_v2_is_fresh(now_ms, BMI088_V2_TIMEOUT_MS);
     const attitude_state_t* attitude = attitude_estimator_get_state();
     steer_mode_t requested = (command->steer_mode == 1U) ? STEER_MODE_ABSOLUTE
                            : (command->steer_mode == 2U) ? STEER_MODE_AUTO_HOLD
@@ -1074,6 +1105,8 @@ static void apply_gait_output_to_motors(uint8_t online, float dt_s) {
     gait_machine_update(&s_gait_machine, dt_s, &gait_output);
     if (online) {
         apply_plan_wheel_speed(&gait_output, &s_chassis_plan);
+    } else {
+        leg_controller_set_pure_wheel_turn(0U);
     }
     apply_attitude_compensation(&gait_output, dt_s);
     update_arm_load_compensation(dt_s);

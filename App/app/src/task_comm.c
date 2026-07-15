@@ -13,6 +13,7 @@
 #include "proto_frame.h"
 #include "proto_dispatch.h"
 #include "proto_defs.h"
+#include "bmi088_v2.h"
 #include "motor_registry.h"
 #include "motor_m3508.h"
 #include "pump_control.h"
@@ -30,6 +31,13 @@
 static const char* TAG = "COMM";
 
 #define NAV_VALIDATED_MAX_VX_M_S 0.50f
+#define COMM_RX_RING_SIZE         2048U
+#define COMM_RX_RING_MASK         (COMM_RX_RING_SIZE - 1U)
+
+static uint8_t s_rx_ring[COMM_RX_RING_SIZE];
+static volatile uint16_t s_rx_head;
+static volatile uint16_t s_rx_tail;
+static task_comm_rx_stats_t s_rx_stats;
 
 static proto_frame_parser_t  s_parser;
 static proto_dispatcher_t    s_disp;
@@ -52,12 +60,14 @@ volatile uint32_t debug_comm_arm_target_reject_count;
 static uint32_t s_last_state_tx_ms  = 0;  /* 0x80 上次发送时间 */
 static uint32_t s_last_motor_tx_ms  = 0;  /* 0x81 上次发送时间 */
 static uint32_t s_last_wheel_tx_ms  = 0;  /* 0x88 上次发送时间 */
+static uint32_t s_last_imu_tx_ms    = 0;  /* 0x83 上次发送时间 */
 static uint32_t s_last_diag_tx_ms   = 0;  /* 0x89 上次发送时间 */
 static uint32_t s_last_trot_test_tx_ms = 0; /* 0x8A 上次发送时间 */
 #if APP_TARGET_MCU
 static const uint32_t STATE_TX_INTERVAL_MS  = 100;  /* 10Hz */
 static const uint32_t MOTOR_TX_INTERVAL_MS  = 200;  /* 5Hz, motor states are round-robin */
 static const uint32_t WHEEL_TX_INTERVAL_MS  = 40;   /* 25Hz, FL/FR/RL/RR synchronized */
+static const uint32_t IMU_TX_INTERVAL_MS    = 100;  /* 10Hz, BMI receive diagnostics */
 static const uint32_t DIAG_TX_INTERVAL_MS   = 40;   /* 25Hz */
 static const uint32_t TROT_TEST_TX_INTERVAL_MS = 40; /* 25Hz, only mode 3 */
 static const uint8_t TX_STATE_ENABLE        = 1U;   /* 0x80: complete host state feedback */
@@ -432,7 +442,88 @@ static const proto_entry_t s_tbl[] = {
 
 static void on_usb_rx(const uint8_t* d, uint32_t n, void* user) {
     (void)user;
-    proto_frame_feed(&s_parser, d, n);
+    if (!d) return;
+    for (uint32_t i = 0U; i < n; i++) {
+        uint16_t head = s_rx_head;
+        uint16_t next = (uint16_t)((head + 1U) & COMM_RX_RING_MASK);
+        if (next == s_rx_tail) {
+            s_rx_stats.ring_overflow_bytes++;
+            continue;
+        }
+        s_rx_ring[head] = d[i];
+        s_rx_head = next;
+    }
+#if APP_TARGET_HOST
+    /* Host tests have no communication RTOS task. */
+    task_comm_process_rx();
+#endif
+}
+
+static uint16_t rx_available(void) {
+    return (uint16_t)((s_rx_head - s_rx_tail) & COMM_RX_RING_MASK);
+}
+
+static uint8_t rx_peek(uint16_t offset) {
+    return s_rx_ring[(s_rx_tail + offset) & COMM_RX_RING_MASK];
+}
+
+static void rx_discard(uint16_t count) {
+    s_rx_tail = (uint16_t)((s_rx_tail + count) & COMM_RX_RING_MASK);
+}
+
+static void rx_copy(uint8_t* out, uint16_t count) {
+    for (uint16_t i = 0U; i < count; i++) out[i] = rx_peek(i);
+}
+
+void task_comm_process_rx(void) {
+    uint8_t frame[6U + BMI088_V2_MAX_PAYLOAD_LEN + 4U];
+
+    for (;;) {
+        uint16_t available = rx_available();
+        if (available < 2U) return;
+
+        uint8_t b0 = rx_peek(0U);
+        uint8_t b1 = rx_peek(1U);
+        if (b0 == PROTO_HEAD1 && b1 == PROTO_HEAD2) {
+            if (available < 4U) return;
+            uint16_t total = (uint16_t)(5U + rx_peek(3U));
+            if (rx_peek(3U) > PROTO_MAX_PAYLOAD) {
+                s_rx_stats.demux_discarded_bytes++;
+                rx_discard(1U);
+                continue;
+            }
+            if (available < total) return;
+            rx_copy(frame, total);
+            rx_discard(total);
+            proto_frame_feed(&s_parser, frame, total);
+            s_rx_stats.legacy_frames++;
+            continue;
+        }
+
+        if (b0 == BMI088_V2_MAGIC0 && b1 == BMI088_V2_MAGIC1) {
+            if (available < 6U) return;
+            uint16_t payload_len = (uint16_t)rx_peek(4U) |
+                                   ((uint16_t)rx_peek(5U) << 8);
+            if (rx_peek(2U) != BMI088_V2_VERSION ||
+                payload_len > BMI088_V2_MAX_PAYLOAD_LEN) {
+                s_rx_stats.bmi_header_errors++;
+                rx_discard(1U);
+                continue;
+            }
+            uint16_t total = (uint16_t)(6U + payload_len + 4U);
+            if (available < total) return;
+            rx_copy(frame, total);
+            rx_discard(total);
+            if (bmi088_v2_accept_frame(frame, total,
+                                       (uint32_t)bsp_time_now_ms())) {
+                s_rx_stats.bmi_frames++;
+            }
+            continue;
+        }
+
+        s_rx_stats.demux_discarded_bytes++;
+        rx_discard(1U);
+    }
 }
 
 void task_comm_init(void) {
@@ -452,8 +543,13 @@ void task_comm_init(void) {
     s_last_state_tx_ms = 0;
     s_last_motor_tx_ms = 0;
     s_last_wheel_tx_ms = 0;
+    s_last_imu_tx_ms = 0;
     s_last_diag_tx_ms = 0;
     s_last_trot_test_tx_ms = 0;
+    s_rx_head = 0U;
+    s_rx_tail = 0U;
+    memset(&s_rx_stats, 0, sizeof(s_rx_stats));
+    bmi088_v2_init();
     proto_dispatcher_init(&s_disp, s_tbl, sizeof(s_tbl)/sizeof(s_tbl[0]));
     proto_frame_init(&s_parser, proto_dispatch_on_frame, &s_disp);
     bsp_usb_cdc_attach_rx(on_usb_rx, NULL);
@@ -465,6 +561,10 @@ uint32_t task_comm_bad_cnt(void)         { return s_parser.bad_cnt; }
 uint32_t task_comm_dispatch_hit(void)    { return s_disp.hit_cnt; }
 uint32_t task_comm_dispatch_miss(void)   { return s_disp.miss_cnt; }
 uint32_t task_comm_last_rx_ms(void)      { return s_last_rx_ms; }
+
+void task_comm_get_rx_stats(task_comm_rx_stats_t* out) {
+    if (out) *out = s_rx_stats;
+}
 
 void task_comm_get_chassis(task_comm_chassis_cmd_t* out) {
     if (!out) return;
@@ -592,6 +692,33 @@ int task_comm_send_wheel_feedback(void) {
                               (uint8_t)sizeof(p));
 }
 
+int task_comm_send_imu_feedback(void) {
+    payload_imu_state_t p;
+    bmi088_v2_sample_t sample;
+    bmi088_v2_stats_t stats;
+    uint32_t now = (uint32_t)bsp_time_now_ms();
+    memset(&p, 0, sizeof(p));
+    bmi088_v2_get_stats(&stats);
+    p.timestamp_ms = now;
+    p.accepted = stats.accepted;
+    p.crc_errors = stats.crc_errors;
+    p.skipped_samples = stats.skipped_samples;
+    if (bmi088_v2_get_latest(&sample, now, BMI088_V2_TIMEOUT_MS)) {
+        p.sequence = sample.sequence;
+        p.roll_rad = sample.roll;
+        p.pitch_rad = sample.pitch;
+        p.yaw_rad = sample.yaw;
+        p.gyro_z_rad_s = sample.calibrated_gyro[2] - sample.gyro_bias[2];
+        p.velocity_n_m_s = sample.velocity[0];
+        p.velocity_w_m_s = sample.velocity[1];
+        p.velocity_u_m_s = sample.velocity[2];
+        uint32_t age = now - sample.received_ms;
+        p.age_ms = (uint16_t)(age > 0xFFFFU ? 0xFFFFU : age);
+        p.valid = 1U;
+    }
+    return send_proto_payload(PROTO_FUNC_IMU_STATE, &p, (uint8_t)sizeof(p));
+}
+
 static int16_t diag_float_to_i16(float value, float scale) {
     float scaled = value * scale;
     if (!isfinite(scaled)) return 0;
@@ -696,9 +823,11 @@ void task_comm_entry(void* arg) {
     (void)arg;
     LOGI("task_comm started");
 #if APP_TARGET_MCU
-    /* 解析在 bsp_usb_cdc 的 rx 回调里同步完成；本任务做上行帧定时发送 */
+    /* CDC 回调只入环形缓冲区；本任务统一解复用 55 AA / A5 5A。 */
     for (;;) {
         uint32_t now = (uint32_t)bsp_time_now_ms();
+
+        task_comm_process_rx();
 
         /* 低频发送整机状态，避免串口调试助手被上行帧刷满 */
         if (TX_STATE_ENABLE && (now - s_last_state_tx_ms) >= STATE_TX_INTERVAL_MS) {
@@ -716,6 +845,12 @@ void task_comm_entry(void* arg) {
         if (TX_WHEEL_ENABLE && (now - s_last_wheel_tx_ms) >= WHEEL_TX_INTERVAL_MS) {
             if (task_comm_send_wheel_feedback() > 0) {
                 s_last_wheel_tx_ms = now;
+            }
+        }
+
+        if ((now - s_last_imu_tx_ms) >= IMU_TX_INTERVAL_MS) {
+            if (task_comm_send_imu_feedback() > 0) {
+                s_last_imu_tx_ms = now;
             }
         }
 

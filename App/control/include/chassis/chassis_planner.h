@@ -38,10 +38,10 @@ typedef struct {
     float max_wheel_rads;        /* 轮速限幅，<=0 表示不额外限幅 */
     float half_track_m;          /* 腿/轮接触点到机体中心线的横向距离 */
     float max_leg_step_m;        /* 单腿步长限幅，<=0 使用默认值 */
-    float turn_step_height_m;    /* 原地/低速转向抬脚高度，<=0 使用 base_gait */
-    float turn_period_s;         /* match_travel_period=0 时使用的低速转向周期 */
-    float turn_duty;             /* 原地/低速转向支撑占空比，<=0 使用 base_gait */
-    float turn_leg_scale;        /* 低速 yaw 腿步长比例: 0=纯轮转向, 1=完整腿步长 */
+    float turn_step_height_m;    /* 兼容保留；纯轮原地转向不再生成抬腿轨迹 */
+    float turn_period_s;         /* 兼容保留；纯轮原地转向不再使用步态周期 */
+    float turn_duty;             /* 兼容保留；纯轮原地转向不再使用支撑占空比 */
+    float turn_leg_scale;        /* 兼容保留；低速/原地转向固定为纯轮差速 */
 } chassis_turn_cfg_t;
 
 typedef struct {

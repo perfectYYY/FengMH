@@ -37,6 +37,9 @@ typedef struct {
     float    tau_limit_nm;
     float    pos_err_limit_rad;
     float    stance_tau_ff_nm; /* 支撑相按目标轮速方向给的滚阻前馈 */
+    uint8_t  pure_turn_active; /* 1=stand 下纯轮差速原地转向 */
+    uint8_t  reserved[3];
+    float    pure_turn_tau_ff_nm; /* 原地转向按轮速方向叠加的力矩前馈 */
     float    theta_ref_rad[GAIT_LEG_NUM];
     float    velocity_i_rad[GAIT_LEG_NUM]; /* DRIVE 的有界速度误差积分 */
     uint8_t  ref_valid[GAIT_LEG_NUM];
@@ -87,6 +90,7 @@ void      leg_controller_init(leg_controller_t* lc);
 app_err_t leg_controller_bind_from_registry(leg_controller_t* lc);
 /* 设置站立高度 (IK 解算参数) */
 void      leg_controller_set_stand_height(float h);
+void      leg_controller_set_pure_wheel_turn(uint8_t active);
 void      leg_controller_set_output_options(uint8_t leg_mask,
                                             uint8_t enable_joints,
                                             uint8_t enable_wheels,

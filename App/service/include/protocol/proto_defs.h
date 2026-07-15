@@ -183,6 +183,25 @@ typedef struct __attribute__((packed)) {
     uint8_t  online_mask;
 } payload_wheel_state_t; /* FuncID 0x88, len=21 */
 
+/* BMI088 v2 接收诊断；主控通过 0x83 周期上行。 */
+typedef struct __attribute__((packed)) {
+    uint32_t timestamp_ms;
+    uint32_t sequence;
+    float    roll_rad;
+    float    pitch_rad;
+    float    yaw_rad;
+    float    gyro_z_rad_s;
+    float    velocity_n_m_s;
+    float    velocity_w_m_s;
+    float    velocity_u_m_s;
+    uint32_t accepted;
+    uint32_t crc_errors;
+    uint32_t skipped_samples;
+    uint16_t age_ms;
+    uint8_t  valid;
+    uint8_t  reserved;
+} payload_imu_state_t; /* FuncID 0x83, len=52 */
+
 typedef struct __attribute__((packed)) {
     uint32_t timestamp_ms;
     int16_t target_mrad_s[GAIT_LEG_NUM];

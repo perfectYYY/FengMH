@@ -163,6 +163,27 @@ app_err_t attitude_estimator_update(const float gyro[3], const float accel[3], f
     return APP_OK;
 }
 
+app_err_t attitude_estimator_set_processed(float roll_rad,
+                                           float pitch_rad,
+                                           float yaw_rad,
+                                           const float gyro_rad_s[3]) {
+    if (!gyro_rad_s || !isfinite(roll_rad) || !isfinite(pitch_rad) ||
+        !isfinite(yaw_rad) || !isfinite(gyro_rad_s[0]) ||
+        !isfinite(gyro_rad_s[1]) || !isfinite(gyro_rad_s[2])) {
+        return APP_ERR_INVALID_ARG;
+    }
+
+    s_state.roll = wrap_pi(roll_rad);
+    s_state.pitch = wrap_pi(pitch_rad);
+    s_state.yaw = wrap_pi(yaw_rad);
+    s_state.roll_rate = gyro_rad_s[0];
+    s_state.pitch_rate = gyro_rad_s[1];
+    s_state.yaw_rate = gyro_rad_s[2];
+    s_accel_initialized = 1U;
+    s_gyro_calibrated = 1U;
+    return APP_OK;
+}
+
 float attitude_estimator_get_yaw(void) {
     return s_state.yaw;
 }

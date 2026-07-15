@@ -34,6 +34,12 @@ app_err_t attitude_estimator_init(void);
  */
 app_err_t attitude_estimator_update(const float gyro[3], const float accel[3], float dt_s);
 
+/* Apply an already solved body->NWU attitude and bias-corrected angular rate. */
+app_err_t attitude_estimator_set_processed(float roll_rad,
+                                           float pitch_rad,
+                                           float yaw_rad,
+                                           const float gyro_rad_s[3]);
+
 /* 获取当前偏航角 (rad) */
 float attitude_estimator_get_yaw(void);
 uint8_t attitude_estimator_is_calibrated(void);

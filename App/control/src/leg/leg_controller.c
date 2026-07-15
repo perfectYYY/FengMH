@@ -24,6 +24,7 @@ static const motor_logical_id_t WHEEL[GAIT_LEG_NUM] = { MOTOR_ID_FL_WHEEL,MOTOR_
 #define LEG_WHEEL_MIT_DEFAULT_TAU_LIMIT_NM M3508_MIT_TAU_MAX_NM
 #define LEG_WHEEL_MIT_DEFAULT_STANCE_FF_N 1.0f
 #define LEG_WHEEL_MIT_FF_DEADBAND_RADS    0.05f
+#define LEG_WHEEL_PURE_TURN_TAU_FF_NM     3.2f
 
 /* IK z 偏置沿用老工程语义：足端在髋关节下方时 z 为负。 */
 static float s_stand_height = -0.18f;
@@ -53,6 +54,8 @@ void leg_controller_init(leg_controller_t* lc) {
     g_leg_wheel_mit.tau_limit_nm = LEG_WHEEL_MIT_DEFAULT_TAU_LIMIT_NM;
     g_leg_wheel_mit.pos_err_limit_rad = M3508_MIT_POS_ERR_MAX_RAD;
     g_leg_wheel_mit.stance_tau_ff_nm = wheel_mit_default_stance_tau_ff_nm();
+    g_leg_wheel_mit.pure_turn_active = 0U;
+    g_leg_wheel_mit.pure_turn_tau_ff_nm = LEG_WHEEL_PURE_TURN_TAU_FF_NM;
     g_leg_gravity_comp.enable = 0U;
     g_leg_gravity_comp.compensate_leg_mass = 0U;
     g_leg_gravity_comp.compensate_payload = 0U;
@@ -98,6 +101,10 @@ app_err_t leg_controller_bind_from_registry(leg_controller_t* lc) {
 
 void leg_controller_set_stand_height(float h) {
     s_stand_height = h;
+}
+
+void leg_controller_set_pure_wheel_turn(uint8_t active) {
+    g_leg_wheel_mit.pure_turn_active = active ? 1U : 0U;
 }
 
 void leg_controller_set_output_options(uint8_t leg_mask,
@@ -228,7 +235,14 @@ static int wheel_mit_apply_drive(motor_dev_t* wheel,
     }
 
     float tau_ff = 0.0f;
-    if (t->in_stance && fabsf(t->wheel_rads) > LEG_WHEEL_MIT_FF_DEADBAND_RADS) {
+    if (dbg->pure_turn_active &&
+        fabsf(t->wheel_rads) > LEG_WHEEL_MIT_FF_DEADBAND_RADS) {
+        float turn_tau = isfinite(dbg->pure_turn_tau_ff_nm)
+                       ? fabsf(dbg->pure_turn_tau_ff_nm) : 0.0f;
+        turn_tau = fminf(turn_tau, M3508_MIT_TAU_HARD_MAX_NM);
+        tau_ff = copysignf(turn_tau, t->wheel_rads);
+    } else if (t->in_stance &&
+               fabsf(t->wheel_rads) > LEG_WHEEL_MIT_FF_DEADBAND_RADS) {
         tau_ff = copysignf(cfg->stance_tau_ff_nm, t->wheel_rads);
     }
 
@@ -282,6 +296,11 @@ static int try_set_wheel(motor_dev_t* wheel,
     dbg->enable = 1U;
 
     wheel_mit_cfg_t cfg = wheel_mit_read_cfg(dbg);
+    if (dbg->pure_turn_active && isfinite(dbg->pure_turn_tau_ff_nm)) {
+        float turn_tau = fminf(fabsf(dbg->pure_turn_tau_ff_nm),
+                               M3508_MIT_TAU_HARD_MAX_NM);
+        if (cfg.tau_limit_nm < turn_tau) cfg.tau_limit_nm = turn_tau;
+    }
     dt_s = wheel_mit_limit_dt(dt_s);
 
     if (wheel_mode == GAIT_WHEEL_DRIVE) {

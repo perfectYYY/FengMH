@@ -13,6 +13,17 @@ extern "C" {
 
 void     task_comm_entry(void* arg);
 void     task_comm_init(void);   /* 注册解析器到 bsp_usb_cdc + 装配分发表 */
+void     task_comm_process_rx(void); /* 通信任务调用；host 测试由 RX hook 自动调用 */
+
+typedef struct {
+    uint32_t legacy_frames;
+    uint32_t bmi_frames;
+    uint32_t bmi_header_errors;
+    uint32_t demux_discarded_bytes;
+    uint32_t ring_overflow_bytes;
+} task_comm_rx_stats_t;
+
+void task_comm_get_rx_stats(task_comm_rx_stats_t* out);
 
 /* 计数器（host 单测、运行期诊断都能读） */
 uint32_t task_comm_good_cnt(void);
@@ -72,6 +83,7 @@ int task_comm_send_arm_motor_angles(const payload_arm_motor_angles_t* angles);
 
 /* 四轮实际转速上行；顺序固定为 FL/FR/RL/RR，单位 rad/s。 */
 int task_comm_send_wheel_feedback(void);
+int task_comm_send_imu_feedback(void);
 int task_comm_send_chassis_diag(void);
 int task_comm_send_trot_test_diag(void);
 

@@ -389,9 +389,8 @@ static void test_gyro_bias_calibration_and_heading_pid_direction(void) {
     TEST_ASSERT(fabsf(steer_controller_update(-2.0f, 0.0f, 0.002f)) <= 0.5f);
 }
 
-static void test_low_speed_turn_keeps_full_wheels_and_scales_leg_assist(void) {
-    chassis_plan_t wheel_dominant;
-    chassis_plan_t legacy_leg_assist;
+static void test_low_speed_turn_uses_wheels_without_leg_steps(void) {
+    chassis_plan_t plan;
     chassis_cmd_plan_t cmd = {
         .vx_m_s = 0.0f,
         .vy_m_s = 0.0f,
@@ -401,24 +400,18 @@ static void test_low_speed_turn_keeps_full_wheels_and_scales_leg_assist(void) {
     reset_wheel_only_travel_cfg();
     TEST_ASSERT(chassis_planner_update(&cmd,
                                        &GAIT_PARAMS_WALK_DEFAULT,
-                                       &wheel_dominant) == APP_OK);
+                                       &plan) == APP_OK);
 
-    g_chassis_turn_cfg.turn_leg_scale = 1.0f;
-    TEST_ASSERT(chassis_planner_update(&cmd,
-                                       &GAIT_PARAMS_WALK_DEFAULT,
-                                       &legacy_leg_assist) == APP_OK);
-
+    TEST_ASSERT(plan.low_speed_turn == 1U);
+    TEST_ASSERT_NEAR(plan.gait_params.step_length_m, 0.0f, 1e-6f);
+    TEST_ASSERT_NEAR(plan.gait_params.turn_step_m, 0.0f, 1e-6f);
     for (int i = 0; i < GAIT_LEG_NUM; i++) {
-        TEST_ASSERT_NEAR(wheel_dominant.wheel_rads[i],
-                         legacy_leg_assist.wheel_rads[i],
-                         1e-6f);
-        TEST_ASSERT_NEAR(wheel_dominant.gait_params.leg_step_length_m[i],
-                         legacy_leg_assist.gait_params.leg_step_length_m[i] * 0.25f,
-                         1e-6f);
+        TEST_ASSERT_NEAR(plan.gait_params.leg_step_length_m[i], 0.0f, 1e-6f);
     }
-    TEST_ASSERT_NEAR(wheel_dominant.gait_params.period_s,
-                     legacy_leg_assist.gait_params.period_s,
-                     1e-6f);
+    TEST_ASSERT(plan.wheel_rads[GAIT_LEG_FL] < 0.0f);
+    TEST_ASSERT(plan.wheel_rads[GAIT_LEG_RL] < 0.0f);
+    TEST_ASSERT(plan.wheel_rads[GAIT_LEG_FR] > 0.0f);
+    TEST_ASSERT(plan.wheel_rads[GAIT_LEG_RR] > 0.0f);
     reset_wheel_only_travel_cfg();
 }
 
@@ -3589,6 +3582,31 @@ static void test_task_arm_estop_stops_motion_without_disabling_motors(void) {
     task_safety_estop_set(false);
 }
 
+static void test_pure_wheel_turn_uses_3_2_nm_feedforward(void) {
+    leg_controller_t lc;
+    gait_output_t target;
+    memset(&target, 0, sizeof(target));
+
+    bind_stub_motors();
+    leg_controller_init(&lc);
+    leg_controller_bind_from_registry(&lc);
+    leg_controller_set_stand_height(-GAIT_PARAMS_STAND_DEFAULT.body_height_m);
+    leg_controller_set_pure_wheel_turn(1U);
+    target.wheel_mode = GAIT_WHEEL_DRIVE;
+
+    for (int i = 0; i < GAIT_LEG_NUM; i++) {
+        target.leg[i].in_stance = 1U;
+        target.leg[i].wheel_rads =
+            (i == GAIT_LEG_FL || i == GAIT_LEG_RL) ? -1.0f : 1.0f;
+    }
+
+    TEST_ASSERT(leg_controller_apply_dt(&lc, &target, 0.002f) == APP_OK);
+    TEST_ASSERT_NEAR(s_stub_ctxs[MOTOR_ID_FL_WHEEL].last_tau, -3.2f, 1e-6f);
+    TEST_ASSERT_NEAR(s_stub_ctxs[MOTOR_ID_RL_WHEEL].last_tau, -3.2f, 1e-6f);
+    TEST_ASSERT_NEAR(s_stub_ctxs[MOTOR_ID_FR_WHEEL].last_tau, 3.2f, 1e-6f);
+    TEST_ASSERT_NEAR(s_stub_ctxs[MOTOR_ID_RR_WHEEL].last_tau, 3.2f, 1e-6f);
+}
+
 static void test_task_arm_idle_returns_to_power_on_outputs(void) {
     const payload_mode_cmd_t arm_mode = { .mode = PROTO_ROBOT_MODE_ARM };
     const payload_mode_cmd_t idle_mode = { .mode = PROTO_ROBOT_MODE_IDLE };
@@ -3871,7 +3889,7 @@ int main(void) {
     test_planner_forward_and_turn();
     test_planner_uses_real_speed_and_common_wheel_scaling();
     test_gyro_bias_calibration_and_heading_pid_direction();
-    test_low_speed_turn_keeps_full_wheels_and_scales_leg_assist();
+    test_low_speed_turn_uses_wheels_without_leg_steps();
     test_planner_keeps_vy_as_motion_only();
     test_planner_deadband_zeroes_wheels();
     test_planner_keeps_validated_wheel_only_period();
@@ -3884,6 +3902,7 @@ int main(void) {
     test_walk_uses_per_leg_step_lengths();
     test_ik_reads_foot_target_fields();
     test_wheel_drive_uses_mit_across_leg_phases();
+    test_pure_wheel_turn_uses_3_2_nm_feedforward();
     test_wheel_mit_velocity_integral_is_bounded_and_unwinds();
     test_wheel_drive_to_hold_latches_actual_angle_once();
     test_gravity_comp_disabled_keeps_zero_tau_ff();

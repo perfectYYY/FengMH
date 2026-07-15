@@ -45,8 +45,14 @@ add_executable(fengmh_host_tests
     ../App/device/src/pump_control.c
     ../App/service/src/pid/pid.c
     ../App/service/src/protocol/arm_serial_protocol.c
+    ../App/service/src/protocol/bmi088_v2.c
     ../App/service/src/protocol/proto_dispatch.c
     ../App/service/src/protocol/proto_frame.c
+)
+
+add_executable(bmi088_v2_tests
+    test_bmi088_v2.c
+    ../App/service/src/protocol/bmi088_v2.c
 )
 
 target_compile_definitions(fengmh_host_tests PRIVATE
@@ -73,9 +79,15 @@ target_include_directories(fengmh_host_tests PRIVATE
     ../App/service/include/protocol
 )
 
+target_include_directories(bmi088_v2_tests PRIVATE
+    ../App/service/include/protocol
+)
+
 if(UNIX)
     target_link_libraries(fengmh_host_tests PRIVATE m)
+    target_link_libraries(bmi088_v2_tests PRIVATE m)
 endif()
 
 enable_testing()
 add_test(NAME fengmh_host_tests COMMAND fengmh_host_tests)
+add_test(NAME bmi088_v2_tests COMMAND bmi088_v2_tests)
